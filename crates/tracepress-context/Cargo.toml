@@ -17,4 +17,5 @@ tracepress-provider = { path = "../tracepress-provider" }
 workspace = true
 
 [dev-dependencies]
+proptest = "1.11"
 serde_json = "1"

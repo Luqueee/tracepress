@@ -1,0 +1,8 @@
+# Seeds for failure cases proptest has generated in the past. It is
+# automatically read and these particular cases re-run before any
+# novel cases are generated.
+#
+# It is recommended to check this file in to source control so that
+# everyone who runs the test benefits from these saved cases.
+cc 83c6950e8528d5bab78fd7f1dc4eee5aa450a7fc819e162fc6be8399c085fd52 # shrinks to document = "[[null]]", max_blocks = 2, max_json_depth = 2, max_analyzed_bytes = 2
+cc 39b52d71a57fcc2232131dd71d1e911e70b219df5ef268e71dcf35432fe33482 # shrinks to document = "[[null]]", max_blocks = 3, max_json_depth = 2, max_analyzed_bytes = 6

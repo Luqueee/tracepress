@@ -4,8 +4,8 @@ use std::{error::Error, fmt::Write as _};
 
 use tracepress_context::{
     AnalysisClock, ContextAnalysisLimitField, ContextAnalysisLimitValues, ContextAnalysisLimits,
-    ContextAnalysisLimitsError, ContextAnalysisStatus, JsonStringDecodeError, JsonValueKind,
-    MonotonicClock, RawSpan, RawSpanIndex, SpanNode, decode_json_string,
+    ContextAnalysisLimitsError, ContextAnalysisStatus, ContextDigest, JsonStringDecodeError,
+    JsonValueKind, MonotonicClock, RawSpan, RawSpanIndex, SpanNode, decode_json_string,
 };
 
 include!("support/span_fixtures.rs");
@@ -522,6 +522,60 @@ fn a_large_string_keeps_an_exact_span_and_refuses_a_bounded_decode() -> Outcome 
 }
 
 #[test]
+fn distinct_long_member_names_keep_full_identity_and_paths() -> Outcome {
+    // Given
+    let bound = usize::try_from(ContextAnalysisLimits::MAX_STRING_BYTES_INSPECTED)?;
+    let prefix = "a".repeat(bound.saturating_add(1));
+    let document = format!("{{\"{prefix}x\":1,\"{prefix}y\":2}}");
+    let bytes = document.as_bytes();
+
+    // When
+    let index = index_document(&document)?;
+
+    // Then
+    assert_eq!(index.status(), ContextAnalysisStatus::Complete);
+    assert!(!index.duplicate_key_detected());
+    let root = index.root().ok_or("no object root")?;
+    let children: Vec<&SpanNode> = index.children(root.id()).collect();
+    assert_eq!(children.len(), 2);
+    let first = children.first().ok_or("missing first child")?;
+    let second = children.get(1).ok_or("missing second child")?;
+    assert_eq!(first.occurrence(), 0);
+    assert_eq!(second.occurrence(), 0);
+    assert!(first.semantic_path().is_truncated());
+    assert!(second.semantic_path().is_truncated());
+    assert_eq!(
+        first.semantic_path().as_str(),
+        second.semantic_path().as_str(),
+        "the retained prefixes are intentionally bounded"
+    );
+    assert_ne!(
+        first.semantic_path().full_value_hash(),
+        second.semantic_path().full_value_hash(),
+        "the incremental full-path digest preserves distinct long names"
+    );
+    let first_path = format!("/{prefix}x");
+    let second_path = format!("/{prefix}y");
+    assert_eq!(
+        first.semantic_path().full_value_hash(),
+        Some(ContextDigest::from_bytes(first_path.as_bytes()))
+    );
+    assert_eq!(
+        second.semantic_path().full_value_hash(),
+        Some(ContextDigest::from_bytes(second_path.as_bytes()))
+    );
+    assert!(
+        first.name_equals(bytes, &format!("{prefix}x")),
+        "the first long name remains exactly addressable"
+    );
+    assert!(
+        second.name_equals(bytes, &format!("{prefix}y")),
+        "the second long name remains exactly addressable"
+    );
+    Ok(())
+}
+
+#[test]
 fn an_unpaired_surrogate_keeps_its_span_and_refuses_to_decode() -> Outcome {
     // Given
     let document = "{\"input\":\"\\ud800\"}";
@@ -690,6 +744,35 @@ fn a_multi_byte_character_cut_by_the_byte_bound_is_not_malformed() -> Outcome {
 }
 
 #[test]
+fn repeated_name_comparisons_consume_work_budget() -> Outcome {
+    // Given
+    let mut document = String::from("{");
+    for key in 0_u32..8191 {
+        if key > 0 {
+            document.push(',');
+        }
+        document.push_str("\"same\":0");
+    }
+    document.push('}');
+    let limits = limits_with(|values| values.max_analysis_work_units = 256)?;
+
+    // When
+    let index = RawSpanIndex::build_with_clock(document.as_bytes(), limits, &FrozenClock);
+
+    // Then
+    assert_eq!(index.status(), ContextAnalysisStatus::ResourceLimit);
+    assert_eq!(
+        index.limit_reached(),
+        Some(ContextAnalysisLimitField::AnalysisWorkUnits)
+    );
+    assert!(
+        index.len() < 8192,
+        "a comparison budget must stop the old unmetered probe loop"
+    );
+    Ok(())
+}
+
+#[test]
 fn the_block_bound_stops_indexing_and_keeps_indexed_values() -> Outcome {
     // Given
     let limits = limits_with(|values| values.max_blocks = 4)?;
@@ -809,14 +892,21 @@ fn values_closed_at_the_analyzed_byte_boundary_remain_complete() -> Outcome {
     // Given
     let object_document = "{} ";
     let array_document = "[\"x\",0]";
+    let boolean_document = "true ";
+    let null_document = "null ";
     let object_limits = limits_with(|values| values.max_analyzed_bytes = 2)?;
     let array_limits = limits_with(|values| values.max_analyzed_bytes = 4)?;
+    let boolean_limits = limits_with(|values| values.max_analyzed_bytes = 4)?;
+    let null_limits = limits_with(|values| values.max_analyzed_bytes = 4)?;
 
     // When
     let object =
         RawSpanIndex::build_with_clock(object_document.as_bytes(), object_limits, &FrozenClock);
     let array =
         RawSpanIndex::build_with_clock(array_document.as_bytes(), array_limits, &FrozenClock);
+    let boolean =
+        RawSpanIndex::build_with_clock(boolean_document.as_bytes(), boolean_limits, &FrozenClock);
+    let null = RawSpanIndex::build_with_clock(null_document.as_bytes(), null_limits, &FrozenClock);
 
     // Then
     assert!(object.root().ok_or("no object root")?.is_complete());
@@ -831,6 +921,17 @@ fn values_closed_at_the_analyzed_byte_boundary_remain_complete() -> Outcome {
         RawSpan::new(1, 4).ok_or("invalid expected span")?
     );
     assert!(child.is_complete());
+    for scalar in [&boolean, &null] {
+        assert_eq!(scalar.status(), ContextAnalysisStatus::ResourceLimit);
+        assert_eq!(
+            scalar.limit_reached(),
+            Some(ContextAnalysisLimitField::AnalyzedBytes)
+        );
+        assert!(
+            scalar.root().ok_or("no scalar root")?.is_complete(),
+            "a scalar closed at the analysed boundary remains complete"
+        );
+    }
     Ok(())
 }
 
@@ -941,6 +1042,49 @@ fn truncated_json_is_malformed_and_keeps_what_was_indexed() -> Outcome {
 }
 
 #[test]
+fn syntax_in_a_truncated_window_stays_malformed() -> Outcome {
+    // Given
+    let document = "x trailing bytes";
+    let limits = limits_with(|values| values.max_analyzed_bytes = 1)?;
+
+    // When
+    let index = RawSpanIndex::build_with_clock(document.as_bytes(), limits, &FrozenClock);
+
+    // Then
+    assert_eq!(index.status(), ContextAnalysisStatus::Malformed);
+    assert_eq!(index.limit_reached(), None);
+    Ok(())
+}
+
+#[test]
+fn invalid_bytes_after_the_work_budget_are_not_prevalidated() -> Outcome {
+    for (label, suffix) in [("invalid utf8", vec![0xff]), ("raw nul", vec![0])] {
+        // Given
+        let mut bytes = b"{\"a\":\"".to_vec();
+        bytes.extend_from_slice("a".repeat(8192).as_bytes());
+        bytes.extend_from_slice(&suffix);
+        bytes.extend_from_slice(b"\"}");
+        let limits = limits_with(|values| values.max_analysis_work_units = 1)?;
+
+        // When
+        let index = RawSpanIndex::build_with_clock(&bytes, limits, &FrozenClock);
+
+        // Then
+        assert_eq!(
+            index.status(),
+            ContextAnalysisStatus::ResourceLimit,
+            "{label} beyond the work budget must not be found by a prepass"
+        );
+        assert_eq!(
+            index.limit_reached(),
+            Some(ContextAnalysisLimitField::AnalysisWorkUnits),
+            "{label} must report the budget axis that stopped scanning"
+        );
+    }
+    Ok(())
+}
+
+#[test]
 fn invalid_utf8_and_an_embedded_nul_are_malformed() -> Outcome {
     let cases: [(&str, Vec<u8>); 3] = [
         ("invalid utf8", b"{\"a\":\"\xff\xfe\"}".to_vec()),
@@ -958,12 +1102,18 @@ fn invalid_utf8_and_an_embedded_nul_are_malformed() -> Outcome {
             ContextAnalysisStatus::Malformed,
             "{label} must be malformed"
         );
-        assert!(index.is_empty(), "{label} indexes nothing");
-        assert_eq!(index.analyzed_bytes(), 0, "{label} analysed no bytes");
+        assert!(
+            !index.is_empty(),
+            "{label} must retain values indexed before the malformed byte"
+        );
+        assert!(
+            index.analyzed_bytes() > 0,
+            "{label} must charge and account bytes before the malformed byte"
+        );
         assert_eq!(
-            index.skipped_bytes(),
+            index.analyzed_bytes().saturating_add(index.skipped_bytes()),
             u64::try_from(bytes.len())?,
-            "{label} accounts every byte as skipped"
+            "{label} accounts every byte as analysed or skipped"
         );
     }
     Ok(())

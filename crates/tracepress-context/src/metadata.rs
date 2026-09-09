@@ -50,6 +50,20 @@ impl BoundedMetadataText {
     pub fn semantic_path(value: &str) -> Self {
         Self::bounded(value, Self::SEMANTIC_PATH_MAX_BYTES)
     }
+    /// Builds a truncated semantic path from an already charged incremental digest.
+    pub(crate) fn semantic_path_from_incremental(
+        value: String,
+        original_bytes: u64,
+        full_value_hash: ContextDigest,
+    ) -> Self {
+        debug_assert!(value.len() <= Self::SEMANTIC_PATH_MAX_BYTES);
+        debug_assert!(original_bytes > u64::try_from(value.len()).unwrap_or(u64::MAX));
+        Self {
+            value,
+            original_bytes,
+            full_value_hash: Some(full_value_hash),
+        }
+    }
 
     /// Bounds one tool name observed in a tool definition, call, or result.
     #[must_use]

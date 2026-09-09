@@ -25,6 +25,12 @@ impl ContextDigest {
         Self(Sha256::digest(bytes).into())
     }
 
+    /// Reconstructs a digest from the output of an incremental SHA-256 computation.
+    #[must_use]
+    pub(crate) const fn from_sha256_bytes(bytes: [u8; SHA256_BYTES]) -> Self {
+        Self(bytes)
+    }
+
     /// Returns the fixed-size digest bytes.
     #[must_use]
     pub const fn as_bytes(&self) -> &[u8; SHA256_BYTES] {

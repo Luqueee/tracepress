@@ -21,6 +21,7 @@ mod detector;
 mod digest;
 mod domain;
 mod estimator;
+mod extractor;
 mod features;
 mod fingerprint;
 mod limits;
@@ -28,6 +29,18 @@ mod metadata;
 mod reconciliation;
 mod span;
 mod visibility;
+mod visibility_analysis;
+
+pub use extractor::{
+    ContextAnalysis, ContextAnalysisLimitReason, ContextAnalysisReason, ContextAnalysisResult,
+    ContextBlockDraft, analyze, analyze_responses, analyze_responses_with_lookup,
+    analyze_with_lookup,
+};
+pub use visibility_analysis::{
+    ContextVisibilityFacts, NoObservedResponseIds, ObservedResponseIdLookup,
+    ProviderStateReference, VisibilityAnalysis, VisibilityObservation, derive_visibility,
+    derive_visibility_without_lookup,
+};
 
 pub use delta::{
     ContextBlockSummary, ContextDelta, ContextDeltaRequest, ContextDeltaStatus,

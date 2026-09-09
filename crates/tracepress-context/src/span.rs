@@ -19,6 +19,7 @@
 
 use std::{collections::HashMap, fmt, str::Chars, time::Instant};
 
+use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use tracepress_core::{
     ProcessingBudget, ProcessingBudgetAxis, ProcessingBudgetDecision, ProcessingCharge,
@@ -26,7 +27,7 @@ use tracepress_core::{
 
 use crate::{
     BlockLocator, BoundedMetadataText, ContextAnalysisLimitField, ContextAnalysisLimits,
-    ContextAnalysisStatus,
+    ContextAnalysisStatus, ContextDigest,
 };
 
 /// Request bytes one charged work unit covers.
@@ -36,18 +37,20 @@ use crate::{
 const BYTES_PER_WORK_UNIT: u64 = 4096;
 /// Indexed values one charged work unit covers.
 const VALUES_PER_WORK_UNIT: u64 = 64;
-/// FNV-1a offset basis for bounded member-name fingerprints.
+/// FNV-1a offset basis for member-name fingerprints.
 const NAME_HASH_OFFSET: u64 = 0xcbf2_9ce4_8422_2325;
-/// FNV-1a prime for bounded member-name fingerprints.
+/// FNV-1a prime for member-name fingerprints.
 const NAME_HASH_PRIME: u64 = 0x0000_0100_0000_01b3;
+/// One charged work unit per exact member-name comparison.
+const NAME_COMPARISON_WORK_UNITS: u64 = 1;
 /// First code unit of the UTF-16 high surrogate range.
 const HIGH_SURROGATE_START: u16 = 0xD800;
 /// First code unit of the UTF-16 low surrogate range.
 const LOW_SURROGATE_START: u16 = 0xDC00;
 /// One past the last code unit of the UTF-16 surrogate range.
 const SURROGATE_END: u16 = 0xE000;
-/// Bytes a surrogate code unit is charged against a decode bound.
-const SURROGATE_ENCODED_BYTES: usize = 3;
+/// Maximum raw bytes one JSON string unit can consume, including a paired surrogate escape.
+const MAX_JSON_STRING_UNIT_BYTES: usize = 12;
 
 /// A byte range inside the original request.
 ///
@@ -360,24 +363,14 @@ impl RawSpanIndex {
         let request_bytes = as_u64(request.len());
         let bound = limits.max_analyzed_bytes.get();
         let truncated = request.len() > bound;
-        let mut window = if truncated {
+        // UTF-8 and NUL validation happens in `Scanner::advance`, after the same byte and clock
+        // charge as every other byte. A truncated window therefore cannot be rejected by a
+        // full-window prepass before the configured work budget has had a chance to stop it.
+        let window = if truncated {
             request.get(..bound).unwrap_or(request)
         } else {
             request
         };
-        match std::str::from_utf8(window) {
-            Ok(_) => {}
-            // A window cut by the byte bound may end inside a multi-byte character; that is the
-            // bound speaking, not malformed input, so the analysed window shrinks to the last
-            // complete character instead of condemning the request.
-            Err(error) if truncated && error.error_len().is_none() => {
-                window = window.get(..error.valid_up_to()).unwrap_or(&[]);
-            }
-            Err(_) => return Self::malformed(request_bytes),
-        }
-        if window.contains(&0) {
-            return Self::malformed(request_bytes);
-        }
 
         let mut scanner = Scanner::new(window, limits, clock);
         let stop = scanner.run().err();
@@ -472,17 +465,6 @@ impl RawSpanIndex {
     pub fn member(&self, request: &[u8], object: SpanNodeId, name: &str) -> Option<&SpanNode> {
         self.children(object)
             .find(|node| node.name_equals(request, name))
-    }
-
-    const fn malformed(request_bytes: u64) -> Self {
-        Self {
-            nodes: Vec::new(),
-            status: ContextAnalysisStatus::Malformed,
-            limit_reached: None,
-            analyzed_bytes: 0,
-            skipped_bytes: request_bytes,
-            duplicate_key_detected: false,
-        }
     }
 }
 
@@ -702,6 +684,117 @@ struct NameEntry {
     content: RawSpan,
     occurrences: u32,
 }
+/// Incremental UTF-8 and NUL validation for the bytes the scanner has charged.
+#[derive(Clone, Copy, Debug, Default)]
+struct Utf8Validator {
+    remaining: u8,
+    next_min: u8,
+    next_max: u8,
+}
+
+impl Utf8Validator {
+    fn consume(&mut self, byte: u8) -> Result<(), MalformedReason> {
+        if byte == 0 {
+            return Err(MalformedReason::Syntax);
+        }
+        if self.remaining > 0 {
+            if !(self.next_min..=self.next_max).contains(&byte) {
+                return Err(MalformedReason::Syntax);
+            }
+            self.remaining = self.remaining.saturating_sub(1);
+            self.next_min = 0x80;
+            self.next_max = 0xbf;
+            return Ok(());
+        }
+        match byte {
+            0x00..=0x7f => {}
+            0xc2..=0xdf => {
+                self.remaining = 1;
+                self.next_min = 0x80;
+                self.next_max = 0xbf;
+            }
+            0xe0 => {
+                self.remaining = 2;
+                self.next_min = 0xa0;
+                self.next_max = 0xbf;
+            }
+            0xe1..=0xec | 0xee..=0xef => {
+                self.remaining = 2;
+                self.next_min = 0x80;
+                self.next_max = 0xbf;
+            }
+            0xed => {
+                self.remaining = 2;
+                self.next_min = 0x80;
+                self.next_max = 0x9f;
+            }
+            0xf0 => {
+                self.remaining = 3;
+                self.next_min = 0x90;
+                self.next_max = 0xbf;
+            }
+            0xf1..=0xf3 => {
+                self.remaining = 3;
+                self.next_min = 0x80;
+                self.next_max = 0xbf;
+            }
+            0xf4 => {
+                self.remaining = 3;
+                self.next_min = 0x80;
+                self.next_max = 0x8f;
+            }
+            _ => return Err(MalformedReason::Syntax),
+        }
+        Ok(())
+    }
+}
+
+/// A semantic path with a bounded retained prefix and an incremental full-value digest.
+#[derive(Clone)]
+struct PathState {
+    retained: String,
+    original_bytes: u64,
+    hasher: Sha256,
+}
+
+impl PathState {
+    fn new() -> Self {
+        Self {
+            retained: String::with_capacity(BoundedMetadataText::SEMANTIC_PATH_MAX_BYTES),
+            original_bytes: 0,
+            hasher: Sha256::new(),
+        }
+    }
+
+    fn append(&mut self, text: &str) {
+        self.original_bytes = self.original_bytes.saturating_add(as_u64(text.len()));
+        self.hasher.update(text.as_bytes());
+        if self.retained.len() >= BoundedMetadataText::SEMANTIC_PATH_MAX_BYTES {
+            return;
+        }
+        for character in text.chars() {
+            if self.retained.len().saturating_add(character.len_utf8())
+                > BoundedMetadataText::SEMANTIC_PATH_MAX_BYTES
+            {
+                break;
+            }
+            self.retained.push(character);
+        }
+    }
+
+    fn metadata(&self) -> BoundedMetadataText {
+        let maximum = as_u64(BoundedMetadataText::SEMANTIC_PATH_MAX_BYTES);
+        if self.original_bytes <= maximum {
+            return BoundedMetadataText::semantic_path(&self.retained);
+        }
+        let digest: [u8; 32] = self.hasher.clone().finalize().into();
+        BoundedMetadataText::semantic_path_from_incremental(
+            self.retained.clone(),
+            self.original_bytes,
+            ContextDigest::from_sha256_bytes(digest),
+        )
+    }
+}
 
 /// The bounded, non-recursive JSON scan of one analysed window.
 struct Scanner<'run, ClockType> {
@@ -710,16 +803,19 @@ struct Scanner<'run, ClockType> {
     cursor: usize,
     max_blocks: usize,
     max_depth: u32,
-    string_bound: usize,
     budget: ProcessingBudget,
     charged_ms: u64,
     reserved_work_units: u64,
+    auxiliary_bytes: u64,
+    comparison_work_units: u64,
     observed_bytes: u64,
     observed_values: u64,
+    utf8: Utf8Validator,
     nodes: Vec<SpanNode>,
     frames: Vec<Frame>,
     names: HashMap<(SpanNodeId, u64), Vec<NameEntry>>,
-    path: String,
+    path: PathState,
+    path_checkpoints: Vec<PathState>,
     duplicate_key_detected: bool,
 }
 
@@ -735,16 +831,19 @@ where
             cursor: 0,
             max_blocks: limits.max_blocks.get(),
             max_depth,
-            string_bound: limits.max_string_bytes_inspected.get(),
             budget: limits.processing_budget(),
             charged_ms: 0,
             reserved_work_units: 0,
+            auxiliary_bytes: 0,
+            comparison_work_units: 0,
             observed_bytes: 0,
             observed_values: 0,
+            utf8: Utf8Validator::default(),
             nodes: Vec::new(),
             frames: Vec::with_capacity(usize::try_from(max_depth.min(64)).unwrap_or(16)),
             names: HashMap::with_capacity(limits.max_blocks.get()),
-            path: String::new(),
+            path: PathState::new(),
+            path_checkpoints: Vec::with_capacity(usize::try_from(max_depth.min(64)).unwrap_or(16)),
             duplicate_key_detected: false,
         }
     }
@@ -812,7 +911,7 @@ where
         }
         self.skip_whitespace()?;
         let occurrence = self.record_name(frame.node, name)?;
-        let path_base = self.path.len();
+        let path_base = self.path_checkpoint();
         self.push_name_token(name)?;
         let context = ValueContext {
             parent: Some(frame.node),
@@ -846,9 +945,8 @@ where
             Some(_) if frame.children == 0 => {}
             Some(_) => return Err(Stop::Malformed(MalformedReason::Syntax)),
         }
-        let path_base = self.path.len();
-        self.path.push('/');
-        push_decimal(&mut self.path, frame.children);
+        let path_base = self.path_checkpoint();
+        self.push_array_token(frame.children)?;
         let context = ValueContext {
             parent: Some(frame.node),
             name: None,
@@ -1036,6 +1134,16 @@ where
         let consumed = as_u64(next_cursor.saturating_sub(self.cursor));
         let next_bytes = self.observed_bytes.saturating_add(consumed);
         self.reserve_work(next_bytes, self.observed_values)?;
+        let mut cursor = self.cursor;
+        while cursor < next_cursor {
+            let byte = self.window.get(cursor).copied().unwrap_or(0);
+            cursor = cursor.saturating_add(1);
+            if let Err(reason) = self.utf8.consume(byte) {
+                self.cursor = cursor;
+                self.observed_bytes = as_u64(cursor);
+                return Err(Stop::Malformed(reason));
+            }
+        }
         self.cursor = next_cursor;
         self.observed_bytes = next_bytes;
         Ok(())
@@ -1070,7 +1178,7 @@ where
             last_child: None,
             next_sibling: None,
             locator: BlockLocator {
-                semantic_path: BoundedMetadataText::semantic_path(&self.path),
+                semantic_path: self.path.metadata(),
                 raw_value_start: start_byte,
                 raw_value_end: start_byte,
                 occurrence: context.occurrence,
@@ -1139,15 +1247,17 @@ where
 
     /// Records one member name and returns how many same-named members precede it.
     ///
-    /// The randomized table makes distinct-name insertion expected O(1). A digest collision is
-    /// resolved by bounded decoded equality, and equal spellings share one occurrence counter.
+    /// The randomized table makes distinct-name insertion expected O(1). A full decoded digest
+    /// narrows the candidate bucket, and exact decoded equality resolves even a digest collision.
     fn record_name(&mut self, object: SpanNodeId, name: RawSpan) -> Result<u32, Stop> {
         let Some(content) = inner_span(name) else {
             return Ok(0);
         };
         let hash = self.hash_name(content)?;
         let key = (object, hash);
-        let entries = self.names.get(&key).cloned().unwrap_or_default();
+        // Move the bucket out while exact comparisons borrow the scanner mutably for charging.
+        // This avoids cloning an attacker-sized collision bucket on every repeated member.
+        let mut entries = self.names.remove(&key).unwrap_or_default();
         let mut matched = None;
         for (position, entry) in entries.iter().enumerate() {
             if self.names_equal(entry.content, content)? {
@@ -1156,9 +1266,8 @@ where
             }
         }
         let occurrence = matched.map_or(0, |(_, count)| count);
-        let bucket = self.names.entry(key).or_default();
         if let Some((position, count)) = matched {
-            if let Some(entry) = bucket.get_mut(position) {
+            if let Some(entry) = entries.get_mut(position) {
                 entry.occurrences = count.saturating_add(1);
             }
             self.duplicate_key_detected = true;
@@ -1166,36 +1275,54 @@ where
                 node.duplicate_key_detected = true;
             }
         } else {
-            bucket.push(NameEntry {
+            entries.push(NameEntry {
                 content,
                 occurrences: 1,
             });
+        }
+        let prior = self.names.insert(key, entries);
+        debug_assert!(
+            prior.is_none(),
+            "name collision bucket was present after removal"
+        );
+        if let Some(mut prior) = prior {
+            let _ = self
+                .names
+                .entry(key)
+                .and_modify(|current| current.append(&mut prior))
+                .or_insert(prior);
         }
         Ok(occurrence)
     }
 
     fn hash_name(&mut self, content: RawSpan) -> Result<u64, Stop> {
         let mut hash = NAME_HASH_OFFSET;
-        let Some(text) = content
-            .slice(self.window)
+        let Some((start, end)) = self.span_bounds(content) else {
+            return Ok(hash);
+        };
+        let length = end.saturating_sub(start);
+        self.reserve_auxiliary_bytes(as_u64(length))?;
+        let Some(text) = self
+            .window
+            .get(start..end)
             .and_then(|bytes| std::str::from_utf8(bytes).ok())
         else {
             return Ok(hash);
         };
-        let mut decoded = 0_usize;
-        for (position, unit) in JsonStringUnits::new(text).enumerate() {
+        let mut units = JsonStringUnits::new(text);
+        let mut position = 0_usize;
+        while units.remaining_bytes() > 0 {
             if position % 256 == 0 {
                 self.poll_clock()?;
             }
-            let Ok(unit) = unit else {
-                break;
-            };
-            let next = decoded.saturating_add(unit.encoded_len());
-            if next > self.string_bound {
-                break;
-            }
-            decoded = next;
+            let inspect = units.remaining_bytes().min(MAX_JSON_STRING_UNIT_BYTES);
+            self.reserve_auxiliary_bytes(as_u64(inspect))?;
+            let unit = units
+                .next()
+                .ok_or(Stop::Malformed(MalformedReason::Syntax))?
+                .map_err(|_fault| Stop::Malformed(MalformedReason::Syntax))?;
             hash = mix(hash, unit.tagged_code());
+            position = position.saturating_add(1);
         }
         Ok(hash)
     }
@@ -1204,85 +1331,174 @@ where
         if left == right {
             return Ok(true);
         }
+        let Some((left_start, left_end)) = self.span_bounds(left) else {
+            return Ok(false);
+        };
+        let Some((right_start, right_end)) = self.span_bounds(right) else {
+            return Ok(false);
+        };
+        self.reserve_auxiliary_bytes(as_u64(
+            left_end
+                .saturating_sub(left_start)
+                .saturating_add(right_end.saturating_sub(right_start)),
+        ))?;
         let (Some(left_text), Some(right_text)) = (
-            left.slice(self.window)
+            self.window
+                .get(left_start..left_end)
                 .and_then(|bytes| std::str::from_utf8(bytes).ok()),
-            right
-                .slice(self.window)
+            self.window
+                .get(right_start..right_end)
                 .and_then(|bytes| std::str::from_utf8(bytes).ok()),
         ) else {
             return Ok(false);
         };
         let mut left_units = JsonStringUnits::new(left_text);
         let mut right_units = JsonStringUnits::new(right_text);
-        let mut decoded = 0_usize;
-        let mut comparisons = 0_usize;
+        let mut position = 0_usize;
         loop {
-            if comparisons % 256 == 0 {
+            self.charge_name_comparison()?;
+            if position % 256 == 0 {
                 self.poll_clock()?;
             }
-            comparisons = comparisons.saturating_add(1);
+            let left_inspect = left_units.remaining_bytes().min(MAX_JSON_STRING_UNIT_BYTES);
+            let right_inspect = right_units
+                .remaining_bytes()
+                .min(MAX_JSON_STRING_UNIT_BYTES);
+            self.reserve_auxiliary_bytes(as_u64(left_inspect))?;
+            self.reserve_auxiliary_bytes(as_u64(right_inspect))?;
             match (left_units.next(), right_units.next()) {
                 (None, None) => return Ok(true),
                 (Some(Ok(left_unit)), Some(Ok(right_unit))) if left_unit == right_unit => {
-                    decoded = decoded.saturating_add(left_unit.encoded_len());
-                    if decoded >= self.string_bound {
-                        return Ok(true);
-                    }
+                    position = position.saturating_add(1);
                 }
                 _ => return Ok(false),
             }
         }
     }
 
+    fn span_bounds(&self, span: RawSpan) -> Option<(usize, usize)> {
+        let start = usize::try_from(span.start()).ok()?;
+        let end = usize::try_from(span.end()).ok()?;
+        if start <= end && end <= self.window.len() {
+            Some((start, end))
+        } else {
+            None
+        }
+    }
+
+    fn path_checkpoint(&mut self) -> usize {
+        let base = self.path_checkpoints.len();
+        self.path_checkpoints.push(self.path.clone());
+        base
+    }
+
+    fn append_path_text(&mut self, text: &str) -> Result<(), Stop> {
+        self.reserve_auxiliary_bytes(as_u64(text.len()))?;
+        self.path.append(text);
+        Ok(())
+    }
+
+    fn push_array_token(&mut self, index: u32) -> Result<(), Stop> {
+        self.append_path_text("/")?;
+        let (digits, start) = decimal_bytes(index);
+        let text = digits
+            .get(start..)
+            .and_then(|bytes| std::str::from_utf8(bytes).ok())
+            .ok_or(Stop::Malformed(MalformedReason::Syntax))?;
+        self.append_path_text(text)
+    }
+
     /// Appends the JSON-Pointer token of one member name to the working path.
     fn push_name_token(&mut self, name: RawSpan) -> Result<(), Stop> {
-        self.path.push('/');
+        self.append_path_text("/")?;
         let Some(content) = inner_span(name) else {
             return Ok(());
         };
-        let Some(text) = content
-            .slice(self.window)
+        let Some((start, end)) = self.span_bounds(content) else {
+            return Ok(());
+        };
+        self.reserve_auxiliary_bytes(as_u64(end.saturating_sub(start)))?;
+        let Some(text) = self
+            .window
+            .get(start..end)
             .and_then(|bytes| std::str::from_utf8(bytes).ok())
         else {
             return Ok(());
         };
-        let mut decoded = 0_usize;
-        for (position, unit) in JsonStringUnits::new(text).enumerate() {
+        let mut units = JsonStringUnits::new(text);
+        let mut position = 0_usize;
+        while units.remaining_bytes() > 0 {
             if position % 256 == 0 {
                 self.poll_clock()?;
             }
-            let Ok(unit) = unit else {
-                break;
-            };
+            let inspect = units.remaining_bytes().min(MAX_JSON_STRING_UNIT_BYTES);
+            self.reserve_auxiliary_bytes(as_u64(inspect))?;
+            let unit = units
+                .next()
+                .ok_or(Stop::Malformed(MalformedReason::Syntax))?
+                .map_err(|_fault| Stop::Malformed(MalformedReason::Syntax))?;
             let character = match unit {
                 StringUnit::Character(character) => character,
                 StringUnit::UnpairedSurrogate(_) => char::REPLACEMENT_CHARACTER,
             };
-            let next = decoded.saturating_add(character.len_utf8());
-            if next > self.string_bound {
-                break;
-            }
-            decoded = next;
             match character {
-                '~' => self.path.push_str("~0"),
-                '/' => self.path.push_str("~1"),
-                _ => self.path.push(character),
+                '~' => self.append_path_text("~0")?,
+                '/' => self.append_path_text("~1")?,
+                _ => {
+                    let mut encoded = [0_u8; 4];
+                    self.append_path_text(character.encode_utf8(&mut encoded))?;
+                }
             }
+            position = position.saturating_add(1);
         }
         Ok(())
     }
 
-    fn rewind_path(&mut self, length: usize) {
-        if length <= self.path.len() && self.path.is_char_boundary(length) {
-            self.path.truncate(length);
+    fn rewind_path(&mut self, base: usize) {
+        if let Some(path) = self.path_checkpoints.get(base).cloned() {
+            self.path = path;
+            self.path_checkpoints.truncate(base);
         }
     }
 
     fn reserve_work(&mut self, bytes: u64, values: u64) -> Result<(), Stop> {
-        let byte_units = bytes.saturating_add(BYTES_PER_WORK_UNIT - 1) / BYTES_PER_WORK_UNIT;
-        let value_units = values.saturating_add(VALUES_PER_WORK_UNIT - 1) / VALUES_PER_WORK_UNIT;
-        let required = byte_units.max(value_units);
+        let required = Self::primary_work_units(bytes, values)
+            .max(self.auxiliary_work_units())
+            .saturating_add(self.comparison_work_units);
+        self.reserve_units(required)
+    }
+
+    fn reserve_auxiliary_bytes(&mut self, additional: u64) -> Result<(), Stop> {
+        let next = self.auxiliary_bytes.saturating_add(additional);
+        let required = Self::primary_work_units(self.observed_bytes, self.observed_values)
+            .max(work_units(next, BYTES_PER_WORK_UNIT))
+            .saturating_add(self.comparison_work_units);
+        self.reserve_units(required)?;
+        self.auxiliary_bytes = next;
+        Ok(())
+    }
+
+    fn charge_name_comparison(&mut self) -> Result<(), Stop> {
+        let next = self
+            .comparison_work_units
+            .saturating_add(NAME_COMPARISON_WORK_UNITS);
+        let required = Self::primary_work_units(self.observed_bytes, self.observed_values)
+            .max(self.auxiliary_work_units())
+            .saturating_add(next);
+        self.reserve_units(required)?;
+        self.comparison_work_units = next;
+        Ok(())
+    }
+
+    fn primary_work_units(bytes: u64, values: u64) -> u64 {
+        work_units(bytes, BYTES_PER_WORK_UNIT).max(work_units(values, VALUES_PER_WORK_UNIT))
+    }
+
+    fn auxiliary_work_units(&self) -> u64 {
+        work_units(self.auxiliary_bytes, BYTES_PER_WORK_UNIT)
+    }
+
+    fn reserve_units(&mut self, required: u64) -> Result<(), Stop> {
         let additional = required.saturating_sub(self.reserved_work_units);
         if additional == 0 {
             return Ok(());
@@ -1331,12 +1547,7 @@ where
         if outcome.window_truncated {
             let window_end = as_u64(self.window.len());
             for node in &mut nodes {
-                if node.locator.raw_value_end >= window_end
-                    && matches!(
-                        node.kind,
-                        JsonValueKind::Number | JsonValueKind::Boolean | JsonValueKind::Null
-                    )
-                {
+                if node.locator.raw_value_end >= window_end && node.kind == JsonValueKind::Number {
                     node.complete = false;
                 }
             }
@@ -1344,24 +1555,21 @@ where
 
         let limit_reached = match outcome.stop {
             Some(Stop::Limit(field)) => Some(field),
-            Some(Stop::Malformed(_)) | None => {
-                if outcome.window_truncated {
-                    Some(ContextAnalysisLimitField::AnalyzedBytes)
-                } else {
-                    None
-                }
+            Some(Stop::Malformed(MalformedReason::UnexpectedEnd)) if outcome.window_truncated => {
+                Some(ContextAnalysisLimitField::AnalyzedBytes)
             }
+            None if outcome.window_truncated => Some(ContextAnalysisLimitField::AnalyzedBytes),
+            Some(Stop::Malformed(_)) | None => None,
         };
-        let status =
-            if matches!(outcome.stop, Some(Stop::Malformed(_))) && !outcome.window_truncated {
-                ContextAnalysisStatus::Malformed
-            } else if limit_reached.is_some() {
+        let status = match outcome.stop {
+            Some(Stop::Malformed(MalformedReason::UnexpectedEnd)) if outcome.window_truncated => {
                 ContextAnalysisStatus::ResourceLimit
-            } else if self.duplicate_key_detected {
-                ContextAnalysisStatus::Partial
-            } else {
-                ContextAnalysisStatus::Complete
-            };
+            }
+            Some(Stop::Malformed(_)) => ContextAnalysisStatus::Malformed,
+            _ if limit_reached.is_some() => ContextAnalysisStatus::ResourceLimit,
+            _ if self.duplicate_key_detected => ContextAnalysisStatus::Partial,
+            _ => ContextAnalysisStatus::Complete,
+        };
         RawSpanIndex {
             nodes,
             status,
@@ -1385,13 +1593,6 @@ enum StringUnit {
 }
 
 impl StringUnit {
-    const fn encoded_len(self) -> usize {
-        match self {
-            Self::Character(character) => character.len_utf8(),
-            Self::UnpairedSurrogate(_) => SURROGATE_ENCODED_BYTES,
-        }
-    }
-
     fn tagged_code(self) -> u64 {
         match self {
             Self::Character(character) => u64::from(u32::from(character)),
@@ -1436,6 +1637,9 @@ impl<'text> JsonStringUnits<'text> {
             _ => return Err(StringFault::InvalidEscape),
         };
         Ok(StringUnit::Character(unescaped))
+    }
+    fn remaining_bytes(&self) -> usize {
+        self.characters.as_str().len()
     }
 
     fn unicode_escape(&mut self) -> Result<StringUnit, StringFault> {
@@ -1523,29 +1727,34 @@ fn quoted_text(request: &[u8], span: RawSpan) -> Option<&str> {
     std::str::from_utf8(inner).ok()
 }
 
-/// Appends the decimal spelling of one array index without allocating.
-fn push_decimal(target: &mut String, value: u32) {
+fn decimal_bytes(value: u32) -> ([u8; 10], usize) {
     let mut digits = [0_u8; 10];
-    let mut written = 0_usize;
+    let mut start = digits.len();
     let mut remaining = value;
     loop {
-        let digit = u8::try_from(remaining.checked_rem(10).unwrap_or(0)).unwrap_or(0);
-        if let Some(slot) = digits.get_mut(written) {
+        start = start.saturating_sub(1);
+        if let Some(slot) = digits.get_mut(start) {
+            let digit = u8::try_from(remaining % 10).unwrap_or(0);
             *slot = b'0'.saturating_add(digit);
         }
-        written = written.saturating_add(1);
-        remaining = remaining.checked_div(10).unwrap_or(0);
+        remaining /= 10;
         if remaining == 0 {
             break;
         }
     }
-    for offset in (0..written).rev() {
-        if let Some(byte) = digits.get(offset) {
-            target.push(char::from(*byte));
-        }
-    }
+    (digits, start)
 }
 
 fn as_u64(value: usize) -> u64 {
     u64::try_from(value).unwrap_or(u64::MAX)
+}
+
+fn work_units(value: u64, per_unit: u64) -> u64 {
+    if value == 0 {
+        return 0;
+    }
+    value
+        .saturating_add(per_unit.saturating_sub(1))
+        .checked_div(per_unit)
+        .unwrap_or(u64::MAX)
 }

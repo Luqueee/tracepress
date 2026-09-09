@@ -13,7 +13,8 @@ use tracepress_core::{
     MaxIpcFrameBytes, MaxIpcQueueItems, MaxRequestBodyBytes, MaxResponseBodyBytes, SessionState,
 };
 use tracepress_daemon::{
-    ControlRequest, ControlResponse, DaemonService, RecordProviderObservation,
+    ControlRequest, ControlResponse, DaemonService, RecordCorrelationDegradation,
+    RecordProviderObservation,
 };
 use tracepress_ipc::{
     Credential, IpcLimits, IpcResponse, IpcTransport, ResponseOutcome, SocketOwner, UnixBinding,
@@ -146,6 +147,28 @@ async fn handle_request(
                     },
                     false,
                 ),
+                Err(error) => (
+                    ControlResponse::Error {
+                        message: error.to_string(),
+                    },
+                    false,
+                ),
+            }
+        }
+        ControlRequest::RecordCorrelationDegradation {
+            session_id,
+            reason,
+            observed_at,
+        } => {
+            match daemon
+                .record_correlation_degradation(RecordCorrelationDegradation::new(
+                    session_id,
+                    reason,
+                    observed_at,
+                ))
+                .await
+            {
+                Ok(()) => (ControlResponse::ok("running"), false),
                 Err(error) => (
                     ControlResponse::Error {
                         message: error.to_string(),

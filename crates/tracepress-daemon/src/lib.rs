@@ -105,6 +105,34 @@ pub enum ProviderObservationOutcome {
     Failed,
 }
 
+/// Why one forward's correlation evidence could not be completed.
+///
+/// The recorder joins the two halves of a forward inside bounded state. Each reason names one
+/// specific way that bounded state lost evidence, so a degraded dataset stays attributable
+/// instead of merely suspicious.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum CorrelationDegradation {
+    /// Correlation state was evicted before settling because the in-flight bound was reached.
+    InFlightLimit,
+    /// A half arrived for an identity the bounded retirement memory still refuses to re-admit.
+    RetiredLimit,
+    /// Terminal semantic evidence arrived for a forward whose request half never did.
+    MissingRequestHalf,
+}
+
+/// Whether one recorded forward's correlation evidence is complete.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum CorrelationStatus {
+    /// Both halves of the forward were joined by its correlation identity.
+    Correlated,
+    /// Correlation was incomplete: the record carries evidence, never complete causality.
+    Degraded(CorrelationDegradation),
+}
+
 /// Canonical provider observations plus bounded transport evidence.
 #[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
 #[non_exhaustive]
@@ -127,6 +155,8 @@ pub struct ProviderObservation {
     pub outcome: ProviderObservationOutcome,
     /// Whether the response was streamed.
     pub streaming: Option<bool>,
+    /// Whether the recorder could join both halves of this forward.
+    pub correlation_status: CorrelationStatus,
 }
 
 impl ProviderObservation {
@@ -147,6 +177,7 @@ impl ProviderObservation {
             transport_error: None,
             outcome: ProviderObservationOutcome::InProgress,
             streaming: None,
+            correlation_status: CorrelationStatus::Correlated,
         }
     }
 
@@ -189,6 +220,13 @@ impl ProviderObservation {
     #[must_use]
     pub const fn with_streaming(mut self, streaming: bool) -> Self {
         self.streaming = Some(streaming);
+        self
+    }
+
+    /// Records how completely the recorder could correlate this forward.
+    #[must_use]
+    pub const fn with_correlation_status(mut self, correlation_status: CorrelationStatus) -> Self {
+        self.correlation_status = correlation_status;
         self
     }
 }
@@ -237,6 +275,30 @@ impl RecordProviderObservation {
             session_id,
             parent_operation_id,
             observation,
+        }
+    }
+}
+
+/// All identities and evidence required to record one correlation degradation.
+#[derive(Clone, Debug)]
+pub struct RecordCorrelationDegradation {
+    session_id: SessionId,
+    reason: CorrelationDegradation,
+    observed_at: String,
+}
+
+impl RecordCorrelationDegradation {
+    /// Combines the degraded session with the reason and the moment it was observed.
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        reason: CorrelationDegradation,
+        observed_at: String,
+    ) -> Self {
+        Self {
+            session_id,
+            reason,
+            observed_at,
         }
     }
 }
@@ -586,6 +648,55 @@ impl DaemonService {
         Ok(snapshot(session_id, record))
     }
 
+    /// Records one correlation degradation that left no forward record to carry it.
+    ///
+    /// A degradation the recorder could attach to a forward travels with that forward's
+    /// observation and commits inside its atomic batch. This path exists for the degradations
+    /// that have no record at all — a half refused because its identity was already retired, or
+    /// terminal evidence whose request half never arrived — so the loss is still observable.
+    ///
+    /// # Errors
+    /// Returns [`DaemonError::UnknownSession`] or [`DaemonError::SessionNotActive`] for a session
+    /// this daemon cannot accept work for, or a storage error when the event cannot commit.
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "the session guard must outlive the durable append so no event lands on a session this daemon has already closed"
+    )]
+    pub async fn record_correlation_degradation(
+        &self,
+        input: RecordCorrelationDegradation,
+    ) -> Result<(), DaemonError> {
+        let RecordCorrelationDegradation {
+            session_id,
+            reason,
+            observed_at,
+        } = input;
+        let sessions = self.sessions.lock().await;
+        let record = sessions
+            .get(&session_id)
+            .ok_or(DaemonError::UnknownSession { session_id })?;
+        if record.state != SessionState::Active {
+            return Err(DaemonError::SessionNotActive {
+                session_id,
+                state: record.state,
+            });
+        }
+        let generator = self.ids.lock().await;
+        let event = correlation_degraded_event(
+            CorrelationDegraded {
+                session_id,
+                operation_id: None,
+                reason,
+                timestamp: &observed_at,
+            },
+            &generator,
+        );
+        drop(generator);
+        let _receipt = self.writer.submit(event).await?;
+        tracing::info!(%session_id, ?reason, "correlation degraded");
+        Ok(())
+    }
+
     /// Returns the current in-memory state for one session.
     ///
     /// # Errors
@@ -671,6 +782,48 @@ const EVENT_OBSERVATION_PARTIAL: &str = "provider.observation.partial";
 
 /// Payload schema version shared by every canonical provider observation event.
 const PROVIDER_EVENT_SCHEMA_VERSION: &str = "1";
+
+/// Canonical event name of one observed correlation degradation.
+const EVENT_CORRELATION_DEGRADED: &str = "context.correlation.degraded";
+
+/// Payload schema version shared by every canonical context event.
+const CONTEXT_EVENT_SCHEMA_VERSION: &str = "1";
+
+/// Identities and reason of one correlation degradation about to be committed.
+#[derive(Clone, Copy)]
+struct CorrelationDegraded<'evidence> {
+    session_id: SessionId,
+    /// Inference operation of the degraded forward, when the degradation left one behind.
+    operation_id: Option<OperationId>,
+    reason: CorrelationDegradation,
+    timestamp: &'evidence str,
+}
+
+/// Builds the canonical event of one correlation degradation.
+///
+/// The payload carries the reason and the session only. A degradation is the absence of
+/// evidence, so nothing about the forward itself — no request, no status, no counts, no
+/// content — belongs in it; the row's own identities keep it joinable to the session and, when
+/// the degraded forward was recorded, to its inference operation.
+fn correlation_degraded_event(
+    degradation: CorrelationDegraded<'_>,
+    generator: &UuidV7Generator,
+) -> WriteCommand {
+    let payload = serde_json::json!({
+        "reason": degradation.reason,
+        "session_id": degradation.session_id.to_string(),
+    });
+    WriteCommand::Event {
+        event_id: EventId::generate(generator),
+        session_id: Some(degradation.session_id),
+        operation_id: degradation.operation_id,
+        timestamp: degradation.timestamp.to_owned(),
+        event_type: EVENT_CORRELATION_DEGRADED.to_owned(),
+        // `Value` renders its own bytes, so an event never depends on a fallible re-encode.
+        payload: payload.to_string().into_bytes().into(),
+        schema_version: CONTEXT_EVENT_SCHEMA_VERSION.to_owned(),
+    }
+}
 
 /// Whether an observed upstream status reports a failed exchange.
 fn errored_upstream_status(status_code: Option<HttpStatusCode>) -> bool {
@@ -820,6 +973,23 @@ fn provider_observation_batch(
     }
     for event in provider_events(evidence, generator) {
         batch = batch.and(event);
+    }
+    // A forward the recorder could not fully correlate keeps every row it has evidence for, and
+    // says so in the same transaction: a record whose degradation was committed separately
+    // would be readable for a moment as complete causality.
+    if let CorrelationStatus::Degraded(reason) = observation.correlation_status {
+        batch = batch.and(correlation_degraded_event(
+            CorrelationDegraded {
+                session_id: ids.session_id,
+                operation_id: Some(ids.operation_id),
+                reason,
+                timestamp: observation
+                    .ended_at
+                    .as_deref()
+                    .unwrap_or(observation.started_at.as_str()),
+            },
+            generator,
+        ));
     }
     if let Some(operation_status) = terminal_operation_status(evidence.status) {
         batch = batch.and(WriteCommand::OperationState {
@@ -1129,6 +1299,15 @@ pub enum ControlRequest {
         session_id: SessionId,
         parent_operation_id: OperationId,
         observation: Box<ProviderObservation>,
+    },
+    /// Records one correlation degradation that no forward record carries.
+    ///
+    /// Reason, session, and timestamp are the whole message: it is deliberately too small to
+    /// carry any forward evidence, so it always fits one bounded control frame.
+    RecordCorrelationDegradation {
+        session_id: SessionId,
+        reason: CorrelationDegradation,
+        observed_at: String,
     },
     /// Finishes a previously started session.
     FinishSession {

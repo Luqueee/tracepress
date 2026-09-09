@@ -18,8 +18,11 @@ pub use blob_store::{
 };
 pub use error::StorageError;
 pub use models::{
-    FidelityClass, ObservationStatus, ProviderKind, ProviderProtocol, ProviderResponseState,
-    WriteBatch, WriteCommand, WriteReceipt,
+    ContextAnalysisStatus, ContextBlockKind, ContextCorrelationStatus, ContextOrigin, ContextRole,
+    DetectedContentKind, EstimateConfidence, EstimatedTokenComposition, EstimatedTokensByKind,
+    EstimatedTokensByOrigin, EstimatedTokensByRole, FidelityClass, LogicalContextStatus,
+    ObservationStatus, OpportunitySignal, ProviderKind, ProviderProtocol, ProviderResponseState,
+    ReconciliationStatus, WriteBatch, WriteCommand, WriteReceipt,
 };
 pub use schema::{ConnectionSettings, Durability};
 pub use writer::{StorageConfig, StorageWriter};
@@ -28,6 +31,8 @@ pub use writer::{StorageConfig, StorageWriter};
 mod capacity_tests;
 #[cfg(test)]
 mod concurrency_tests;
+#[cfg(test)]
+mod context_tests;
 #[cfg(test)]
 mod overflow_tests;
 #[cfg(test)]

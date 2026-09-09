@@ -4,6 +4,7 @@ members = [
     "crates/tracepress-storage",
     "crates/tracepress-proxy",
     "crates/tracepress-provider",
+    "crates/tracepress-context",
     "crates/tracepress-compression",
     "crates/tracepress-policy",
     "crates/tracepress-telemetry",

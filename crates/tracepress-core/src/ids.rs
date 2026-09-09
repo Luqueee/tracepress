@@ -225,4 +225,6 @@ define_uuid_v7_ids!(
     OccurrenceId => "An observed content occurrence identity.",
     BindingId => "A frozen content binding identity.",
     EventId => "An append-only domain event identity.",
+    ContextSnapshotId => "A shadow context analysis snapshot identity.",
+    ContextBlockOccurrenceId => "An observed context block occurrence identity.",
 );

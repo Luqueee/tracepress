@@ -1523,6 +1523,18 @@ name = "tracepress-compression"
 version = "0.1.0"
 
 [[package]]
+name = "tracepress-context"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "sha2",
+ "thiserror",
+ "tracepress-core",
+ "tracepress-provider",
+]
+
+[[package]]
 name = "tracepress-core"
 version = "0.1.0"
 dependencies = [

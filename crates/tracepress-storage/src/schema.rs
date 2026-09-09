@@ -9,9 +9,11 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior, params};
 
 use crate::StorageError;
 
-const LATEST_SCHEMA_VERSION: u32 = 2;
+const LATEST_SCHEMA_VERSION: u32 = 3;
 pub(crate) const MIGRATION_V1: &str = include_str!("../migrations/0001_initial.sql");
 pub(crate) const MIGRATION_V2: &str = include_str!("../migrations/0002_provider_observability.sql");
+pub(crate) const MIGRATION_V3: &str = include_str!("../migrations/0003_context_analysis.sql");
+const MIGRATIONS: [(u32, &str); 3] = [(1, MIGRATION_V1), (2, MIGRATION_V2), (3, MIGRATION_V3)];
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 
 /// `SQLite` durability policy used by the daemon-owned writer.
@@ -85,7 +87,7 @@ pub(crate) fn open_database_with_busy_timeout(
 ) -> Result<(Connection, ConnectionSettings), StorageError> {
     let mut connection = open_configured(path, durability, busy_timeout)?;
     #[cfg(test)]
-    migrate(&mut connection, false, false)?;
+    migrate(&mut connection, None)?;
     #[cfg(not(test))]
     migrate(&mut connection)?;
     let settings = verify_settings(&connection, busy_timeout)?;
@@ -96,20 +98,10 @@ pub(crate) fn open_database_with_busy_timeout(
 pub(crate) fn open_database_with_interrupted_migration(
     path: &Path,
     durability: Durability,
+    interrupt_version: u32,
 ) -> Result<(Connection, ConnectionSettings), StorageError> {
     let mut connection = open_configured(path, durability, BUSY_TIMEOUT)?;
-    migrate(&mut connection, true, false)?;
-    let settings = verify_settings(&connection, BUSY_TIMEOUT)?;
-    Ok((connection, settings))
-}
-
-#[cfg(test)]
-pub(crate) fn open_database_with_interrupted_v2_migration(
-    path: &Path,
-    durability: Durability,
-) -> Result<(Connection, ConnectionSettings), StorageError> {
-    let mut connection = open_configured(path, durability, BUSY_TIMEOUT)?;
-    migrate(&mut connection, false, true)?;
+    migrate(&mut connection, Some(interrupt_version))?;
     let settings = verify_settings(&connection, BUSY_TIMEOUT)?;
     Ok((connection, settings))
 }
@@ -134,8 +126,7 @@ fn open_configured(
 
 fn migrate(
     connection: &mut Connection,
-    #[cfg(test)] interrupt_v1: bool,
-    #[cfg(test)] interrupt_v2: bool,
+    #[cfg(test)] interrupt_version: Option<u32>,
 ) -> Result<(), StorageError> {
     let current = current_schema_version(connection)?;
     if current > LATEST_SCHEMA_VERSION {
@@ -144,21 +135,15 @@ fn migrate(
             supported: LATEST_SCHEMA_VERSION,
         });
     }
-    if current < 1 {
-        apply_migration(
-            connection,
-            MIGRATION_V1,
-            #[cfg(test)]
-            interrupt_v1,
-        )?;
-    }
-    if current < 2 {
-        apply_migration(
-            connection,
-            MIGRATION_V2,
-            #[cfg(test)]
-            interrupt_v2,
-        )?;
+    for (version, migration) in MIGRATIONS {
+        if current < version {
+            apply_migration(
+                connection,
+                migration,
+                #[cfg(test)]
+                (interrupt_version == Some(version)),
+            )?;
+        }
     }
     Ok(())
 }

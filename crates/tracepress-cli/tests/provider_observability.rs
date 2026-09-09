@@ -10,6 +10,7 @@ use std::{
     net::{TcpListener, TcpStream},
     path::{Path, PathBuf},
     process::Command,
+    sync::LazyLock,
     thread,
     time::Duration,
 };
@@ -113,6 +114,8 @@ struct Recorded {
     received: Vec<u8>,
     request: String,
     stream: String,
+    /// Everything the run itself reported, including its correlation counters.
+    stdout: String,
 }
 
 fn run_streamed_case(events: Vec<String>) -> SetupResult<Recorded> {
@@ -150,6 +153,7 @@ fn run_streamed_case(events: Vec<String>) -> SetupResult<Recorded> {
         received,
         request,
         stream,
+        stdout: String::from_utf8(output.stdout)?,
     })
 }
 
@@ -629,7 +633,7 @@ fn run_late_transport_case() -> SetupResult<TempDir> {
 }
 
 /// Drives one forward whose request half is only interpreted after its eviction.
-fn run_late_request_case() -> SetupResult<TempDir> {
+fn run_late_request_case() -> SetupResult<RecordedDegradation> {
     let directory = TempDir::new()?;
     let payload = TempDir::new()?;
     let heavy = write_parse_heavy_request(payload.path())?;
@@ -660,7 +664,23 @@ fn run_late_request_case() -> SetupResult<TempDir> {
     );
     server.join().map_err(|_| "upstream thread panicked")??;
     fixture.run(["daemon", "stop"])?;
-    Ok(directory)
+    Ok(RecordedDegradation {
+        directory,
+        report: correlation_report(&String::from_utf8(output.stdout)?)?,
+    })
+}
+
+/// The one late-request run both of its tests read.
+///
+/// A burst racing one bounded parse is timing sensitive, so driving that race twice inside one
+/// test binary would have both runs competing for the CPU the race is decided on. Both tests
+/// observe the same run instead, and the second waits for the first to finish it.
+static LATE_REQUEST_CASE: LazyLock<Result<RecordedDegradation, String>> =
+    LazyLock::new(|| run_late_request_case().map_err(|error| error.to_string()));
+
+/// Borrows that shared run, repeating its setup failure to every test that needs it.
+fn late_request_case() -> Result<&'static RecordedDegradation, String> {
+    LATE_REQUEST_CASE.as_ref().map_err(Clone::clone)
 }
 
 /// Drives one forward that owns the oldest identity and reaches the recorder last.
@@ -806,6 +826,14 @@ fn unobserved_request_body() -> String {
 fn serve_plain_response(listener: &TcpListener) -> std::io::Result<()> {
     let (mut stream, _peer) = listener.accept()?;
     let _received = read_request(&mut stream)?;
+    answer_plain(&mut stream)
+}
+
+/// Answers one forward with a media type the observer does not interpret.
+///
+/// The forward then leaves a request half and a transport half behind and never a response
+/// half, so its correlation state stays unsettled until something else settles it.
+fn answer_plain(stream: &mut TcpStream) -> std::io::Result<()> {
     write!(
         stream,
         "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{PLAIN_RESPONSE_BODY}",
@@ -813,6 +841,221 @@ fn serve_plain_response(listener: &TcpListener) -> std::io::Result<()> {
     )?;
     stream.flush()
 }
+
+/// Settled forwards driven after a degraded one, enough to evict its correlation state.
+///
+/// [`IN_FLIGHT_FORWARDS`](../src/main.rs) is 64, so one identity plus this many newer ones
+/// crosses the bound, and every newer forward is settled long before it is itself evicted.
+const DEGRADING_FORWARDS: usize = 70;
+
+/// Drives one forward whose response no observer reads, then settled forwards behind it.
+///
+/// The first forward leaves a request half and a transport half and never a response half, so
+/// its correlation state is still unsettled when the newer forwards cross the in-flight bound.
+/// Every half it will ever have has already arrived, so its eviction is its only degradation.
+const UNSETTLED_FIRST_AGENT_SCRIPT: &str = r"
+import os, urllib.request
+
+url = os.environ['TRACEPRESS_RESPONSES_URL']
+unreadable = urllib.request.Request(
+    url,
+    data=os.environ['TRACEPRESS_E2E_PLAIN_REQUEST'].encode(),
+    headers={'Content-Type': 'application/json'},
+)
+received = urllib.request.urlopen(unreadable).read()
+assert received == os.environ['TRACEPRESS_E2E_PLAIN_RESPONSE'].encode(), received
+
+body = os.environ['TRACEPRESS_E2E_REQUEST'].encode()
+expected = os.environ['TRACEPRESS_E2E_STREAM'].encode()
+for index in range(int(os.environ['TRACEPRESS_E2E_COUNT'])):
+    request = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json'})
+    received = urllib.request.urlopen(request).read()
+    assert received == expected, (index, received)
+";
+
+/// Holds one forward, whose answer no observer reads, until every newer forward is recorded.
+///
+/// The held forward is admitted from its request half and evicted while it is the oldest
+/// identity. Its status then arrives for an identity the recorder has already retired, which
+/// is the one degradation the bounded retirement memory produces; its unreadable body means no
+/// response half follows that status.
+const HELD_UNREADABLE_AGENT_SCRIPT: &str = r"
+import os, socket, time, urllib.parse, urllib.request
+
+target = urllib.parse.urlparse(os.environ['TRACEPRESS_RESPONSES_URL'])
+
+
+def frame(body):
+    head = (
+        'POST %s HTTP/1.1\r\nHost: %s:%d\r\nContent-Type: application/json\r\n'
+        'Content-Length: %d\r\nConnection: close\r\n\r\n'
+        % (target.path, target.hostname, target.port, len(body))
+    )
+    return head.encode() + body
+
+
+def drain(connection):
+    chunks = []
+    while True:
+        chunk = connection.recv(65536)
+        if not chunk:
+            break
+        chunks.append(chunk)
+    return b''.join(chunks)
+
+
+held = socket.create_connection((target.hostname, target.port))
+held.sendall(frame(os.environ['TRACEPRESS_E2E_PLAIN_REQUEST'].encode()))
+# The held forward is accepted first, so it owns the oldest correlation identity.
+time.sleep(0.05)
+
+body = os.environ['TRACEPRESS_E2E_REQUEST'].encode()
+expected = os.environ['TRACEPRESS_E2E_STREAM'].encode()
+for index in range(int(os.environ['TRACEPRESS_E2E_COUNT'])):
+    request = urllib.request.Request(
+        os.environ['TRACEPRESS_RESPONSES_URL'],
+        data=body,
+        headers={'Content-Type': 'application/json'},
+    )
+    received = urllib.request.urlopen(request).read()
+    assert received == expected, (index, received)
+
+answer = drain(held)
+held.close()
+assert answer.split(b'\r\n\r\n', 1)[1] == os.environ['TRACEPRESS_E2E_PLAIN_RESPONSE'].encode(), (
+    answer[:120]
+)
+";
+
+/// Evidence collected from one real `tracepress run` whose correlation degraded.
+struct RecordedDegradation {
+    directory: TempDir,
+    /// The correlation counters the run reported for itself.
+    report: String,
+}
+
+/// Drives one forward evicted from correlation state while it was still unsettled.
+fn run_inflight_degraded_case() -> SetupResult<RecordedDegradation> {
+    let directory = TempDir::new()?;
+    let upstream = TcpListener::bind("127.0.0.1:0")?;
+    let upstream_address = upstream.local_addr()?;
+    let server =
+        thread::spawn(move || serve_unreadable_then_streams(&upstream, DEGRADING_FORWARDS));
+
+    let fixture = Fixture::new(directory.path())?;
+    fixture.run(["init"])?;
+    fixture.run(["daemon", "start"])?;
+    let output = fixture
+        .command()
+        .env(
+            "TRACEPRESS_UPSTREAM",
+            format!("http://{upstream_address}/v1/responses"),
+        )
+        .env("TRACEPRESS_E2E_PLAIN_REQUEST", unobserved_request_body())
+        .env("TRACEPRESS_E2E_PLAIN_RESPONSE", PLAIN_RESPONSE_BODY)
+        .env("TRACEPRESS_E2E_REQUEST", concurrent_request_body("gpt-a"))
+        .env("TRACEPRESS_E2E_STREAM", CONCURRENT_STREAM_B)
+        .env("TRACEPRESS_E2E_COUNT", DEGRADING_FORWARDS.to_string())
+        .args(["run", "python3", "--", "-c", UNSETTLED_FIRST_AGENT_SCRIPT])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "tracepress run failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    server.join().map_err(|_| "upstream thread panicked")??;
+    fixture.run(["daemon", "stop"])?;
+    Ok(RecordedDegradation {
+        directory,
+        report: correlation_report(&String::from_utf8(output.stdout)?)?,
+    })
+}
+
+/// Drives one forward whose only remaining half arrives after its identity was retired.
+fn run_retired_degraded_case() -> SetupResult<RecordedDegradation> {
+    let directory = TempDir::new()?;
+    let upstream = TcpListener::bind("127.0.0.1:0")?;
+    let upstream_address = upstream.local_addr()?;
+    let server =
+        thread::spawn(move || serve_held_unreadable_forward(&upstream, DEGRADING_FORWARDS));
+
+    let fixture = Fixture::new(directory.path())?;
+    fixture.run(["init"])?;
+    fixture.run(["daemon", "start"])?;
+    let output = fixture
+        .command()
+        .env(
+            "TRACEPRESS_UPSTREAM",
+            format!("http://{upstream_address}/v1/responses"),
+        )
+        .env("TRACEPRESS_E2E_PLAIN_REQUEST", unobserved_request_body())
+        .env("TRACEPRESS_E2E_PLAIN_RESPONSE", PLAIN_RESPONSE_BODY)
+        .env("TRACEPRESS_E2E_REQUEST", concurrent_request_body("gpt-a"))
+        .env("TRACEPRESS_E2E_STREAM", CONCURRENT_STREAM_B)
+        .env("TRACEPRESS_E2E_COUNT", DEGRADING_FORWARDS.to_string())
+        .args(["run", "python3", "--", "-c", HELD_UNREADABLE_AGENT_SCRIPT])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "tracepress run failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    server.join().map_err(|_| "upstream thread panicked")??;
+    fixture.run(["daemon", "stop"])?;
+    Ok(RecordedDegradation {
+        directory,
+        report: correlation_report(&String::from_utf8(output.stdout)?)?,
+    })
+}
+
+/// Answers the first forward with an unreadable body, then completes every newer forward.
+fn serve_unreadable_then_streams(listener: &TcpListener, newer: usize) -> std::io::Result<()> {
+    let (mut unreadable, _peer) = listener.accept()?;
+    let _received = read_request(&mut unreadable)?;
+    answer_plain(&mut unreadable)?;
+    drop(unreadable);
+    serve_paced_streams(listener, newer)
+}
+
+/// Holds the first forward's answer back until every newer forward has been recorded.
+fn serve_held_unreadable_forward(listener: &TcpListener, newer: usize) -> std::io::Result<()> {
+    let (mut held, _peer) = listener.accept()?;
+    let _received = read_request(&mut held)?;
+    serve_paced_streams(listener, newer)?;
+    // Only now does the held forward obtain an upstream status, and nothing reads its body.
+    answer_plain(&mut held)
+}
+
+/// Completes one forward per connection, pacing the answers the recorder must keep up with.
+fn serve_paced_streams(listener: &TcpListener, forwards: usize) -> std::io::Result<()> {
+    for _forward in 0..forwards {
+        let (mut stream, _peer) = listener.accept()?;
+        let _received = read_request(&mut stream)?;
+        answer_stream(&mut stream)?;
+        drop(stream);
+        // One settled forward costs a control round trip, so pacing the answers keeps the
+        // bounded recorder queue from dropping the evidence this test counts.
+        thread::sleep(Duration::from_millis(2));
+    }
+    Ok(())
+}
+
+/// Extracts the one line on which a run reports its correlation counters.
+fn correlation_report(stdout: &str) -> SetupResult<String> {
+    stdout
+        .lines()
+        .find(|line| line.starts_with("correlation_degraded_total="))
+        .map(str::to_owned)
+        .ok_or_else(|| "the run reported no correlation counters".into())
+}
+
+/// The counters a run reports when nothing degraded its correlation.
+const UNDEGRADED_REPORT: &str = "correlation_degraded_total=0 correlation_degraded_inflight_limit=0 correlation_degraded_retired_limit=0 correlation_missing_total=0";
+
+/// The canonical event every correlation degradation commits.
+const DEGRADED_EVENT: &str = "context.correlation.degraded";
 
 /// A rejection body whose media type the observer does not interpret, so no response half exists.
 const REJECTED_RESPONSE_BODY: &str = "upstream-rejected-opaque-bytes";
@@ -1161,8 +1404,8 @@ fn a_transport_half_arriving_after_eviction_keeps_one_inference() -> TestResult 
 
 #[test]
 fn a_request_half_arriving_after_eviction_keeps_one_inference() -> TestResult {
-    let directory = run_late_request_case()?;
-    let root = directory.path();
+    let recorded = late_request_case()?;
+    let root = recorded.directory.path();
     let database = Connection::open(root.join("tracepress.sqlite3"))?;
     let burst = i64::try_from(BURST_FORWARDS)?;
 
@@ -1199,6 +1442,78 @@ fn a_request_half_arriving_after_eviction_keeps_one_inference() -> TestResult {
     );
     assert_eq!(text(&database, "SELECT state FROM sessions")?, "closed");
     Ok(())
+}
+
+#[test]
+fn a_forward_evicted_without_its_request_half_reports_the_missing_correlation() -> TestResult {
+    let recorded = late_request_case()?;
+    let database = Connection::open(recorded.directory.path().join("tracepress.sqlite3"))?;
+    let counts = correlation_counts(&recorded.report)?;
+
+    // The heavy forward is evicted holding response and transport evidence but no request half,
+    // and that forward owns no logical request afterwards, so the absent half is a loss of its
+    // own. The burst races the bound, so how many forwards it degrades is not fixed; what is
+    // fixed is that the missing half is counted and that every reason adds up to the total.
+    assert!(
+        counts.missing >= 1,
+        "a forward recorded without its request half must be counted as missing: {}",
+        recorded.report
+    );
+    assert_eq!(
+        counts.total,
+        counts.inflight_limit + counts.retired_limit + counts.missing,
+        "the total must account for exactly the reasons it is composed of: {}",
+        recorded.report
+    );
+    // Counters without durable events would report a loss nothing can be queried about.
+    assert_eq!(
+        integer(
+            &database,
+            &format!("SELECT COUNT(*) FROM events WHERE event_type = '{DEGRADED_EVENT}'"),
+        )?,
+        counts.total,
+        "every counted degradation must have committed exactly one event"
+    );
+    assert!(
+        blob(
+            &database,
+            &format!(
+                "SELECT payload FROM events WHERE event_type = '{DEGRADED_EVENT}' AND CAST(payload AS TEXT) LIKE '%missing_request_half%'",
+            ),
+        )
+        .is_ok(),
+        "the missing request half must name its own reason"
+    );
+    Ok(())
+}
+
+/// The four correlation counters one run reported.
+struct CorrelationCounts {
+    total: i64,
+    inflight_limit: i64,
+    retired_limit: i64,
+    missing: i64,
+}
+
+/// Reads the counters out of the line a run reports them on.
+fn correlation_counts(report: &str) -> SetupResult<CorrelationCounts> {
+    let counter = |name: &str| -> SetupResult<i64> {
+        let field = format!("{name}=");
+        report
+            .split_whitespace()
+            .find_map(|reported| reported.strip_prefix(field.as_str()))
+            .ok_or_else(|| -> Box<dyn std::error::Error> {
+                format!("the report has no {name}: {report}").into()
+            })?
+            .parse()
+            .map_err(Into::into)
+    };
+    Ok(CorrelationCounts {
+        total: counter("correlation_degraded_total")?,
+        inflight_limit: counter("correlation_degraded_inflight_limit")?,
+        retired_limit: counter("correlation_degraded_retired_limit")?,
+        missing: counter("correlation_missing_total")?,
+    })
 }
 
 #[test]
@@ -1245,6 +1560,135 @@ fn a_forward_whose_first_half_arrives_after_eviction_is_still_recorded() -> Test
         "each burst forward names its own model, so a repeated model is a forward recorded twice"
     );
     assert_eq!(text(&database, "SELECT state FROM sessions")?, "closed");
+    Ok(())
+}
+
+#[test]
+fn a_forward_evicted_by_the_in_flight_bound_reports_one_degradation() -> TestResult {
+    let recorded = run_inflight_degraded_case()?;
+    let root = recorded.directory.path();
+    let database = Connection::open(root.join("tracepress.sqlite3"))?;
+
+    assert_eq!(
+        recorded.report,
+        "correlation_degraded_total=1 correlation_degraded_inflight_limit=1 correlation_degraded_retired_limit=0 correlation_missing_total=0",
+        "the in-flight bound degraded exactly one forward, under its own reason"
+    );
+    assert_degraded_events(&database, &["in_flight_limit"])?;
+    // The degradation names the forward's own inference, and that forward keeps every row its
+    // evidence supports: a degraded correlation is missing causality, not missing evidence.
+    assert_eq!(
+        integer(
+            &database,
+            &format!(
+                "SELECT COUNT(*) FROM events e JOIN provider_requests r ON r.operation_id = e.operation_id WHERE e.event_type = '{DEGRADED_EVENT}' AND r.model = 'gpt-plain'",
+            ),
+        )?,
+        1,
+        "the degraded forward must keep the logical request it had evidence for"
+    );
+    assert_eq!(
+        integer(&database, "SELECT COUNT(*) FROM provider_requests")?,
+        i64::try_from(DEGRADING_FORWARDS)? + 1,
+        "degrading one forward may not lose another"
+    );
+    assert_eq!(text(&database, "SELECT state FROM sessions")?, "closed");
+    drop(database);
+
+    assert_no_canaries_in_storage(root)
+}
+
+#[test]
+fn a_half_arriving_for_a_retired_identity_reports_its_own_degradation() -> TestResult {
+    let recorded = run_retired_degraded_case()?;
+    let root = recorded.directory.path();
+    let database = Connection::open(root.join("tracepress.sqlite3"))?;
+
+    // Eviction degraded the held forward once; its status then arrived for an identity the
+    // bounded retirement memory still accounts for, which is a second, differently caused loss.
+    assert_eq!(
+        recorded.report,
+        "correlation_degraded_total=2 correlation_degraded_inflight_limit=1 correlation_degraded_retired_limit=1 correlation_missing_total=0",
+        "the retirement refusal must be counted under its own reason"
+    );
+    assert_degraded_events(&database, &["in_flight_limit", "retired_limit"])?;
+    // A refused half belongs to no record, so its degradation names the session only.
+    assert_eq!(
+        integer(
+            &database,
+            &format!(
+                "SELECT COUNT(*) FROM events WHERE event_type = '{DEGRADED_EVENT}' AND operation_id IS NULL",
+            ),
+        )?,
+        1
+    );
+    assert_eq!(
+        integer(
+            &database,
+            "SELECT COUNT(*) FROM provider_attempts WHERE status_code IS NULL",
+        )?,
+        1,
+        "the held forward must be the one recorded before its status was ever observed"
+    );
+    assert_eq!(
+        integer(&database, "SELECT COUNT(*) FROM provider_requests")?,
+        i64::try_from(DEGRADING_FORWARDS)? + 1,
+        "a refused half may not cost the forward its record"
+    );
+    assert_eq!(text(&database, "SELECT state FROM sessions")?, "closed");
+    drop(database);
+
+    assert_no_canaries_in_storage(root)
+}
+
+#[test]
+fn a_fully_correlated_run_reports_no_degradation_at_all() -> TestResult {
+    let recorded = run_streamed_case(stream_events())?;
+    let database = Connection::open(recorded.directory.path().join("tracepress.sqlite3"))?;
+
+    assert_eq!(
+        correlation_report(&recorded.stdout)?,
+        UNDEGRADED_REPORT,
+        "a run whose every forward correlated must report zeroes, not silence"
+    );
+    assert_eq!(
+        integer(
+            &database,
+            "SELECT COUNT(*) FROM events WHERE event_type LIKE 'context.%'",
+        )?,
+        0,
+        "no context event may be committed for a run that degraded nothing"
+    );
+    Ok(())
+}
+
+/// Asserts the degradations one run committed, in order, with their whole payloads.
+///
+/// A degradation payload is checked in full rather than by lookup: the contract allows it
+/// reason, session, and nothing else, and only an exact comparison can prove the absence of a
+/// field nobody thought to query.
+fn assert_degraded_events(database: &Connection, reasons: &[&str]) -> TestResult {
+    let session = text(database, "SELECT session_id FROM sessions")?;
+    let mut statement = database.prepare(&format!(
+        "SELECT payload, schema_version FROM events WHERE event_type = '{DEGRADED_EVENT}' ORDER BY seq",
+    ))?;
+    let committed = statement
+        .query_map([], |row| {
+            Ok((row.get::<_, Vec<u8>>(0)?, row.get::<_, String>(1)?))
+        })?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    assert_eq!(
+        committed.len(),
+        reasons.len(),
+        "one degradation is exactly one event"
+    );
+    for ((payload, schema_version), reason) in committed.iter().zip(reasons) {
+        assert_eq!(
+            String::from_utf8_lossy(payload),
+            format!(r#"{{"reason":"{reason}","session_id":"{session}"}}"#)
+        );
+        assert_eq!(schema_version, "1");
+    }
     Ok(())
 }
 

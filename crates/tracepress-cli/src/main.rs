@@ -17,7 +17,10 @@ use std::{
     collections::{BTreeMap, BTreeSet},
     path::PathBuf,
     process::Stdio,
-    sync::Arc,
+    sync::{
+        Arc,
+        atomic::{AtomicU64, Ordering},
+    },
     time::Duration,
 };
 
@@ -31,8 +34,8 @@ use tracepress_core::{
     RequestId, SessionId, UuidV7Generator,
 };
 use tracepress_daemon::{
-    ControlRequest, ControlResponse, ProviderObservation as ObservationRecord,
-    ProviderObservationOutcome,
+    ControlRequest, ControlResponse, CorrelationDegradation, CorrelationStatus,
+    ProviderObservation as ObservationRecord, ProviderObservationOutcome,
 };
 use tracepress_ipc::{
     Credential, Endpoint, IpcClient, IpcLimits, IpcRequest, ResponseOutcome, UnixEndpoint,
@@ -63,6 +66,54 @@ const RETIRED_IDENTITIES: usize = 256;
 
 /// Maximum wait for the recorder to drain after the agent exits.
 const RECORDER_DRAIN_SECONDS: u64 = 5;
+
+/// Correlation accounting of one run, published while the recorder is still working.
+///
+/// The recorder owns bounded state, so evidence it cannot join is lost by design. Every counter
+/// here names one such loss, and they live behind a shared handle so the run can report them
+/// even when the bounded drain window expired before the recorder finished.
+#[derive(Debug, Default)]
+struct CorrelationCounters {
+    /// Every degradation of this run, whatever its reason.
+    degraded_total: AtomicU64,
+    /// Correlation state evicted before settling because the in-flight bound was reached.
+    degraded_inflight_limit: AtomicU64,
+    /// Halves refused because the bounded retirement memory still accounts for their identity.
+    degraded_retired_limit: AtomicU64,
+    /// Terminal semantic evidence that reached the recorder without its request half.
+    missing_total: AtomicU64,
+}
+
+impl CorrelationCounters {
+    /// Counts one degradation under its reason and in the run total.
+    fn degraded(&self, reason: CorrelationDegradation) {
+        let counter = match reason {
+            CorrelationDegradation::InFlightLimit => Some(&self.degraded_inflight_limit),
+            CorrelationDegradation::RetiredLimit => Some(&self.degraded_retired_limit),
+            CorrelationDegradation::MissingRequestHalf => Some(&self.missing_total),
+            // A reason this build keeps no counter for still counts in the run total.
+            _ => None,
+        };
+        if let Some(counter) = counter {
+            let _counted = counter.fetch_add(1, Ordering::Relaxed);
+        }
+        let _total = self.degraded_total.fetch_add(1, Ordering::Relaxed);
+    }
+
+    /// Reports every counter, including the zeroes.
+    ///
+    /// A run reports its correlation accounting unconditionally: a line printed only when
+    /// something degraded cannot distinguish a clean run from a report that never arrived.
+    fn report(&self) -> String {
+        format!(
+            "correlation_degraded_total={} correlation_degraded_inflight_limit={} correlation_degraded_retired_limit={} correlation_missing_total={}",
+            self.degraded_total.load(Ordering::Relaxed),
+            self.degraded_inflight_limit.load(Ordering::Relaxed),
+            self.degraded_retired_limit.load(Ordering::Relaxed),
+            self.missing_total.load(Ordering::Relaxed),
+        )
+    }
+}
 
 /// One auxiliary record of a single forward, tagged with its correlation identity.
 #[derive(Debug)]
@@ -152,11 +203,14 @@ impl ForwardState {
     /// Takes the evidence observed for this forward so far.
     ///
     /// A response without its request half carries no logical request, so it is dropped in
-    /// favour of whatever transport evidence the forward has.
+    /// favour of whatever transport evidence the forward has, and the forward reports that its
+    /// correlation is missing rather than presenting transport evidence as a whole exchange.
     fn evidence(&mut self) -> ForwardEvidence {
         let status_code = self.status_code;
         let response = self.response.take();
         let transport_failure = self.transport_failure.take();
+        let orphaned_semantic =
+            self.request.is_none() && (response.is_some() || transport_failure.is_some());
         ForwardEvidence {
             semantic: self.request.take().map(|pending| SemanticRecord {
                 pending,
@@ -164,6 +218,7 @@ impl ForwardState {
                 status_code,
                 transport_failure,
             }),
+            orphaned_semantic,
             transport: self.transport,
         }
     }
@@ -173,6 +228,8 @@ impl ForwardState {
 #[derive(Debug)]
 struct ForwardEvidence {
     semantic: Option<SemanticRecord>,
+    /// Terminal semantic evidence was observed for a forward whose request half never arrived.
+    orphaned_semantic: bool,
     transport: bool,
 }
 
@@ -193,9 +250,10 @@ struct SemanticRecord {
 /// route keeps its transport-only record. Correlation state is bounded; when the bound is
 /// reached the oldest identity is settled with the evidence it already has, and that identity
 /// is retired so a half that arrives afterwards cannot open a second operation for a forward
-/// already recorded. Only an identity that entered correlation state is ever retired: an
-/// identity whose first half is still being interpreted has been recorded nowhere, so it is
-/// admitted however far behind the newest forward it has fallen.
+/// already recorded, and every degradation of that bounded state is counted and reported.
+/// Only an identity that entered correlation state is ever retired: an identity whose first
+/// half is still being interpreted has been recorded nowhere, so it is admitted however far
+/// behind the newest forward it has fallen.
 #[derive(Debug)]
 struct RunRecorder {
     config: Config,
@@ -212,6 +270,8 @@ struct RunRecorder {
     /// into one watermark: refusing everything at or below it refuses only forwards this
     /// recorder has already accounted for.
     retired_through: Option<ForwardId>,
+    /// Correlation losses observed so far, shared with the run that reports them.
+    counters: Arc<CorrelationCounters>,
 }
 
 impl RunRecorder {
@@ -240,7 +300,8 @@ impl RunRecorder {
                 continue;
             }
             let evidence = state.evidence();
-            self.record(evidence).await;
+            // The run ending is not a bound degradation: the forward keeps the evidence it has.
+            self.record(evidence, CorrelationStatus::Correlated).await;
         }
         Ok(())
     }
@@ -288,7 +349,7 @@ impl RunRecorder {
         }
         state.settled = true;
         let evidence = state.evidence();
-        self.record(evidence).await;
+        self.record(evidence, CorrelationStatus::Correlated).await;
     }
 
     /// Buffers the terminal semantic response half, settling the forward once paired.
@@ -309,7 +370,7 @@ impl RunRecorder {
         }
         state.settled = true;
         let evidence = state.evidence();
-        self.record(evidence).await;
+        self.record(evidence, CorrelationStatus::Correlated).await;
     }
 
     /// Settles a forward that obtained no upstream response with its transport evidence.
@@ -331,7 +392,7 @@ impl RunRecorder {
         }
         state.settled = true;
         let evidence = state.evidence();
-        self.record(evidence).await;
+        self.record(evidence, CorrelationStatus::Correlated).await;
     }
 
     /// Reserves bounded correlation state for one forward identity.
@@ -344,7 +405,14 @@ impl RunRecorder {
     /// after cheaper, newer forwards have already evicted state, and refusing it would leave the
     /// forward with no record at all.
     async fn admit(&mut self, forward: ForwardId) {
-        if self.forwards.contains_key(&forward) || self.is_retired(forward) {
+        if self.forwards.contains_key(&forward) {
+            return;
+        }
+        if self.is_retired(forward) {
+            // This forward was already recorded with the evidence it had, so this half can no
+            // longer be joined to it and re-admitting it would record the forward twice. The
+            // evidence is lost either way; what must not be lost is that it was.
+            self.degrade(CorrelationDegradation::RetiredLimit).await;
             return;
         }
         while self.forwards.len() >= IN_FLIGHT_FORWARDS {
@@ -357,7 +425,13 @@ impl RunRecorder {
                 continue;
             }
             let evidence = state.evidence();
-            self.record(evidence).await;
+            // The bound, not the exchange, ended this forward's correlation: it is recorded
+            // with the evidence it has and marked degraded, never as a whole exchange.
+            self.record(
+                evidence,
+                CorrelationStatus::Degraded(CorrelationDegradation::InFlightLimit),
+            )
+            .await;
         }
         let _admitted = self.forwards.insert(forward, ForwardState::default());
     }
@@ -402,25 +476,77 @@ impl RunRecorder {
     /// never gets a second operation. A record the CLI could not deliver at all — a dropped or
     /// oversized observation — falls back to the transport record, so the forward still leaves
     /// evidence behind.
-    async fn record(&self, evidence: ForwardEvidence) {
-        if let Some(semantic) = evidence.semantic {
-            let recorded = self.record_observation(semantic).await;
-            if recorded {
-                return;
+    async fn record(&self, evidence: ForwardEvidence, correlation: CorrelationStatus) {
+        let ForwardEvidence {
+            semantic,
+            orphaned_semantic,
+            transport,
+        } = evidence;
+        if let CorrelationStatus::Degraded(reason) = correlation {
+            self.counters.degraded(reason);
+        }
+        // The record carries its own correlation status, so the daemon commits the degradation
+        // event in the very transaction that persists the evidence.
+        let recorded = match semantic {
+            Some(semantic) => self.record_observation(semantic, correlation).await,
+            None => false,
+        };
+        if !recorded {
+            // No record reached the daemon to carry the degradation, so it is reported alone.
+            if let CorrelationStatus::Degraded(reason) = correlation {
+                self.report_degradation(reason).await;
+            }
+            if transport {
+                // Fallback transport evidence is auxiliary: its failure never fails the run.
+                drop(self.record_forward().await);
             }
         }
-        if evidence.transport {
-            // Fallback transport evidence is auxiliary: its failure never fails the run.
-            drop(self.record_forward().await);
+        if orphaned_semantic {
+            // Terminal evidence without a request half is a degradation of its own, whatever
+            // else happened to this forward: no logical request can be recorded for it.
+            self.degrade(CorrelationDegradation::MissingRequestHalf)
+                .await;
         }
     }
 
+    /// Counts one degradation no forward record can carry and makes it observable.
+    async fn degrade(&self, reason: CorrelationDegradation) {
+        self.counters.degraded(reason);
+        self.report_degradation(reason).await;
+    }
+
+    /// Asks the daemon to commit the canonical event of one correlation degradation.
+    ///
+    /// The message carries the reason, the session, and the moment only: a degradation is
+    /// missing evidence, so it may not carry the forward it degraded.
+    async fn report_degradation(&self, reason: CorrelationDegradation) {
+        let Ok(observed_at) = current_timestamp() else {
+            return;
+        };
+        // Observing the loss is itself auxiliary: a rejected event never fails the run.
+        drop(
+            control(
+                &self.config,
+                ControlRequest::RecordCorrelationDegradation {
+                    session_id: self.session_id,
+                    reason,
+                    observed_at,
+                },
+            )
+            .await,
+        );
+    }
+
     /// Sends one semantic record, reporting whether the daemon owns the resulting operation.
-    async fn record_observation(&self, semantic: SemanticRecord) -> bool {
+    async fn record_observation(
+        &self,
+        semantic: SemanticRecord,
+        correlation: CorrelationStatus,
+    ) -> bool {
         let Ok(ended_at) = current_timestamp() else {
             return false;
         };
-        let Some(observation) = observation_record(semantic, ended_at) else {
+        let Some(observation) = observation_record(semantic, ended_at, correlation) else {
             return false;
         };
         control(
@@ -449,7 +575,11 @@ impl RunRecorder {
     }
 }
 
-fn observation_record(semantic: SemanticRecord, ended_at: String) -> Option<ObservationRecord> {
+fn observation_record(
+    semantic: SemanticRecord,
+    ended_at: String,
+    correlation: CorrelationStatus,
+) -> Option<ObservationRecord> {
     let SemanticRecord {
         pending,
         response,
@@ -468,7 +598,8 @@ fn observation_record(semantic: SemanticRecord, ended_at: String) -> Option<Obse
     // from persisting an errored attempt whose `ended_at` is still NULL.
     let errored_upstream = status_code.is_some_and(|code| !(200..300).contains(&code.get()));
     let terminal = response.is_some() || transport_failure.is_some() || errored_upstream;
-    let mut record = ObservationRecord::new(request_bytes, pending.request, pending.started_at);
+    let mut record = ObservationRecord::new(request_bytes, pending.request, pending.started_at)
+        .with_correlation_status(correlation);
     if let Some(streaming) = streaming {
         record = record.with_streaming(streaming);
     }
@@ -509,21 +640,24 @@ struct RunRecording {
     parent_operation_id: OperationId,
 }
 
-/// Installs both auxiliary sinks and starts the worker that drains their shared queue.
-fn spawn_recorder(
-    recording: RunRecording,
+/// The recorder of one run: its proxy, its worker, and the counters it publishes.
+struct SpawnedRecorder {
     proxy: TransparentProxy,
-) -> (
-    TransparentProxy,
-    tokio::task::JoinHandle<Result<(), String>>,
-) {
+    task: tokio::task::JoinHandle<Result<(), String>>,
+    /// Correlation accounting the run reports, readable whether or not the worker finished.
+    counters: Arc<CorrelationCounters>,
+}
+
+/// Installs both auxiliary sinks and starts the worker that drains their shared queue.
+fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRecorder {
     let RunRecording {
         config,
         session_id,
         parent_operation_id,
     } = recording;
     let (sender, receiver) = tokio::sync::mpsc::channel(RECORDER_QUEUE_ITEMS);
-    let recorder = tokio::spawn(
+    let counters = Arc::new(CorrelationCounters::default());
+    let task = tokio::spawn(
         RunRecorder {
             config,
             session_id,
@@ -531,6 +665,7 @@ fn spawn_recorder(
             forwards: BTreeMap::new(),
             retired: BTreeSet::new(),
             retired_through: None,
+            counters: Arc::clone(&counters),
         }
         .run(receiver),
     );
@@ -539,7 +674,11 @@ fn spawn_recorder(
             sender: sender.clone(),
         }))
         .with_observation_sink(Arc::new(RecorderSink { sender }));
-    (proxy, recorder)
+    SpawnedRecorder {
+        proxy,
+        task,
+        counters,
+    }
 }
 
 const BODY_BYTES: u64 = 32_768;
@@ -802,7 +941,11 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
             return Err("daemon did not return a session and root operation".to_owned());
         }
     };
-    let (proxy, mut recorder_task) = spawn_recorder(
+    let SpawnedRecorder {
+        proxy,
+        task: mut recorder_task,
+        counters,
+    } = spawn_recorder(
         RunRecording {
             config: config.clone(),
             session_id: session.session_id,
@@ -841,6 +984,9 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
             Ok(())
         }
     };
+    // Correlation degradation is reported for every run, before anything else can fail: a run
+    // whose bounded state lost evidence must never look like a run that lost none.
+    println!("{}", counters.report());
     let ended_at = current_timestamp()?;
     let finalization = control(
         config,

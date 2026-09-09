@@ -1,0 +1,20 @@
+[package]
+name = "tracepress-context"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+[dependencies]
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"
+thiserror = "2"
+tracepress-core = { path = "../tracepress-core" }
+tracepress-provider = { path = "../tracepress-provider" }
+
+[lints]
+workspace = true
+
+[dev-dependencies]
+serde_json = "1"

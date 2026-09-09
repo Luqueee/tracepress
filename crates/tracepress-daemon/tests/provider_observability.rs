@@ -3,11 +3,13 @@
 use rusqlite::Connection;
 use tempfile::TempDir;
 use tracepress_core::{
-    HttpStatusCode, MaxIpcQueueItems, OperationId, OperationKind, SessionState, UuidV7Generator,
+    HttpStatusCode, MaxIpcQueueItems, OperationId, OperationKind, SessionId, SessionState,
+    UuidV7Generator,
 };
 use tracepress_daemon::{
-    DaemonError, DaemonService, PersistProviderObservation, ProviderObservation,
-    ProviderObservationOutcome, RecordProviderObservation,
+    CorrelationDegradation, DaemonError, DaemonService, PersistProviderObservation,
+    ProviderObservation, ProviderObservationOutcome, RecordCorrelationDegradation,
+    RecordProviderObservation,
 };
 use tracepress_provider::{
     ObservationInput, ObservationLimits, ProviderResponseState, StreamingObserver, parse_request,
@@ -172,6 +174,45 @@ async fn rejects_orphan_and_wrong_kind_provider_observations() -> TestResult {
         Err(DaemonError::OperationNotInference { .. })
     ));
     daemon.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn rejects_correlation_degradations_of_sessions_it_does_not_own() -> TestResult {
+    let directory = TempDir::new()?;
+    let daemon = daemon(&directory).await?;
+    let session = daemon.start_session("t0").await?;
+    let unknown = SessionId::generate(&UuidV7Generator::new());
+    let orphan = daemon
+        .record_correlation_degradation(RecordCorrelationDegradation::new(
+            unknown,
+            CorrelationDegradation::RetiredLimit,
+            "t1".to_owned(),
+        ))
+        .await;
+    assert!(matches!(orphan, Err(DaemonError::UnknownSession { .. })));
+    let _closed = daemon
+        .finish_session(session.session_id, SessionState::Closed, "t2")
+        .await?;
+    let late = daemon
+        .record_correlation_degradation(RecordCorrelationDegradation::new(
+            session.session_id,
+            CorrelationDegradation::InFlightLimit,
+            "t3".to_owned(),
+        ))
+        .await;
+    assert!(matches!(late, Err(DaemonError::SessionNotActive { .. })));
+    daemon.shutdown().await?;
+
+    // A refused degradation is not a degradation this daemon observed: inventing an event for
+    // one would attribute a correlation loss to a session that never reported it.
+    let database = Connection::open(directory.path().join("tracepress.sqlite3"))?;
+    let events: i64 = database.query_row(
+        "SELECT COUNT(*) FROM events WHERE event_type = 'context.correlation.degraded'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(events, 0);
     Ok(())
 }
 

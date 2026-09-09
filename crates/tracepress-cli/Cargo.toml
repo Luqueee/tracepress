@@ -1,0 +1,36 @@
+[package]
+name = "tracepress-cli"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+autobins = false
+
+[[bin]]
+name = "tracepress"
+path = "src/main.rs"
+
+[dependencies]
+axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
+clap = { version = "4", features = ["derive"] }
+getrandom = "0.3"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "net", "process", "rt-multi-thread", "signal", "time"] }
+tokio-util = "0.7"
+tracepress-core = { path = "../tracepress-core" }
+tracepress-daemon = { path = "../tracepress-daemon" }
+tracepress-ipc = { path = "../tracepress-ipc" }
+tracepress-provider = { path = "../tracepress-provider" }
+tracepress-proxy = { path = "../tracepress-proxy" }
+tracepress-storage = { path = "../tracepress-storage" }
+
+[dev-dependencies]
+tempfile = "3"
+rusqlite = { version = "0.37", features = ["bundled"] }
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+
+[lints]
+workspace = true

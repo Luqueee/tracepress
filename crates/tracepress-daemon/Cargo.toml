@@ -1,0 +1,31 @@
+[package]
+name = "tracepress-daemon"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+autobins = false
+
+[[bin]]
+name = "tracepressd"
+path = "src/main.rs"
+
+[dependencies]
+thiserror = "2"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "signal", "sync", "time"] }
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tracing = { version = "0.1", default-features = false, features = ["std"] }
+tracepress-ipc = { path = "../tracepress-ipc" }
+tokio-util = "0.7"
+tracepress-core = { path = "../tracepress-core" }
+tracepress-storage = { path = "../tracepress-storage" }
+
+[dev-dependencies]
+tempfile = "3"
+tokio = { version = "1", features = ["macros", "process", "rt-multi-thread", "time"] }
+rusqlite = { version = "0.37", features = ["bundled"] }
+
+[lints]
+workspace = true

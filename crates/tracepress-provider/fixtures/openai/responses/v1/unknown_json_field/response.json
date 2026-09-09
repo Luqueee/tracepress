@@ -1,0 +1,1 @@
+{"id":"resp_fixture_unknown","model":"gpt-5.6-sol","status":"completed","output":[],"future_provider_metadata":{"trace":"redacted","nested":{"stable":true}},"usage":{"input_tokens":5,"output_tokens":2,"total_tokens":7}}

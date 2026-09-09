@@ -1,0 +1,6 @@
+event: response.created
+data: {"response":{"id":"resp_fixture_cancel","model":"gpt-5.6-sol"}}
+
+event: response.output_text.delta
+data: {"delta":"redacted"}
+

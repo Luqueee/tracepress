@@ -1,11 +1,18 @@
 //! Provider endpoint boundary for transparent Phase 1 forwarding.
 
+mod domain;
+mod json;
+mod observer;
+mod request;
+mod response;
+mod sse;
+
 use std::sync::Arc;
 
 use http::Uri;
 use thiserror::Error;
 
-/// Validated absolute endpoint for OpenAI-compatible chat completions.
+/// Validated absolute endpoint for OpenAI-compatible provider routes.
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub struct ProviderEndpoint {
@@ -13,7 +20,9 @@ pub struct ProviderEndpoint {
 }
 
 impl ProviderEndpoint {
-    /// Validates one absolute HTTP(S) chat-completions endpoint.
+    /// Validates one absolute HTTP(S) provider endpoint.
+    ///
+    /// Both OpenAI-compatible Phase 1 chat completions and Phase 2 Responses routes are accepted.
     ///
     /// # Errors
     /// Returns a typed error for an invalid URI, unsupported scheme, missing authority, or wrong
@@ -29,7 +38,7 @@ impl ProviderEndpoint {
         if uri.authority().is_none() {
             return Err(ProviderEndpointError::MissingAuthority);
         }
-        if uri.path() != "/v1/chat/completions" {
+        if !matches!(uri.path(), "/v1/chat/completions" | "/v1/responses") {
             return Err(ProviderEndpointError::WrongPath);
         }
         Ok(Self {
@@ -55,9 +64,22 @@ pub enum ProviderEndpointError {
     #[error("provider endpoint must use http or https")]
     UnsupportedScheme,
     /// Absolute upstream authority is required.
+
     #[error("provider endpoint must include an authority")]
     MissingAuthority,
-    /// Phase 1 supports one provider route.
-    #[error("provider endpoint path must be /v1/chat/completions")]
+    /// Provider endpoint is not one of the supported OpenAI-compatible routes.
+    #[error("provider endpoint path must be /v1/chat/completions or /v1/responses")]
     WrongPath,
 }
+pub use domain::{
+    AnomalyFlags, ContentCaptureMode, LimitsError, MAX_RETAINED_USAGE_BYTES, NormalizedUsage,
+    OPENAI_RESPONSES_PARSER_VERSION, ObservationError, ObservationInput, ObservationLimitValues,
+    ObservationLimits, ObservationStatus, ProviderKind, ProviderProtocol, ProviderResponseState,
+    RawProviderUsage, USAGE_NORMALIZER_VERSION, UsageError, UsageStatus,
+};
+pub use observer::{ObservationResult, OpenAiResponsesV1Observer, ProviderObserver};
+pub use request::{OpenAiResponsesRequestObservation, RequestObservation, parse_request};
+pub use response::{
+    OpenAiResponsesResponseObservation, ResponseObservation, normalize_usage, parse_response,
+};
+pub use sse::{SseEvent, SseFramer, StreamingObserver};

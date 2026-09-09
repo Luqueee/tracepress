@@ -5,6 +5,80 @@ use tracepress_core::{
     SessionState, UsageStatus,
 };
 
+/// Provider family recorded by semantic observations.
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "OpenAI is the only provider implemented by Phase 2"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ProviderKind {
+    /// `OpenAI` APIs.
+    OpenAi,
+}
+
+/// Versioned provider protocol recorded by semantic observations.
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "Responses API v1 is the only protocol implemented by Phase 2"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ProviderProtocol {
+    /// `OpenAI` Responses API v1.
+    OpenAiResponsesV1,
+}
+
+/// Outcome of provider semantic observation.
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "the frozen contract fixes these forward-compatible outcomes"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ObservationStatus {
+    /// Observation completed with all expected evidence.
+    Complete,
+    /// Observation retained only a subset of evidence.
+    Partial,
+    /// The input is not supported by this observer.
+    Unsupported,
+    /// The input was malformed.
+    Malformed,
+    /// A configured parser bound was reached.
+    ResourceLimit,
+    /// A bounded observer queue dropped semantic work.
+    ObserverBackpressure,
+    /// Observation was cancelled.
+    Cancelled,
+}
+
+/// Provider response lifecycle state.
+#[allow(
+    clippy::exhaustive_enums,
+    reason = "the frozen contract fixes these forward-compatible lifecycle states"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ProviderResponseState {
+    /// Provider accepted the response but has not started processing.
+    Queued,
+    /// Provider is processing the response.
+    InProgress,
+    /// Provider completed successfully.
+    Completed,
+    /// Provider stopped without a completed response.
+    Incomplete,
+    /// Provider reported an error.
+    Failed,
+    /// The client cancelled the response.
+    Cancelled,
+    /// The upstream disconnected before completion.
+    Disconnected,
+    /// No known lifecycle state was observed.
+    Unknown,
+}
+
 /// Declared information-preservation class of a compression decision.
 #[allow(
     clippy::exhaustive_enums,
@@ -63,6 +137,23 @@ pub enum WriteCommand {
     ProviderRequest {
         operation_id: OperationId,
         metadata: RequestMetadata,
+        provider: Option<ProviderKind>,
+        protocol: Option<ProviderProtocol>,
+        parser_version: Option<u32>,
+        observation_status: Option<ObservationStatus>,
+        model: Option<String>,
+        stream: Option<bool>,
+        background: Option<bool>,
+        store: Option<bool>,
+        reasoning_effort: Option<String>,
+        text_verbosity: Option<String>,
+        truncation: Option<String>,
+        previous_response_id_present: Option<bool>,
+        input_item_count: Option<u64>,
+        tool_count: Option<u64>,
+        text_input_block_count: Option<u64>,
+        image_input_block_count: Option<u64>,
+        file_input_block_count: Option<u64>,
     },
     /// Inserts one provider attempt.
     ProviderAttempt {
@@ -73,6 +164,21 @@ pub enum WriteCommand {
         started_at: String,
         ended_at: Option<String>,
         status: InferenceStatus,
+        provider_response_id: Option<String>,
+        response_model: Option<String>,
+        response_state: Option<ProviderResponseState>,
+        provider_created_at: Option<String>,
+        incomplete_reason: Option<String>,
+        error_code: Option<String>,
+        transport_error: Option<String>,
+        observation_status: Option<ObservationStatus>,
+        streaming: Option<bool>,
+        chunk_count: Option<u64>,
+        byte_count: Option<u64>,
+        ttfb_us: Option<u64>,
+        ttft_us: Option<u64>,
+        duration_us: Option<u64>,
+        anomaly_metadata: Option<String>,
     },
     /// Inserts provider usage without inventing unavailable measurements.
     ProviderUsage {
@@ -84,6 +190,12 @@ pub enum WriteCommand {
         output_total: Option<u64>,
         reasoning: Option<u64>,
         usage_status: Option<UsageStatus>,
+        raw_usage_json: Option<Box<[u8]>>,
+        input_cached: Option<u64>,
+        output_reasoning: Option<u64>,
+        total: Option<u64>,
+        normalizer_version: Option<u32>,
+        anomaly_metadata: Option<String>,
     },
     /// Inserts one immutable inline content object.
     ContentObject {

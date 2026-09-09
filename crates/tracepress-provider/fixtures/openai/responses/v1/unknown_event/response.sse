@@ -1,0 +1,3 @@
+event: response.future_event
+data: {"response":{"id":"resp_fixture_unknown_event","model":"gpt-5.6-sol"}}
+

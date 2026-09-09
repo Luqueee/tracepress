@@ -168,6 +168,24 @@ fn unknown_request_metadata_is_null_and_never_zero_filled() -> TestResult {
 }
 
 #[test]
+fn responses_request_metadata_uses_responses_route() -> TestResult {
+    // Given
+    let request_id = RequestId::from_str("01890f3e-7b19-7000-8000-000000000013")?;
+    let metadata = RequestMetadata::responses(request_id, 41);
+
+    // When
+    let value = serde_json::to_value(metadata)?;
+
+    // Then
+    assert_eq!(metadata.request_id(), request_id);
+    assert_eq!(metadata.route(), RequestRoute::Responses);
+    assert_eq!(metadata.method(), RequestMethod::Post);
+    assert_eq!(metadata.request_bytes(), 41);
+    assert_eq!(value.get("route"), Some(&serde_json::json!("responses")));
+    Ok(())
+}
+
+#[test]
 fn absent_and_explicit_null_request_metadata_both_remain_unknown() -> TestResult {
     // Given
     let absent = serde_json::json!({

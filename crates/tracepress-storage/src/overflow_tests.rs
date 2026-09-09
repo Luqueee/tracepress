@@ -50,6 +50,23 @@ async fn integer_overflow_returns_typed_failure_without_partial_commit() -> Test
         .submit(WriteCommand::ProviderRequest {
             operation_id,
             metadata: RequestMetadata::chat_completions(RequestId::generate(&generator), u64::MAX),
+            provider: None,
+            protocol: None,
+            parser_version: None,
+            observation_status: None,
+            model: None,
+            stream: None,
+            background: None,
+            store: None,
+            reasoning_effort: None,
+            text_verbosity: None,
+            truncation: None,
+            previous_response_id_present: None,
+            input_item_count: None,
+            tool_count: None,
+            text_input_block_count: None,
+            image_input_block_count: None,
+            file_input_block_count: None,
         })
         .await;
 
@@ -93,6 +110,23 @@ async fn integer_overflow_rolls_back_earlier_valid_command_in_batch() -> TestRes
     .and(WriteCommand::ProviderRequest {
         operation_id: OperationId::generate(&generator),
         metadata: RequestMetadata::chat_completions(RequestId::generate(&generator), u64::MAX),
+        provider: None,
+        protocol: None,
+        parser_version: None,
+        observation_status: None,
+        model: None,
+        stream: None,
+        background: None,
+        store: None,
+        reasoning_effort: None,
+        text_verbosity: None,
+        truncation: None,
+        previous_response_id_present: None,
+        input_item_count: None,
+        tool_count: None,
+        text_input_block_count: None,
+        image_input_block_count: None,
+        file_input_block_count: None,
     });
 
     // When: the single writer executes the ordered transaction.

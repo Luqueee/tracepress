@@ -1,0 +1,1 @@
+{"model":"gpt-5.6-sol","input":[{"role":"user","content":[{"type":"input_text","text":"redacted"}]}],"tools":[{"type":"function","name":"lookup_weather","description":"redacted","parameters":{"type":"object","properties":{"city":{"type":"string"}}}}],"stream":false}

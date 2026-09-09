@@ -1,0 +1,6 @@
+event: response.created
+data: {"response":{"id":"resp_fixture_bad","model":"gpt-5.6-sol"}}
+
+event: response.completed
+data: {"response":{"status":"completed"
+

@@ -12,7 +12,9 @@ use tokio_util::sync::CancellationToken;
 use tracepress_core::{
     MaxIpcFrameBytes, MaxIpcQueueItems, MaxRequestBodyBytes, MaxResponseBodyBytes, SessionState,
 };
-use tracepress_daemon::{ControlRequest, ControlResponse, DaemonService};
+use tracepress_daemon::{
+    ControlRequest, ControlResponse, DaemonService, RecordProviderObservation,
+};
 use tracepress_ipc::{
     Credential, IpcLimits, IpcResponse, IpcTransport, ResponseOutcome, SocketOwner, UnixBinding,
     UnixEndpoint, UnixTransport, UnixTransportConfig,
@@ -112,6 +114,35 @@ async fn handle_request(
                         state: "running".to_owned(),
                         session: None,
                         operation_id: Some(operation_id),
+                    },
+                    false,
+                ),
+                Err(error) => (
+                    ControlResponse::Error {
+                        message: error.to_string(),
+                    },
+                    false,
+                ),
+            }
+        }
+        ControlRequest::RecordProviderObservation {
+            session_id,
+            parent_operation_id,
+            observation,
+        } => {
+            match daemon
+                .record_provider_observation(RecordProviderObservation::new(
+                    session_id,
+                    parent_operation_id,
+                    *observation,
+                ))
+                .await
+            {
+                Ok(recorded) => (
+                    ControlResponse::Ok {
+                        state: "running".to_owned(),
+                        session: None,
+                        operation_id: Some(recorded.operation_id),
                     },
                     false,
                 ),

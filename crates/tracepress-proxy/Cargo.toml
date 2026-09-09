@@ -11,6 +11,7 @@ axum = { version = "0.8", default-features = false, features = ["http1", "tokio"
 futures-util = { version = "0.3", default-features = false, features = ["std"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 thiserror = "2"
+tokio = { version = "1", features = ["rt", "sync"] }
 tracepress-core = { path = "../tracepress-core" }
 tracepress-provider = { path = "../tracepress-provider" }
 

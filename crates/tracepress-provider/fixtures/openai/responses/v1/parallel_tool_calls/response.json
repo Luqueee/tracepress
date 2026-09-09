@@ -1,0 +1,1 @@
+{"id":"resp_fixture_parallel","model":"gpt-5.6-sol","status":"completed","output":[{"type":"function_call","call_id":"call_1","name":"lookup_weather","arguments":"{}"},{"type":"function_call","call_id":"call_2","name":"lookup_time","arguments":"{}"}],"usage":{"input_tokens":14,"output_tokens":11,"total_tokens":25}}

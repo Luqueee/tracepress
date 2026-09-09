@@ -5,15 +5,26 @@
 
 //! Daemon-owned session and causal-operation lifecycle service.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashMap;
 
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tracepress_core::{
-    CausalEdge, CausalEdgeError, CausalRelationship, OperationId, OperationKind, OperationStatus,
-    SessionId, SessionState, UuidV7Generator,
+    AttemptId, CausalEdge, CausalEdgeError, CausalRelationship, EventId, HttpStatusCode,
+    InferenceStatus, OperationId, OperationKind, OperationStatus, RequestId, RequestMetadata,
+    SessionId, SessionState, UsageStatus, UuidV7Generator,
 };
-use tracepress_storage::{StorageError, StorageWriter, WriteBatch, WriteCommand, WriteReceipt};
+use tracepress_provider::{
+    AnomalyFlags, ObservationStatus as ProviderObservationStatus,
+    ProviderKind as CanonicalProviderKind, ProviderProtocol as CanonicalProviderProtocol,
+    ProviderResponseState, RequestObservation, ResponseObservation,
+    UsageStatus as ProviderUsageStatus,
+};
+use tracepress_storage::{
+    ObservationStatus, ProviderKind, ProviderProtocol,
+    ProviderResponseState as StorageResponseState, StorageError, StorageWriter, WriteBatch,
+    WriteCommand, WriteReceipt,
+};
 
 /// Failure returned by the daemon lifecycle boundary.
 #[allow(
@@ -34,6 +45,13 @@ pub enum DaemonError {
     UnknownOperation {
         session_id: SessionId,
         operation_id: OperationId,
+    },
+    /// The requested operation is not a model-inference operation.
+    #[error("operation {operation_id} in session {session_id} is not an LLM inference")]
+    OperationNotInference {
+        session_id: SessionId,
+        operation_id: OperationId,
+        kind: OperationKind,
     },
     /// A non-active session cannot accept another operation.
     #[error("session {session_id} in state {state:?} cannot accept operations")]
@@ -59,12 +77,190 @@ pub struct SessionSnapshot {
     /// Operations currently registered in this session.
     pub operations: usize,
 }
-
 #[derive(Debug)]
 struct SessionRecord {
     state: SessionState,
     ingress_key: String,
-    operations: HashSet<OperationId>,
+    operations: HashMap<OperationId, OperationKind>,
+    provider_requests: HashMap<OperationId, RequestId>,
+    next_attempt_ordinals: HashMap<OperationId, u64>,
+}
+
+/// Transport evidence used when a provider response is unavailable.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ProviderObservationOutcome {
+    /// The attempt is still in progress or has no terminal transport evidence.
+    InProgress,
+    /// The provider completed successfully.
+    Completed,
+    /// The provider ended without complete output.
+    Incomplete,
+    /// The client cancelled the attempt.
+    Cancelled,
+    /// The upstream disconnected before a terminal response.
+    Disconnected,
+    /// The transport or provider reported an error.
+    Failed,
+}
+
+/// Canonical provider observations plus bounded transport evidence.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[non_exhaustive]
+pub struct ProviderObservation {
+    /// Exact accepted request body length.
+    pub request_bytes: u64,
+    /// Semantic request observation produced by `tracepress-provider`.
+    pub request: RequestObservation,
+    /// Semantic response observation, when response bytes were observed.
+    pub response: Option<ResponseObservation>,
+    /// Daemon timestamp at which the attempt started.
+    pub started_at: String,
+    /// Daemon timestamp at which the attempt ended, if terminal.
+    pub ended_at: Option<String>,
+    /// Upstream HTTP status, when response headers were observed.
+    pub status_code: Option<HttpStatusCode>,
+    /// Transport error text, when forwarding failed.
+    pub transport_error: Option<String>,
+    /// Explicit transport lifecycle evidence for response-less attempts.
+    pub outcome: ProviderObservationOutcome,
+    /// Whether the response was streamed.
+    pub streaming: Option<bool>,
+}
+
+impl ProviderObservation {
+    /// Creates a provider observation for one logical request attempt.
+    #[must_use]
+    pub fn new(
+        request_bytes: u64,
+        request: RequestObservation,
+        started_at: impl Into<String>,
+    ) -> Self {
+        Self {
+            request_bytes,
+            request,
+            response: None,
+            started_at: started_at.into(),
+            ended_at: None,
+            status_code: None,
+            transport_error: None,
+            outcome: ProviderObservationOutcome::InProgress,
+            streaming: None,
+        }
+    }
+
+    /// Adds semantic response evidence.
+    #[must_use]
+    pub fn with_response(mut self, response: ResponseObservation) -> Self {
+        self.response = Some(response);
+        self
+    }
+    /// Adds terminal timestamp evidence.
+    #[must_use]
+    pub fn with_ended_at(mut self, ended_at: impl Into<String>) -> Self {
+        self.ended_at = Some(ended_at.into());
+        self
+    }
+
+    /// Adds an observed upstream HTTP status.
+    #[must_use]
+    pub const fn with_status_code(mut self, status_code: HttpStatusCode) -> Self {
+        self.status_code = Some(status_code);
+        self
+    }
+
+    /// Adds a transport error and marks the attempt failed.
+    #[must_use]
+    pub fn with_transport_error(mut self, transport_error: impl Into<String>) -> Self {
+        self.transport_error = Some(transport_error.into());
+        self.outcome = ProviderObservationOutcome::Failed;
+        self
+    }
+
+    /// Adds explicit response-less lifecycle evidence.
+    #[must_use]
+    pub const fn with_outcome(mut self, outcome: ProviderObservationOutcome) -> Self {
+        self.outcome = outcome;
+        self
+    }
+
+    /// Sets whether the response was streamed.
+    #[must_use]
+    pub const fn with_streaming(mut self, streaming: bool) -> Self {
+        self.streaming = Some(streaming);
+        self
+    }
+}
+
+/// All evidence and identities required to persist one provider observation.
+#[derive(Clone, Debug)]
+pub struct PersistProviderObservation {
+    session_id: SessionId,
+    operation_id: OperationId,
+    observation: ProviderObservation,
+}
+
+impl PersistProviderObservation {
+    /// Combines the inference identity and its observed provider evidence.
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        operation_id: OperationId,
+        observation: ProviderObservation,
+    ) -> Self {
+        Self {
+            session_id,
+            operation_id,
+            observation,
+        }
+    }
+}
+
+/// All identities and evidence required to record one provider observation.
+#[derive(Clone, Debug)]
+pub struct RecordProviderObservation {
+    session_id: SessionId,
+    parent_operation_id: OperationId,
+    observation: ProviderObservation,
+}
+
+impl RecordProviderObservation {
+    /// Combines the caller's root operation and its observed provider evidence.
+    #[must_use]
+    pub const fn new(
+        session_id: SessionId,
+        parent_operation_id: OperationId,
+        observation: ProviderObservation,
+    ) -> Self {
+        Self {
+            session_id,
+            parent_operation_id,
+            observation,
+        }
+    }
+}
+
+/// Identities assigned to a persisted provider observation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct ProviderObservationReceipt {
+    /// Logical request identity shared by all retries.
+    pub request_id: RequestId,
+    /// Identity of this attempt.
+    pub attempt_id: AttemptId,
+    /// Zero-based ordinal of this attempt for the logical request.
+    pub ordinal: u64,
+}
+
+/// Identities assigned to one observation recorded beneath a root operation.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct RecordedProviderObservation {
+    /// Inference operation created beneath the caller's root operation.
+    pub operation_id: OperationId,
+    /// Durable provider request and attempt identities.
+    pub receipt: ProviderObservationReceipt,
 }
 
 /// Sole daemon owner of lifecycle memory and durable writes.
@@ -129,7 +325,9 @@ impl DaemonService {
         let record = SessionRecord {
             state: SessionState::Active,
             ingress_key: ingress_key.clone(),
-            operations: HashSet::new(),
+            operations: HashMap::new(),
+            provider_requests: HashMap::new(),
+            next_attempt_ordinals: HashMap::new(),
         };
         let previous = self.sessions.lock().await.insert(session_id, record);
         debug_assert!(previous.is_none());
@@ -168,7 +366,7 @@ impl DaemonService {
             });
         }
         if let Some((parent_id, _relationship)) = parent {
-            if !record.operations.contains(&parent_id) {
+            if !record.operations.contains_key(&parent_id) {
                 return Err(DaemonError::UnknownOperation {
                     session_id,
                     operation_id: parent_id,
@@ -196,9 +394,158 @@ impl DaemonService {
         };
         let _receipt = self.writer.submit_batch(batch).await?;
         tracing::info!(%session_id, %operation_id, ?kind, "operation started");
-        let inserted = record.operations.insert(operation_id);
-        debug_assert!(inserted);
+        let inserted = record.operations.insert(operation_id, kind);
+        debug_assert!(inserted.is_none());
         Ok(operation_id)
+    }
+
+    /// Records one provider observation beneath an existing root operation.
+    ///
+    /// The inference operation and its causal edge commit in one atomic batch before any
+    /// provider row is written, so a recorded observation never leaves an operation without a
+    /// parent. Each forwarded provider request produces exactly one inference operation, one
+    /// logical request, and one attempt.
+    ///
+    /// # Errors
+    /// Returns [`DaemonError::UnknownSession`] or [`DaemonError::SessionNotActive`] for a session
+    /// this daemon cannot accept work for, [`DaemonError::UnknownOperation`] when the root
+    /// operation is not registered in that session, or a storage error when a batch cannot
+    /// commit.
+    pub async fn record_provider_observation(
+        &self,
+        input: RecordProviderObservation,
+    ) -> Result<RecordedProviderObservation, DaemonError> {
+        let RecordProviderObservation {
+            session_id,
+            parent_operation_id,
+            observation,
+        } = input;
+        let operation_id = self
+            .create_operation(
+                session_id,
+                OperationKind::LlmInference,
+                &observation.started_at,
+                Some((parent_operation_id, CausalRelationship::Spawned)),
+            )
+            .await?;
+        let receipt = self
+            .persist_provider_observation(PersistProviderObservation::new(
+                session_id,
+                operation_id,
+                observation,
+            ))
+            .await?;
+        Ok(RecordedProviderObservation {
+            operation_id,
+            receipt,
+        })
+    }
+
+    /// Persists one provider observation against an existing LLM inference.
+    ///
+    /// The first observation for an inference creates the logical request. Later observations
+    /// reuse that request identity and create only another attempt. All rows belonging to this
+    /// observation are submitted through the sole writer in one transaction.
+    ///
+    /// # Errors
+    /// Returns a lifecycle, association, or storage error. No rows are retained when the batch
+    /// fails.
+    ///
+    /// # Panics
+    /// Panics if the storage writer violates its atomic-batch receipt contract.
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "the session record must remain locked until the durable batch commits so request identities and attempt ordinals stay unique"
+    )]
+    pub async fn persist_provider_observation(
+        &self,
+        input: PersistProviderObservation,
+    ) -> Result<ProviderObservationReceipt, DaemonError> {
+        let PersistProviderObservation {
+            session_id,
+            operation_id,
+            observation,
+        } = input;
+        let mut sessions = self.sessions.lock().await;
+        let record = sessions
+            .get_mut(&session_id)
+            .ok_or(DaemonError::UnknownSession { session_id })?;
+        if record.state != SessionState::Active {
+            return Err(DaemonError::SessionNotActive {
+                session_id,
+                state: record.state,
+            });
+        }
+        let kind = *record
+            .operations
+            .get(&operation_id)
+            .ok_or(DaemonError::UnknownOperation {
+                session_id,
+                operation_id,
+            })?;
+        if kind != OperationKind::LlmInference {
+            return Err(DaemonError::OperationNotInference {
+                session_id,
+                operation_id,
+                kind,
+            });
+        }
+
+        let request_id = if let Some(request_id) = record.provider_requests.get(&operation_id) {
+            *request_id
+        } else {
+            let ids = self.ids.lock().await;
+            let request_id = RequestId::generate(&ids);
+            drop(ids);
+            request_id
+        };
+        let ordinal = *record
+            .next_attempt_ordinals
+            .get(&operation_id)
+            .unwrap_or(&0);
+        let next =
+            ordinal
+                .checked_add(1)
+                .ok_or(DaemonError::Storage(StorageError::IntegerOverflow {
+                    field: "attempt_ordinal",
+                    value: ordinal,
+                }))?;
+        let generator = self.ids.lock().await;
+        let attempt_id = AttemptId::generate(&generator);
+        let batch = provider_observation_batch(
+            ProviderWriteIds {
+                session_id,
+                operation_id,
+                request_id,
+                attempt_id,
+                ordinal,
+                is_retry: record.provider_requests.contains_key(&operation_id),
+            },
+            &observation,
+            &generator,
+        );
+        drop(generator);
+        let receipt = self.writer.submit_batch(batch).await?;
+        assert!(
+            matches!(receipt, WriteReceipt::BatchCommitted { rows_changed } if rows_changed > 0),
+            "provider observation must commit a non-empty atomic batch: {receipt:?}"
+        );
+        let previous_request_id = record.provider_requests.insert(operation_id, request_id);
+        assert!(
+            previous_request_id.is_none() || previous_request_id == Some(request_id),
+            "provider request identity changed for operation {operation_id}"
+        );
+        let previous_ordinal = record.next_attempt_ordinals.insert(operation_id, next);
+        assert_eq!(
+            previous_ordinal,
+            (ordinal != 0).then_some(ordinal),
+            "provider attempt ordinal state changed unexpectedly for operation {operation_id}"
+        );
+        Ok(ProviderObservationReceipt {
+            request_id,
+            attempt_id,
+            ordinal,
+        })
     }
 
     /// Transitions an active session to a terminal state after durable commit.
@@ -260,6 +607,493 @@ impl DaemonService {
         self.writer.shutdown().await.map_err(Into::into)
     }
 }
+const fn storage_provider(value: CanonicalProviderKind) -> Option<ProviderKind> {
+    match value {
+        CanonicalProviderKind::OpenAi => Some(ProviderKind::OpenAi),
+        _ => None,
+    }
+}
+
+const fn storage_protocol(value: CanonicalProviderProtocol) -> Option<ProviderProtocol> {
+    match value {
+        CanonicalProviderProtocol::OpenAiResponsesV1 => Some(ProviderProtocol::OpenAiResponsesV1),
+        _ => None,
+    }
+}
+
+const fn storage_observation_status(value: ProviderObservationStatus) -> Option<ObservationStatus> {
+    match value {
+        ProviderObservationStatus::Complete => Some(ObservationStatus::Complete),
+        ProviderObservationStatus::Partial => Some(ObservationStatus::Partial),
+        ProviderObservationStatus::Unsupported => Some(ObservationStatus::Unsupported),
+        ProviderObservationStatus::Malformed => Some(ObservationStatus::Malformed),
+        ProviderObservationStatus::ResourceLimit => Some(ObservationStatus::ResourceLimit),
+        ProviderObservationStatus::ObserverBackpressure => {
+            Some(ObservationStatus::ObserverBackpressure)
+        }
+        ProviderObservationStatus::Cancelled => Some(ObservationStatus::Cancelled),
+        _ => None,
+    }
+}
+
+const fn storage_response_state(value: ProviderResponseState) -> Option<StorageResponseState> {
+    match value {
+        ProviderResponseState::Queued => Some(StorageResponseState::Queued),
+        ProviderResponseState::InProgress => Some(StorageResponseState::InProgress),
+        ProviderResponseState::Completed => Some(StorageResponseState::Completed),
+        ProviderResponseState::Incomplete => Some(StorageResponseState::Incomplete),
+        ProviderResponseState::Failed => Some(StorageResponseState::Failed),
+        ProviderResponseState::Cancelled => Some(StorageResponseState::Cancelled),
+        ProviderResponseState::Disconnected => Some(StorageResponseState::Disconnected),
+        ProviderResponseState::Unknown => Some(StorageResponseState::Unknown),
+        _ => None,
+    }
+}
+
+const fn storage_usage_status(value: ProviderUsageStatus) -> Option<UsageStatus> {
+    match value {
+        ProviderUsageStatus::Final => Some(UsageStatus::Final),
+        ProviderUsageStatus::Partial => Some(UsageStatus::Partial),
+        ProviderUsageStatus::Unavailable => Some(UsageStatus::Unavailable),
+        _ => None,
+    }
+}
+
+/// Canonical event names committed beside the relational rows of one observation.
+const EVENT_REQUEST_OBSERVED: &str = "provider.request.observed";
+const EVENT_RESPONSE_STARTED: &str = "provider.response.started";
+const EVENT_RESPONSE_COMPLETED: &str = "provider.response.completed";
+const EVENT_RESPONSE_INCOMPLETE: &str = "provider.response.incomplete";
+const EVENT_RESPONSE_FAILED: &str = "provider.response.failed";
+const EVENT_USAGE_OBSERVED: &str = "provider.usage.observed";
+const EVENT_USAGE_NORMALIZED: &str = "provider.usage.normalized";
+const EVENT_OBSERVATION_PARTIAL: &str = "provider.observation.partial";
+
+/// Payload schema version shared by every canonical provider observation event.
+const PROVIDER_EVENT_SCHEMA_VERSION: &str = "1";
+
+/// Whether an observed upstream status reports a failed exchange.
+fn errored_upstream_status(status_code: Option<HttpStatusCode>) -> bool {
+    status_code.is_some_and(|code| !(200..300).contains(&code.get()))
+}
+
+/// Derives the attempt lifecycle from every piece of evidence the observation carries.
+///
+/// Transport failure, a non-2xx upstream status, and a provider error code are terminal error
+/// evidence whatever the semantic state says, so a failed attempt is never indistinguishable
+/// from one still in flight. Cancellation, disconnection, and incompleteness stay distinct, and
+/// `Completed` is reported only when the provider itself reported a completed response with no
+/// error evidence beside it.
+fn inference_status(observation: &ProviderObservation) -> InferenceStatus {
+    if observation.transport_error.is_some() {
+        return InferenceStatus::Errored;
+    }
+    let errored = errored_upstream_status(observation.status_code)
+        || observation.outcome == ProviderObservationOutcome::Failed;
+    let Some(response) = observation.response.as_ref() else {
+        if errored {
+            return InferenceStatus::Errored;
+        }
+        return match observation.outcome {
+            ProviderObservationOutcome::Cancelled => InferenceStatus::Cancelled,
+            ProviderObservationOutcome::Disconnected => InferenceStatus::Disconnected,
+            ProviderObservationOutcome::Failed => InferenceStatus::Errored,
+            ProviderObservationOutcome::Incomplete | ProviderObservationOutcome::Completed => {
+                InferenceStatus::Incomplete
+            }
+            // Only a forward with no terminal evidence at all is still running.
+            ProviderObservationOutcome::InProgress => {
+                if observation.ended_at.is_some() {
+                    InferenceStatus::Incomplete
+                } else {
+                    InferenceStatus::Started
+                }
+            }
+        };
+    };
+    if response.status == ProviderObservationStatus::Cancelled
+        || response.response_state == ProviderResponseState::Cancelled
+        || observation.outcome == ProviderObservationOutcome::Cancelled
+    {
+        return InferenceStatus::Cancelled;
+    }
+    if errored
+        || response.error_code.is_some()
+        || response.response_state == ProviderResponseState::Failed
+    {
+        return InferenceStatus::Errored;
+    }
+    match response.response_state {
+        ProviderResponseState::Completed => InferenceStatus::Completed,
+        ProviderResponseState::Disconnected => InferenceStatus::Disconnected,
+        // The observation reached its terminal decision, so a response the provider never
+        // reported terminal ended without complete output instead of still running.
+        _ => match observation.outcome {
+            ProviderObservationOutcome::Disconnected => InferenceStatus::Disconnected,
+            _ => InferenceStatus::Incomplete,
+        },
+    }
+}
+
+/// Terminal operation state implied by an attempt lifecycle, if the attempt finished.
+const fn terminal_operation_status(status: InferenceStatus) -> Option<OperationStatus> {
+    match status {
+        InferenceStatus::Completed => Some(OperationStatus::Completed),
+        InferenceStatus::Incomplete => Some(OperationStatus::Incomplete),
+        InferenceStatus::Cancelled => Some(OperationStatus::Cancelled),
+        InferenceStatus::Errored => Some(OperationStatus::Errored),
+        InferenceStatus::Disconnected => Some(OperationStatus::Disconnected),
+        InferenceStatus::Started | InferenceStatus::Streaming => None,
+    }
+}
+
+/// Whether the observed response was streamed, from the request hint or observed chunks.
+fn streaming_flag(observation: &ProviderObservation) -> Option<bool> {
+    observation.streaming.or_else(|| {
+        observation
+            .response
+            .as_ref()
+            .and_then(|response| response.chunk_count.map(|_chunks| true))
+    })
+}
+
+fn anomaly_metadata(flags: AnomalyFlags) -> Option<String> {
+    if !flags.any() {
+        return None;
+    }
+    serde_json::to_string(&serde_json::json!({
+        "invalid_number": flags.invalid_number,
+        "overflow": flags.overflow,
+        "cached_exceeds_input": flags.cached_exceeds_input,
+        "reasoning_exceeds_output": flags.reasoning_exceeds_output,
+        "inconsistent_total": flags.inconsistent_total,
+    }))
+    .ok()
+}
+
+#[derive(Clone, Copy)]
+struct ProviderWriteIds {
+    session_id: SessionId,
+    operation_id: OperationId,
+    request_id: RequestId,
+    attempt_id: AttemptId,
+    ordinal: u64,
+    is_retry: bool,
+}
+
+/// One observation with the identities and lifecycle the batch derived for it.
+#[derive(Clone, Copy)]
+struct ObservedAttempt<'evidence> {
+    ids: ProviderWriteIds,
+    observation: &'evidence ProviderObservation,
+    status: InferenceStatus,
+}
+
+/// Builds the one atomic transaction that records everything one observation established.
+///
+/// The relational rows stay the query model; the canonical events supplement them, and the
+/// terminal operation state closes the inference so the DAG never shows a finished forward as
+/// permanently in flight. All of it commits together or not at all.
+fn provider_observation_batch(
+    ids: ProviderWriteIds,
+    observation: &ProviderObservation,
+    generator: &UuidV7Generator,
+) -> WriteBatch {
+    let evidence = ObservedAttempt {
+        ids,
+        observation,
+        status: inference_status(observation),
+    };
+    let attempt = provider_attempt_command(evidence);
+    let mut batch = if ids.is_retry {
+        WriteBatch::new(attempt)
+    } else {
+        WriteBatch::new(provider_request_command(
+            ids.operation_id,
+            ids.request_id,
+            observation,
+        ))
+        .and(attempt)
+    };
+    if let Some(response) = observation.response.as_ref() {
+        batch = batch.and(provider_usage_command(ids.attempt_id, response));
+    }
+    for event in provider_events(evidence, generator) {
+        batch = batch.and(event);
+    }
+    if let Some(operation_status) = terminal_operation_status(evidence.status) {
+        batch = batch.and(WriteCommand::OperationState {
+            operation_id: ids.operation_id,
+            ended_at: observation.ended_at.clone(),
+            status: operation_status,
+        });
+    }
+    batch
+}
+
+fn provider_request_command(
+    operation_id: OperationId,
+    request_id: RequestId,
+    observation: &ProviderObservation,
+) -> WriteCommand {
+    let request = &observation.request;
+    WriteCommand::ProviderRequest {
+        operation_id,
+        metadata: RequestMetadata::responses(request_id, observation.request_bytes),
+        provider: storage_provider(request.provider),
+        protocol: storage_protocol(request.protocol),
+        parser_version: Some(request.parser_version),
+        observation_status: storage_observation_status(request.status),
+        model: request.model.clone(),
+        stream: request.stream,
+        background: request.background,
+        store: request.store,
+        reasoning_effort: request.reasoning_effort.clone(),
+        text_verbosity: request.verbosity.clone(),
+        truncation: request.truncation.clone(),
+        previous_response_id_present: Some(request.has_previous_response_id),
+        input_item_count: request.input_item_count,
+        tool_count: request.tool_count,
+        text_input_block_count: request.text_input_blocks,
+        image_input_block_count: request.image_input_blocks,
+        file_input_block_count: request.file_input_blocks,
+    }
+}
+
+fn provider_attempt_command(evidence: ObservedAttempt<'_>) -> WriteCommand {
+    let ObservedAttempt {
+        ids,
+        observation,
+        status,
+    } = evidence;
+    let response = observation.response.as_ref();
+    WriteCommand::ProviderAttempt {
+        attempt_id: ids.attempt_id,
+        request_id: ids.request_id,
+        ordinal: ids.ordinal,
+        status_code: observation.status_code,
+        started_at: observation.started_at.clone(),
+        ended_at: observation.ended_at.clone(),
+        status,
+        provider_response_id: response.and_then(|value| value.provider_response_id.clone()),
+        response_model: response.and_then(|value| value.model.clone()),
+        response_state: response.and_then(|value| storage_response_state(value.response_state)),
+        provider_created_at: response
+            .and_then(|value| value.created_at.map(|timestamp| timestamp.to_string())),
+        incomplete_reason: response.and_then(|value| value.incomplete_reason.clone()),
+        error_code: response.and_then(|value| value.error_code.clone()),
+        transport_error: observation.transport_error.clone(),
+        observation_status: response
+            .and_then(|value| storage_observation_status(value.status))
+            .or_else(|| storage_observation_status(observation.request.status)),
+        streaming: streaming_flag(observation),
+        chunk_count: response.and_then(|value| value.chunk_count),
+        byte_count: response.and_then(|value| value.byte_count),
+        // Only measurements the observer actually took are persisted; unknown stays NULL.
+        ttfb_us: response.and_then(|value| value.ttfb_us),
+        ttft_us: response.and_then(|value| value.ttft_us),
+        duration_us: response.and_then(|value| value.duration_us),
+        anomaly_metadata: response.and_then(|value| {
+            value
+                .normalized_usage
+                .as_ref()
+                .and_then(|usage| anomaly_metadata(usage.anomalies))
+        }),
+    }
+}
+
+fn provider_usage_command(attempt_id: AttemptId, response: &ResponseObservation) -> WriteCommand {
+    let normalized = response.normalized_usage.as_ref();
+    WriteCommand::ProviderUsage {
+        attempt_id,
+        input_total: normalized.and_then(|usage| usage.input_total),
+        input_uncached: normalized.and_then(|usage| usage.input_uncached),
+        cache_read: normalized.and_then(|usage| usage.input_cached),
+        cache_write: normalized.and_then(|usage| usage.cache_write),
+        output_total: normalized.and_then(|usage| usage.output_total),
+        reasoning: normalized.and_then(|usage| usage.output_reasoning),
+        usage_status: storage_usage_status(response.usage_status),
+        raw_usage_json: response.raw_usage.as_ref().map(|raw| raw.as_bytes().into()),
+        input_cached: normalized.and_then(|usage| usage.input_cached),
+        output_reasoning: normalized.and_then(|usage| usage.output_reasoning),
+        total: normalized.and_then(|usage| usage.total),
+        normalizer_version: normalized.map(|usage| usage.normalizer_version),
+        anomaly_metadata: normalized.and_then(|usage| anomaly_metadata(usage.anomalies)),
+    }
+}
+
+/// Accumulates the canonical events of one observation with their shared identities.
+struct ProviderEvents<'evidence> {
+    ids: ProviderWriteIds,
+    timestamp: &'evidence str,
+    generator: &'evidence UuidV7Generator,
+    commands: Vec<WriteCommand>,
+}
+
+impl ProviderEvents<'_> {
+    /// Appends one canonical event whose payload carries only allowlisted metadata.
+    fn push(&mut self, event_type: &str, fields: serde_json::Value) {
+        let mut payload = serde_json::Map::from_iter([
+            (
+                "operation_id".to_owned(),
+                serde_json::Value::String(self.ids.operation_id.to_string()),
+            ),
+            (
+                "request_id".to_owned(),
+                serde_json::Value::String(self.ids.request_id.to_string()),
+            ),
+            (
+                "attempt_id".to_owned(),
+                serde_json::Value::String(self.ids.attempt_id.to_string()),
+            ),
+            (
+                "attempt_ordinal".to_owned(),
+                serde_json::Value::from(self.ids.ordinal),
+            ),
+        ]);
+        if let serde_json::Value::Object(fields) = fields {
+            payload.extend(fields);
+        }
+        let Ok(bytes) = serde_json::to_vec(&serde_json::Value::Object(payload)) else {
+            return;
+        };
+        self.commands.push(WriteCommand::Event {
+            event_id: EventId::generate(self.generator),
+            session_id: Some(self.ids.session_id),
+            operation_id: Some(self.ids.operation_id),
+            timestamp: self.timestamp.to_owned(),
+            event_type: event_type.to_owned(),
+            payload: bytes.into(),
+            schema_version: PROVIDER_EVENT_SCHEMA_VERSION.to_owned(),
+        });
+    }
+}
+
+/// Emits exactly the canonical events the observed evidence supports.
+///
+/// Payloads carry identifiers, versions, states, counts, and timings only: no headers, no
+/// content, no raw usage bytes, and no sensitive provider metadata.
+fn provider_events(
+    evidence: ObservedAttempt<'_>,
+    generator: &UuidV7Generator,
+) -> Vec<WriteCommand> {
+    let ObservedAttempt {
+        ids,
+        observation,
+        status,
+    } = evidence;
+    let response = observation.response.as_ref();
+    let mut events = ProviderEvents {
+        ids,
+        timestamp: observation
+            .ended_at
+            .as_deref()
+            .unwrap_or(observation.started_at.as_str()),
+        generator,
+        commands: Vec::new(),
+    };
+    let request = &observation.request;
+    events.push(
+        EVENT_REQUEST_OBSERVED,
+        serde_json::json!({
+            "provider": request.provider,
+            "protocol": request.protocol,
+            "parser_version": request.parser_version,
+            "observation_status": request.status,
+            "model": request.model,
+            "stream": request.stream,
+            "request_bytes": observation.request_bytes,
+            "input_item_count": request.input_item_count,
+            "tool_count": request.tool_count,
+        }),
+    );
+    // The upstream response began only if its status or its bytes were observed.
+    if observation.status_code.is_some() || response.is_some() {
+        events.push(
+            EVENT_RESPONSE_STARTED,
+            serde_json::json!({
+                "status_code": observation.status_code.map(HttpStatusCode::get),
+                "streaming": streaming_flag(observation),
+                "provider_response_id": response.and_then(|value| value.provider_response_id.as_deref()),
+                "response_state": response.map(|value| value.response_state),
+                "ttfb_us": response.and_then(|value| value.ttfb_us),
+            }),
+        );
+    }
+    if let Some(terminal) = terminal_event(status) {
+        events.push(
+            terminal,
+            serde_json::json!({
+                "status": status,
+                "response_state": response.map(|value| value.response_state),
+                "incomplete_reason": response.and_then(|value| value.incomplete_reason.as_deref()),
+                "error_code": response.and_then(|value| value.error_code.as_deref()),
+                "transport_error": observation.transport_error.as_deref(),
+                "chunk_count": response.and_then(|value| value.chunk_count),
+                "byte_count": response.and_then(|value| value.byte_count),
+                "ttfb_us": response.and_then(|value| value.ttfb_us),
+                "ttft_us": response.and_then(|value| value.ttft_us),
+                "duration_us": response.and_then(|value| value.duration_us),
+            }),
+        );
+    }
+    if let Some(response) = response {
+        if let Some(raw) = response.raw_usage.as_ref() {
+            events.push(
+                EVENT_USAGE_OBSERVED,
+                serde_json::json!({
+                    "usage_status": response.usage_status,
+                    // The usage bytes themselves stay in the relational row, never in an event.
+                    "raw_usage_bytes": raw.as_bytes().len(),
+                }),
+            );
+        }
+        if let Some(usage) = response.normalized_usage.as_ref() {
+            events.push(
+                EVENT_USAGE_NORMALIZED,
+                serde_json::json!({
+                    "normalizer_version": usage.normalizer_version,
+                    "usage_status": usage.status,
+                    "input_total": usage.input_total,
+                    "input_cached": usage.input_cached,
+                    "input_uncached": usage.input_uncached,
+                    "cache_write": usage.cache_write,
+                    "output_total": usage.output_total,
+                    "output_reasoning": usage.output_reasoning,
+                    "total": usage.total,
+                    "anomalies": usage.anomalies,
+                }),
+            );
+        }
+    }
+    let response_status = response.map(|value| value.status);
+    if request.status != ProviderObservationStatus::Complete
+        || response_status.is_some_and(|value| value != ProviderObservationStatus::Complete)
+    {
+        events.push(
+            EVENT_OBSERVATION_PARTIAL,
+            serde_json::json!({
+                "request_observation_status": request.status,
+                "response_observation_status": response_status,
+            }),
+        );
+    }
+    events.commands
+}
+
+/// The single terminal response event a finished attempt supports, if it finished.
+const fn terminal_event(status: InferenceStatus) -> Option<&'static str> {
+    match status {
+        InferenceStatus::Completed => Some(EVENT_RESPONSE_COMPLETED),
+        // The canonical vocabulary reports every non-completed terminal response as incomplete;
+        // the exact state stays in the relational row.
+        InferenceStatus::Incomplete
+        | InferenceStatus::Cancelled
+        | InferenceStatus::Disconnected => Some(EVENT_RESPONSE_INCOMPLETE),
+        InferenceStatus::Errored => Some(EVENT_RESPONSE_FAILED),
+        InferenceStatus::Started | InferenceStatus::Streaming => None,
+    }
+}
 
 fn snapshot(session_id: SessionId, record: &SessionRecord) -> SessionSnapshot {
     SessionSnapshot {
@@ -289,6 +1123,12 @@ pub enum ControlRequest {
         session_id: SessionId,
         parent_operation_id: OperationId,
         observed_at: String,
+    },
+    /// Records one semantic provider observation beneath the agent root.
+    RecordProviderObservation {
+        session_id: SessionId,
+        parent_operation_id: OperationId,
+        observation: Box<ProviderObservation>,
     },
     /// Finishes a previously started session.
     FinishSession {

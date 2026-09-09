@@ -1,0 +1,49 @@
+[package]
+name = "tracepress-provider-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tracepress-provider = { path = ".." }
+
+[[bin]]
+name = "sse_framing"
+path = "fuzz_targets/sse_framing.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "request_json"
+path = "fuzz_targets/request_json.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "response_usage"
+path = "fuzz_targets/response_usage.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "usage_normalization"
+path = "fuzz_targets/usage_normalization.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "stream_state_machine"
+path = "fuzz_targets/stream_state_machine.rs"
+test = false
+doc = false
+bench = false

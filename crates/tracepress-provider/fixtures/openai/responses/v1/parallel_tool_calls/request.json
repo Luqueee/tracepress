@@ -1,0 +1,1 @@
+{"model":"gpt-5.6-sol","input":[{"role":"user","content":[{"type":"input_text","text":"redacted"}]}],"tools":[{"type":"function","name":"lookup_weather"},{"type":"function","name":"lookup_time"}],"parallel_tool_calls":true,"stream":false}

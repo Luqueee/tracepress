@@ -1,0 +1,1 @@
+{"model":"gpt-5.6-sol","input":[{"role":"user","content":[{"type":"input_text","text":"redacted"}]}],"tools":[{"type":"function","name":"report_usage","description":"redacted","parameters":{"type":"object","properties":{"usage":{"type":"string","description":"redacted"}}}}],"stream":false}

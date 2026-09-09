@@ -2,14 +2,53 @@
     clippy::redundant_pub_crate,
     reason = "crate-private sibling modules consume these encoding functions"
 )]
-
 use rusqlite::ErrorCode;
 use tracepress_core::{
     CausalRelationship, ContentKind, ContentRole, InferenceStatus, OperationKind, OperationStatus,
     RequestMethod, RequestRoute, SessionState, UsageStatus,
 };
 
-use crate::{FidelityClass, StorageError};
+use crate::{
+    FidelityClass, ObservationStatus, ProviderKind, ProviderProtocol, ProviderResponseState,
+    StorageError,
+};
+
+pub(crate) const fn provider_kind_text(value: ProviderKind) -> &'static str {
+    match value {
+        ProviderKind::OpenAi => "openai",
+    }
+}
+
+pub(crate) const fn provider_protocol_text(value: ProviderProtocol) -> &'static str {
+    match value {
+        ProviderProtocol::OpenAiResponsesV1 => "openai-responses-v1",
+    }
+}
+
+pub(crate) const fn observation_status_text(value: ObservationStatus) -> &'static str {
+    match value {
+        ObservationStatus::Complete => "complete",
+        ObservationStatus::Partial => "partial",
+        ObservationStatus::Unsupported => "unsupported",
+        ObservationStatus::Malformed => "malformed",
+        ObservationStatus::ResourceLimit => "resource_limit",
+        ObservationStatus::ObserverBackpressure => "observer_backpressure",
+        ObservationStatus::Cancelled => "cancelled",
+    }
+}
+
+pub(crate) const fn response_state_text(value: ProviderResponseState) -> &'static str {
+    match value {
+        ProviderResponseState::Queued => "queued",
+        ProviderResponseState::InProgress => "in_progress",
+        ProviderResponseState::Completed => "completed",
+        ProviderResponseState::Incomplete => "incomplete",
+        ProviderResponseState::Failed => "failed",
+        ProviderResponseState::Cancelled => "cancelled",
+        ProviderResponseState::Disconnected => "disconnected",
+        ProviderResponseState::Unknown => "unknown",
+    }
+}
 
 pub(crate) fn sqlite_u64(value: u64, field: &'static str) -> Result<i64, StorageError> {
     i64::try_from(value).map_err(|_error| StorageError::IntegerOverflow { field, value })
@@ -76,6 +115,7 @@ pub(crate) const fn inference_status(value: InferenceStatus) -> &'static str {
 pub(crate) const fn request_route(value: RequestRoute) -> &'static str {
     match value {
         RequestRoute::ChatCompletions => "chat_completions",
+        RequestRoute::Responses => "responses",
     }
 }
 

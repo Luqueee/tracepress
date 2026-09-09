@@ -9,9 +9,10 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior, params};
 
 use crate::StorageError;
 
+const LATEST_SCHEMA_VERSION: u32 = 2;
+pub(crate) const MIGRATION_V1: &str = include_str!("../migrations/0001_initial.sql");
+pub(crate) const MIGRATION_V2: &str = include_str!("../migrations/0002_provider_observability.sql");
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
-const LATEST_SCHEMA_VERSION: u32 = 1;
-const MIGRATION_V1: &str = include_str!("../migrations/0001_initial.sql");
 
 /// `SQLite` durability policy used by the daemon-owned writer.
 #[allow(
@@ -84,7 +85,7 @@ pub(crate) fn open_database_with_busy_timeout(
 ) -> Result<(Connection, ConnectionSettings), StorageError> {
     let mut connection = open_configured(path, durability, busy_timeout)?;
     #[cfg(test)]
-    migrate(&mut connection, false)?;
+    migrate(&mut connection, false, false)?;
     #[cfg(not(test))]
     migrate(&mut connection)?;
     let settings = verify_settings(&connection, busy_timeout)?;
@@ -97,7 +98,18 @@ pub(crate) fn open_database_with_interrupted_migration(
     durability: Durability,
 ) -> Result<(Connection, ConnectionSettings), StorageError> {
     let mut connection = open_configured(path, durability, BUSY_TIMEOUT)?;
-    migrate(&mut connection, true)?;
+    migrate(&mut connection, true, false)?;
+    let settings = verify_settings(&connection, BUSY_TIMEOUT)?;
+    Ok((connection, settings))
+}
+
+#[cfg(test)]
+pub(crate) fn open_database_with_interrupted_v2_migration(
+    path: &Path,
+    durability: Durability,
+) -> Result<(Connection, ConnectionSettings), StorageError> {
+    let mut connection = open_configured(path, durability, BUSY_TIMEOUT)?;
+    migrate(&mut connection, false, true)?;
     let settings = verify_settings(&connection, BUSY_TIMEOUT)?;
     Ok((connection, settings))
 }
@@ -123,6 +135,7 @@ fn open_configured(
 fn migrate(
     connection: &mut Connection,
     #[cfg(test)] interrupt_v1: bool,
+    #[cfg(test)] interrupt_v2: bool,
 ) -> Result<(), StorageError> {
     let current = current_schema_version(connection)?;
     if current > LATEST_SCHEMA_VERSION {
@@ -131,19 +144,48 @@ fn migrate(
             supported: LATEST_SCHEMA_VERSION,
         });
     }
-    if current < LATEST_SCHEMA_VERSION {
-        let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
-        transaction.execute_batch(MIGRATION_V1)?;
-        #[cfg(test)]
-        if interrupt_v1 {
-            return Err(StorageError::InjectedFailure);
-        }
-        let _rows = transaction.execute(
-            "INSERT INTO schema_metadata(schema_version, applied_at) VALUES (?1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
-            params![LATEST_SCHEMA_VERSION],
+    if current < 1 {
+        apply_migration(
+            connection,
+            MIGRATION_V1,
+            #[cfg(test)]
+            interrupt_v1,
         )?;
-        transaction.commit()?;
     }
+    if current < 2 {
+        apply_migration(
+            connection,
+            MIGRATION_V2,
+            #[cfg(test)]
+            interrupt_v2,
+        )?;
+    }
+    Ok(())
+}
+
+fn apply_migration(
+    connection: &mut Connection,
+    migration: &str,
+    #[cfg(test)] interrupt: bool,
+) -> Result<(), StorageError> {
+    let version = current_schema_version(connection)?;
+    let next_version = version
+        .checked_add(1)
+        .ok_or(StorageError::IntegerOverflow {
+            field: "schema_version",
+            value: u64::MAX,
+        })?;
+    let transaction = connection.transaction_with_behavior(TransactionBehavior::Immediate)?;
+    transaction.execute_batch(migration)?;
+    #[cfg(test)]
+    if interrupt {
+        return Err(StorageError::InjectedFailure);
+    }
+    let _rows = transaction.execute(
+        "INSERT INTO schema_metadata(schema_version, applied_at) VALUES (?1, strftime('%Y-%m-%dT%H:%M:%fZ', 'now'))",
+        params![next_version],
+    )?;
+    transaction.commit()?;
     Ok(())
 }
 

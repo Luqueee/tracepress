@@ -1,4 +1,4 @@
-/target/
+target/
 /.omo/
 __pycache__/
 *.py[cod]

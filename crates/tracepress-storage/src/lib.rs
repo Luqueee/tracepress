@@ -17,7 +17,10 @@ pub use blob_store::{
     InlineSqliteBlobStore, PersistenceCompression, ZstdLevel,
 };
 pub use error::StorageError;
-pub use models::{FidelityClass, WriteBatch, WriteCommand, WriteReceipt};
+pub use models::{
+    FidelityClass, ObservationStatus, ProviderKind, ProviderProtocol, ProviderResponseState,
+    WriteBatch, WriteCommand, WriteReceipt,
+};
 pub use schema::{ConnectionSettings, Durability};
 pub use writer::{StorageConfig, StorageWriter};
 

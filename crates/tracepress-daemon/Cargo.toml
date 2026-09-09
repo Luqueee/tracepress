@@ -21,6 +21,7 @@ tracepress-ipc = { path = "../tracepress-ipc" }
 tokio-util = "0.7"
 tracepress-core = { path = "../tracepress-core" }
 tracepress-storage = { path = "../tracepress-storage" }
+tracepress-provider = { path = "../tracepress-provider" }
 
 [dev-dependencies]
 tempfile = "3"

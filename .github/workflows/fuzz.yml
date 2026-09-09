@@ -1,0 +1,56 @@
+name: Provider fuzzing
+
+on:
+  workflow_dispatch:
+  schedule:
+    - cron: "30 3 * * 0"
+
+permissions:
+  contents: read
+
+jobs:
+  bounded-fuzz:
+    name: Bounded provider fuzz targets
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install repository Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Discover and run fuzz targets
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          manifests=()
+          while IFS= read -r manifest; do
+            manifests+=("$manifest")
+          done < <(find . -type f -path '*/fuzz/Cargo.toml' -print | sort)
+
+          if (( ${#manifests[@]} == 0 )); then
+            echo "No cargo-fuzz package found; skipping fuzz execution."
+            exit 0
+          fi
+
+          cargo install cargo-fuzz --locked
+          rustup toolchain install nightly --profile minimal
+
+          for manifest in "${manifests[@]}"; do
+            targets="$(cargo +nightly fuzz list --manifest-path "$manifest")"
+            if [[ -z "$targets" ]]; then
+              echo "No fuzz targets found in $manifest"
+              continue
+            fi
+
+            while IFS= read -r target; do
+              [[ -n "$target" ]] || continue
+              echo "Running $target from $manifest"
+              timeout --signal=TERM --kill-after=10s 90s \
+                cargo +nightly fuzz run "$target" \
+                --manifest-path "$manifest" \
+                -- -max_total_time=45 -rss_limit_mb=512
+            done <<< "$targets"
+          done

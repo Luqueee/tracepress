@@ -1,0 +1,55 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  required-gates:
+    name: Required gates (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os:
+          - ubuntu-latest
+          - macos-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install repository Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Validate locked dependency metadata
+        run: cargo metadata --locked --no-deps
+
+      - name: Check formatting
+        run: cargo fmt --all -- --check
+
+      - name: Run strict Clippy
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+
+      - name: Run workspace tests
+        run: cargo test --workspace --all-features --locked
+
+      - name: Build workspace
+        run: cargo build --workspace --all-features --locked
+
+  windows-compile-only:
+    name: Windows compile-only (runtime unsupported)
+    runs-on: windows-latest
+    # Windows is intentionally best-effort: Phase 2 has no Windows runtime support.
+    continue-on-error: true
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install repository Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+
+      - name: Compile workspace targets
+        run: cargo check --workspace --all-targets --all-features --locked

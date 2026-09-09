@@ -1,0 +1,1 @@
+{"id":"resp_fixture_usage","model":"gpt-5.6-sol","status":"completed","usage":{"input_tokens":10,"input_tokens_details":{"cached_tokens":3},"output_tokens":8,"output_tokens_details":{"reasoning_tokens":5},"total_tokens":18}}

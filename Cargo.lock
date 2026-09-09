@@ -1547,6 +1547,7 @@ dependencies = [
  "tokio-util",
  "tracepress-core",
  "tracepress-ipc",
+ "tracepress-provider",
  "tracepress-storage",
  "tracing",
 ]
@@ -1577,6 +1578,8 @@ name = "tracepress-provider"
 version = "0.1.0"
 dependencies = [
  "http",
+ "serde",
+ "serde_json",
  "thiserror",
 ]
 

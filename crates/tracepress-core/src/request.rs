@@ -3,16 +3,18 @@ use thiserror::Error;
 
 use crate::RequestId;
 
-/// The allowlisted Phase 1 provider route.
+/// The allowlisted provider request route.
 #[allow(
     clippy::exhaustive_enums,
-    reason = "Phase 1 intentionally exposes one forwarding route"
+    reason = "the supported forwarding routes are explicitly enumerated"
 )]
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
 pub enum RequestRoute {
     /// OpenAI-compatible `/v1/chat/completions`.
     ChatCompletions,
+    /// OpenAI-compatible `/v1/responses`.
+    Responses,
 }
 
 /// The allowlisted method for a provider request.
@@ -111,12 +113,26 @@ pub struct RequestMetadata {
 }
 
 impl RequestMetadata {
-    /// Creates transport metadata for the sole Phase 1 forwarding seam.
+    /// Creates transport metadata for the `/v1/chat/completions` forwarding seam.
     #[must_use]
     pub const fn chat_completions(request_id: RequestId, request_bytes: u64) -> Self {
         Self {
             request_id,
             route: RequestRoute::ChatCompletions,
+            method: RequestMethod::Post,
+            request_bytes,
+            status_code: None,
+            response_bytes: None,
+            latency_us: None,
+        }
+    }
+
+    /// Creates transport metadata for the `/v1/responses` forwarding seam.
+    #[must_use]
+    pub const fn responses(request_id: RequestId, request_bytes: u64) -> Self {
+        Self {
+            request_id,
+            route: RequestRoute::Responses,
             method: RequestMethod::Post,
             request_bytes,
             status_code: None,

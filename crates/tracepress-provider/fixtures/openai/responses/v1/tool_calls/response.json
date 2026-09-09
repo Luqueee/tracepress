@@ -1,0 +1,1 @@
+{"id":"resp_fixture_tool","model":"gpt-5.6-sol","status":"completed","output":[{"type":"function_call","call_id":"call_1","name":"lookup_weather","arguments":"{\"city\":\"redacted\"}"}],"usage":{"input_tokens":12,"output_tokens":7,"total_tokens":19}}

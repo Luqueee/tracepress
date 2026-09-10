@@ -13,8 +13,8 @@ use tracepress_core::{
     MaxIpcFrameBytes, MaxIpcQueueItems, MaxRequestBodyBytes, MaxResponseBodyBytes, SessionState,
 };
 use tracepress_daemon::{
-    ControlRequest, ControlResponse, DaemonService, RecordCorrelationDegradation,
-    RecordProviderObservation,
+    ContextAnalysisBegin, ContextBlockBatch, ControlRequest, ControlResponse, DaemonService,
+    RecordContextAnalysisDropped, RecordCorrelationDegradation, RecordProviderObservation,
 };
 use tracepress_ipc::{
     Credential, IpcLimits, IpcResponse, IpcTransport, ResponseOutcome, SocketOwner, UnixBinding,
@@ -67,6 +67,10 @@ async fn handle_request(
                                     state: "running".to_owned(),
                                     session: Some(session),
                                     operation_id: Some(operation_id),
+                                    provider_request_id: None,
+                                    attempt_id: None,
+                                    inference_operation_id: None,
+                                    context_snapshot_id: None,
                                 },
                                 false,
                             ),
@@ -115,6 +119,10 @@ async fn handle_request(
                         state: "running".to_owned(),
                         session: None,
                         operation_id: Some(operation_id),
+                        provider_request_id: None,
+                        attempt_id: None,
+                        inference_operation_id: None,
+                        context_snapshot_id: None,
                     },
                     false,
                 ),
@@ -144,9 +152,75 @@ async fn handle_request(
                         state: "running".to_owned(),
                         session: None,
                         operation_id: Some(recorded.operation_id),
+                        provider_request_id: Some(recorded.receipt.request_id),
+                        attempt_id: Some(recorded.receipt.attempt_id),
+                        inference_operation_id: Some(recorded.operation_id),
+                        context_snapshot_id: None,
                     },
                     false,
                 ),
+                Err(error) => (
+                    ControlResponse::Error {
+                        message: error.to_string(),
+                    },
+                    false,
+                ),
+            }
+        }
+        ControlRequest::BeginContextAnalysis {
+            session_id,
+            provider_request_id,
+            inference_operation_id,
+            analysis_version,
+            started_at_us,
+        } => match daemon
+            .begin_context_analysis(ContextAnalysisBegin::new(
+                session_id,
+                provider_request_id,
+                inference_operation_id,
+                analysis_version,
+                started_at_us,
+            ))
+            .await
+        {
+            Ok(snapshot_id) => (
+                ControlResponse::Ok {
+                    state: "running".to_owned(),
+                    session: None,
+                    operation_id: None,
+                    provider_request_id: None,
+                    attempt_id: None,
+                    inference_operation_id: None,
+                    context_snapshot_id: Some(snapshot_id),
+                },
+                false,
+            ),
+            Err(error) => (
+                ControlResponse::Error {
+                    message: error.to_string(),
+                },
+                false,
+            ),
+        },
+        ControlRequest::AppendContextBlocks {
+            snapshot_id,
+            sequence,
+            blocks,
+        } => match daemon
+            .append_context_blocks(ContextBlockBatch::new(snapshot_id, sequence, blocks))
+            .await
+        {
+            Ok(()) => (ControlResponse::ok("running"), false),
+            Err(error) => (
+                ControlResponse::Error {
+                    message: error.to_string(),
+                },
+                false,
+            ),
+        },
+        ControlRequest::FinalizeContextAnalysis { summary } => {
+            match daemon.finalize_context_analysis(*summary).await {
+                Ok(()) => (ControlResponse::ok("running"), false),
                 Err(error) => (
                     ControlResponse::Error {
                         message: error.to_string(),
@@ -177,6 +251,28 @@ async fn handle_request(
                 ),
             }
         }
+        ControlRequest::RecordContextAnalysisDropped {
+            session_id,
+            dropped,
+            observed_at_us,
+        } => {
+            match daemon
+                .record_context_analysis_dropped(RecordContextAnalysisDropped::new(
+                    session_id,
+                    dropped,
+                    observed_at_us,
+                ))
+                .await
+            {
+                Ok(()) => (ControlResponse::ok("running"), false),
+                Err(error) => (
+                    ControlResponse::Error {
+                        message: error.to_string(),
+                    },
+                    false,
+                ),
+            }
+        }
         ControlRequest::FinishSession {
             session_id,
             ended_at,
@@ -190,6 +286,10 @@ async fn handle_request(
                         state: "running".to_owned(),
                         session: Some(session),
                         operation_id: None,
+                        provider_request_id: None,
+                        attempt_id: None,
+                        inference_operation_id: None,
+                        context_snapshot_id: None,
                     },
                     false,
                 ),

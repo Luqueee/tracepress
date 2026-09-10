@@ -1510,6 +1510,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "tracepress-context",
  "tracepress-core",
  "tracepress-daemon",
  "tracepress-ipc",
@@ -1558,6 +1559,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tokio-util",
+ "tracepress-context",
  "tracepress-core",
  "tracepress-ipc",
  "tracepress-provider",
@@ -1605,6 +1607,7 @@ dependencies = [
  "reqwest",
  "thiserror",
  "tokio",
+ "tracepress-context",
  "tracepress-core",
  "tracepress-provider",
 ]

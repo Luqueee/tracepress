@@ -25,6 +25,7 @@ tracepress-daemon = { path = "../tracepress-daemon" }
 tracepress-ipc = { path = "../tracepress-ipc" }
 tracepress-provider = { path = "../tracepress-provider" }
 tracepress-proxy = { path = "../tracepress-proxy" }
+tracepress-context = { path = "../tracepress-context" }
 tracepress-storage = { path = "../tracepress-storage" }
 
 [dev-dependencies]

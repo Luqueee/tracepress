@@ -19,7 +19,10 @@ use axum::response::Response;
 use axum::routing::post;
 use futures_util::{StreamExt as _, stream};
 use thiserror::Error;
-use tracepress_core::{MaxRequestBodyBytes, MaxResponseBodyBytes};
+use tracepress_context::{
+    ContextAnalysisLimits, ContextAnalysisLimitsError, ContextAnalysisResult, analyze_responses,
+};
+use tracepress_core::{MaxRequestBodyBytes, MaxResponseBodyBytes, ResourceLimits};
 use tracepress_provider::{
     MAX_RETAINED_USAGE_BYTES, ObservationInput, ObservationLimitValues, ObservationLimits,
     ObservationStatus, OpenAiResponsesV1Observer, ProviderEndpoint, ProviderObserver,
@@ -151,16 +154,31 @@ impl TransportFailure {
     }
 }
 
+/// A parsed request observation and its detached context analysis for one forward.
+///
+/// The proxy hands this value to the sink atomically, so durable consumers cannot persist one
+/// half of the request evidence without the other.
+#[derive(Debug)]
+#[non_exhaustive]
+pub struct RequestContextObservation {
+    /// Correlation identity shared with this forward's metadata and response evidence.
+    pub forward: ForwardId,
+    /// Parsed provider request metadata.
+    pub observation: RequestObservation,
+    /// Detached shadow context analysis of the exact forwarded request bytes.
+    pub analysis: ContextAnalysisResult,
+}
+
 /// Synchronous, non-blocking boundary for Responses v1 semantic observations.
 pub trait ProviderObservationSink: Send + Sync + 'static {
-    /// Attempts to accept a parsed request observation of one forward.
+    /// Attempts to accept a parsed request observation and its detached context analysis as one
+    /// atomic handoff for one forward.
     ///
     /// # Errors
     /// Returns a sink-local failure that the proxy deliberately ignores.
-    fn try_record_request(
+    fn try_record_request_context(
         &self,
-        forward: ForwardId,
-        observation: RequestObservation,
+        observation: RequestContextObservation,
     ) -> Result<(), ObservationSinkError>;
 
     /// Attempts to accept a parsed response observation of one forward.
@@ -200,10 +218,9 @@ impl MetadataSink for NoopMetadataSink {
 struct NoopProviderObservationSink;
 
 impl ProviderObservationSink for NoopProviderObservationSink {
-    fn try_record_request(
+    fn try_record_request_context(
         &self,
-        _forward: ForwardId,
-        _observation: RequestObservation,
+        _observation: RequestContextObservation,
     ) -> Result<(), ObservationSinkError> {
         Ok(())
     }
@@ -225,31 +242,50 @@ impl ProviderObservationSink for NoopProviderObservationSink {
     }
 }
 
+/// Failure to validate a transparent proxy configuration.
+#[derive(Debug, Error)]
+#[non_exhaustive]
+pub enum ProxyConfigError {
+    /// Derived context-analysis bounds cannot be represented on this platform.
+    #[error("context analysis limits are invalid")]
+    ContextAnalysisLimits(#[source] ContextAnalysisLimitsError),
+}
+
 /// Validated transparent proxy configuration.
 #[derive(Clone, Debug)]
 #[non_exhaustive]
 pub struct ProxyConfig {
     /// Full upstream endpoint used as the authority and query base for both routes.
     pub upstream: ProviderEndpoint,
+    /// Complete validated process resource limits shared by forwarding and analysis.
+    pub resource_limits: ResourceLimits,
     /// Maximum accepted request body size.
     pub max_request_body_bytes: MaxRequestBodyBytes,
     /// Maximum streamed response body size.
     pub max_response_body_bytes: MaxResponseBodyBytes,
+    /// Bounded shadow context limits derived from `resource_limits`.
+    pub context_analysis_limits: ContextAnalysisLimits,
 }
 
 impl ProxyConfig {
-    /// Creates a transparent proxy configuration from validated boundaries.
-    #[must_use]
-    pub const fn new(
+    /// Creates a transparent proxy configuration from the complete resource budget.
+    ///
+    /// # Errors
+    /// Returns [`ProxyConfigError::ContextAnalysisLimits`] when the derived analysis bounds
+    /// cannot be represented on this platform.
+    pub fn new(
         upstream: ProviderEndpoint,
-        max_request_body_bytes: MaxRequestBodyBytes,
-        max_response_body_bytes: MaxResponseBodyBytes,
-    ) -> Self {
-        Self {
+        resource_limits: ResourceLimits,
+    ) -> Result<Self, ProxyConfigError> {
+        let context_analysis_limits = ContextAnalysisLimits::from_resource_limits(&resource_limits)
+            .map_err(ProxyConfigError::ContextAnalysisLimits)?;
+        Ok(Self {
             upstream,
-            max_request_body_bytes,
-            max_response_body_bytes,
-        }
+            max_request_body_bytes: resource_limits.max_request_body_bytes,
+            max_response_body_bytes: resource_limits.max_response_body_bytes,
+            resource_limits,
+            context_analysis_limits,
+        })
     }
 }
 
@@ -523,15 +559,6 @@ fn response_mode(
         None => stream_hint.map(ResponseModeSelection::RequestHint),
     }
 }
-
-enum ObservationMessage {
-    Chunk(Bytes),
-    Finished,
-    Disconnected,
-}
-
-/// Hands the accepted request buffer to a detached observer and returns its stream hint.
-///
 /// Both the parse and the sink call run on a blocking task holding a refcounted handle to the same
 /// bytes, so the forwarding task neither parses nor waits. The returned receiver resolves to the
 /// requested `stream` flag, which only matters when the upstream declares no content type.
@@ -541,6 +568,7 @@ fn queue_request_observation(
     bytes: &Bytes,
 ) -> Option<tokio::sync::oneshot::Receiver<Option<bool>>> {
     let limits = observation_limits(proxy.config.max_request_body_bytes.get())?;
+    let context_limits = proxy.config.context_analysis_limits;
     let sink = Arc::clone(&proxy.observations);
     let bytes = bytes.clone();
     let (hint, receiver) = tokio::sync::oneshot::channel();
@@ -548,13 +576,15 @@ fn queue_request_observation(
         let observation = OpenAiResponsesV1Observer::new()
             .observe_request(ObservationInput::new(&bytes, limits))
             .unwrap_or_else(|_error| {
-                // The built-in observer currently returns a value for every bounded input.
                 tracepress_provider::parse_request(ObservationInput::new(&bytes, limits))
             });
-        // The hint is published before the sink runs, so a slow sink cannot delay the response
-        // half's observer selection.
         let _delivered = hint.send(observation.stream);
-        sink.try_record_request(forward, observation)
+        let analysis = analyze_responses(&bytes, context_limits);
+        let _accepted = sink.try_record_request_context(RequestContextObservation {
+            forward,
+            observation,
+            analysis,
+        });
     }));
     Some(receiver)
 }
@@ -569,6 +599,12 @@ fn queue_transport_failure(
     drop(tokio::task::spawn_blocking(move || {
         sink.try_record_transport_failure(forward, failure)
     }));
+}
+
+enum ObservationMessage {
+    Chunk(Bytes),
+    Finished,
+    Disconnected,
 }
 
 fn queue_observation(

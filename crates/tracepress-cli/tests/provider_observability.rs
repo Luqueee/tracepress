@@ -345,6 +345,83 @@ fn serve_sequential_sse(listener: &TcpListener, forwards: usize) -> std::io::Res
     Ok(())
 }
 
+const CONTEXT_SATURATION_WAVES: usize = 20;
+const CONTEXT_SATURATION_WIDTH: usize = 8;
+
+const CONTEXT_SATURATION_AGENT_SCRIPT: &str = r"
+import os, threading, time, urllib.request
+
+url = os.environ['TRACEPRESS_RESPONSES_URL']
+body = os.environ['TRACEPRESS_E2E_REQUEST'].encode()
+expected = os.environ['TRACEPRESS_E2E_STREAM'].encode()
+width = int(os.environ['TRACEPRESS_E2E_WIDTH'])
+
+def call(index):
+    request = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json'})
+    received = urllib.request.urlopen(request).read()
+    assert received == expected, (index, received)
+
+for wave in range(int(os.environ['TRACEPRESS_E2E_WAVES'])):
+    threads = [threading.Thread(target=call, args=(wave * width + index,)) for index in range(width)]
+    for thread in threads:
+        thread.start()
+    for thread in threads:
+        thread.join()
+    time.sleep(0.05)
+";
+
+fn context_saturation_request_body() -> String {
+    let items = (0..1024)
+        .map(|index| {
+            format!(
+                r#"{{"role":"user","content":[{{"type":"input_text","text":"context-saturation-{index}"}}]}}"#
+            )
+        })
+        .collect::<Vec<_>>()
+        .join(",");
+    format!(r#"{{"model":"gpt-saturation","stream":true,"input":[{items}]}}"#)
+}
+
+fn run_context_saturation_case() -> SetupResult<(TempDir, String)> {
+    let directory = TempDir::new()?;
+    let upstream = TcpListener::bind("127.0.0.1:0")?;
+    let upstream_address = upstream.local_addr()?;
+    let forwards = CONTEXT_SATURATION_WAVES * CONTEXT_SATURATION_WIDTH;
+    let server = thread::spawn(move || serve_sequential_sse(&upstream, forwards));
+
+    let fixture = Fixture::new(directory.path())?;
+    fixture.run(["init"])?;
+    fixture.run(["daemon", "start"])?;
+    let request = context_saturation_request_body();
+    let output = fixture
+        .command()
+        .env(
+            "TRACEPRESS_UPSTREAM",
+            format!("http://{upstream_address}/v1/responses"),
+        )
+        .env("TRACEPRESS_E2E_REQUEST", &request)
+        .env("TRACEPRESS_E2E_STREAM", CONCURRENT_STREAM_B)
+        .env("TRACEPRESS_E2E_WAVES", CONTEXT_SATURATION_WAVES.to_string())
+        .env("TRACEPRESS_E2E_WIDTH", CONTEXT_SATURATION_WIDTH.to_string())
+        .args([
+            "run",
+            "python3",
+            "--",
+            "-c",
+            CONTEXT_SATURATION_AGENT_SCRIPT,
+        ])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "tracepress run failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    server.join().map_err(|_| "upstream thread panicked")??;
+    fixture.run(["daemon", "stop"])?;
+    Ok((directory, String::from_utf8(output.stdout)?))
+}
+
 /// Forwards admitted after the interleaved one, enough to evict its correlation state.
 ///
 /// [`IN_FLIGHT_FORWARDS`](../src/main.rs) is 64, so one identity plus this many newer ones is
@@ -1233,6 +1310,8 @@ fn streamed_responses_run_records_provider_observability_durably() -> TestResult
     assert_provider_usage(&database)?;
     assert_measured_timings(&database)?;
     assert_canonical_events(&database)?;
+    assert_context_events(&database)?;
+    assert_context_storage(&database, 1, false)?;
     assert_causal_dag(&database)?;
     drop(database);
 
@@ -1317,6 +1396,7 @@ fn concurrent_responses_forwards_record_their_own_attempts() -> TestResult {
         ),
         "each forward's transport status and response evidence must join its own request"
     );
+    assert_context_storage(&database, 2, true)?;
     assert_eq!(text(&database, "SELECT state FROM sessions")?, "closed");
     drop(database);
 
@@ -1357,6 +1437,48 @@ fn forwards_beyond_the_correlation_bound_keep_one_attempt_each() -> TestResult {
         forwards
     );
     assert_eq!(text(&database, "SELECT state FROM sessions")?, "closed");
+    Ok(())
+}
+
+#[test]
+fn context_queue_backpressure_drops_only_analysis_after_all_provider_receipts_commit() -> TestResult
+{
+    let (directory, stdout) = run_context_saturation_case()?;
+    let root = directory.path();
+    let database = Connection::open(root.join("tracepress.sqlite3"))?;
+    let forwards = i64::try_from(CONTEXT_SATURATION_WAVES * CONTEXT_SATURATION_WIDTH)?;
+    assert_eq!(
+        integer(&database, "SELECT COUNT(*) FROM provider_requests")?,
+        forwards,
+        "every provider request must survive context queue saturation"
+    );
+    assert_eq!(
+        integer(
+            &database,
+            "SELECT COUNT(*) FROM provider_attempts WHERE ordinal = 0 AND status = 'completed'",
+        )?,
+        forwards,
+        "every provider attempt must survive context queue saturation"
+    );
+    let counter = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("context_observer_backpressure_total="))
+        .ok_or("run did not report the context backpressure counter")?
+        .parse::<u64>()?;
+    let snapshots = integer(&database, "SELECT COUNT(*) FROM context_snapshots")?;
+    assert!(
+        counter > 0,
+        "context queue must saturate deterministically; snapshots={snapshots} stdout={stdout}"
+    );
+    let payload: Vec<u8> = database.query_row(
+        "SELECT payload FROM events WHERE event_type = 'context.analysis.dropped'",
+        [],
+        |row| row.get(0),
+    )?;
+    let payload = String::from_utf8(payload)?;
+    assert!(payload.contains(r#""status":"observer_backpressure""#));
+    assert!(payload.contains(r#""dropped_count":"#));
+    assert_no_canaries_in_storage(root)?;
     Ok(())
 }
 
@@ -1651,14 +1773,7 @@ fn a_fully_correlated_run_reports_no_degradation_at_all() -> TestResult {
         UNDEGRADED_REPORT,
         "a run whose every forward correlated must report zeroes, not silence"
     );
-    assert_eq!(
-        integer(
-            &database,
-            "SELECT COUNT(*) FROM events WHERE event_type LIKE 'context.%'",
-        )?,
-        0,
-        "no context event may be committed for a run that degraded nothing"
-    );
+    assert_context_events(&database)?;
     Ok(())
 }
 
@@ -1688,6 +1803,94 @@ fn assert_degraded_events(database: &Connection, reasons: &[&str]) -> TestResult
             format!(r#"{{"reason":"{reason}","session_id":"{session}"}}"#)
         );
         assert_eq!(schema_version, "1");
+    }
+    Ok(())
+}
+
+/// The eligible streamed fixture emits one complete context lifecycle with explicit partial
+/// visibility; context events are asserted separately from the Phase 2 provider event contract.
+fn assert_context_events(database: &Connection) -> TestResult {
+    let mut statement = database
+        .prepare("SELECT event_type FROM events WHERE event_type LIKE 'context.%' ORDER BY seq")?;
+    let committed = statement
+        .query_map([], |row| row.get::<_, String>(0))?
+        .collect::<rusqlite::Result<Vec<_>>>()?;
+    assert_eq!(
+        committed,
+        vec![
+            "context.analysis.started",
+            "context.visibility.partial",
+            "context.reconciliation.unavailable",
+            "context.analysis.completed",
+        ],
+        "eligible context analysis must emit its exact bounded event lifecycle",
+    );
+    Ok(())
+}
+
+/// Durable context rows must join the provider attempt and retain the bounded analysis evidence.
+fn assert_context_storage(
+    database: &Connection,
+    expected_snapshots: i64,
+    expect_delta: bool,
+) -> TestResult {
+    assert_eq!(
+        integer(
+            database,
+            "SELECT COUNT(*) FROM context_snapshots s JOIN provider_requests r ON r.request_id = s.provider_request_id JOIN operations o ON o.operation_id = s.inference_operation_id WHERE o.kind = 'llm_inference'",
+        )?,
+        expected_snapshots,
+        "every context snapshot must join one provider request and inference operation",
+    );
+    assert_eq!(
+        integer(
+            database,
+            "SELECT COUNT(*) FROM context_snapshots WHERE status = 'complete'",
+        )?,
+        expected_snapshots,
+    );
+    assert!(
+        integer(database, "SELECT COUNT(*) FROM context_block_occurrences")? > 0,
+        "completed context snapshots must persist block occurrences",
+    );
+    assert_eq!(
+        integer(database, "SELECT COUNT(*) FROM context_analysis_metrics")?,
+        expected_snapshots,
+    );
+    assert_eq!(
+        integer(
+            database,
+            "SELECT COUNT(*) FROM context_analysis_metrics WHERE explicit_bytes IS NOT NULL",
+        )?,
+        expected_snapshots,
+        "context metrics must retain the explicit-byte aggregate",
+    );
+    assert_eq!(
+        integer(
+            database,
+            "SELECT COUNT(*) FROM token_reconciliations tr JOIN provider_usage pu ON pu.attempt_id = tr.attempt_id WHERE tr.provider_input_tokens IS NOT NULL",
+        )?,
+        expected_snapshots,
+        "each context snapshot must reconcile against its provider usage row",
+    );
+    if expect_delta {
+        let delta: (i64, i64, i64) = database.query_row(
+            "SELECT COUNT(*), COALESCE(MAX(common_prefix_blocks), -1), COUNT(DISTINCT previous_snapshot_id) FROM context_deltas",
+            [],
+            |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+        )?;
+        assert_eq!(delta.0, expected_snapshots.saturating_sub(1));
+        assert!(
+            delta.1 > 0,
+            "the second request must retain a non-empty stable context prefix",
+        );
+        assert_eq!(delta.2, expected_snapshots.saturating_sub(1));
+    } else {
+        assert_eq!(
+            integer(database, "SELECT COUNT(*) FROM context_deltas")?,
+            0,
+            "the first context snapshot has no predecessor",
+        );
     }
     Ok(())
 }
@@ -2044,11 +2247,12 @@ fn assert_canonical_events(database: &Connection) -> TestResult {
             "{event_type} is not supported by this evidence"
         );
     }
-    // Every event hangs off the inference operation of the recorded session.
+    // Every Phase 2 provider event hangs off the inference operation of the recorded session;
+    // context lifecycle events are asserted independently above.
     assert_eq!(
         integer(
             database,
-            "SELECT COUNT(*) FROM events e JOIN operations o ON o.operation_id = e.operation_id JOIN sessions s ON s.session_id = e.session_id WHERE o.kind = 'llm_inference'",
+            "SELECT COUNT(*) FROM events e JOIN operations o ON o.operation_id = e.operation_id JOIN sessions s ON s.session_id = e.session_id WHERE e.event_type LIKE 'provider.%' AND o.kind = 'llm_inference'",
         )?,
         5
     );

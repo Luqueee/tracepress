@@ -11,17 +11,37 @@ use axum::response::Response;
 use axum::routing::post;
 use futures_util::{StreamExt, stream};
 use tokio::net::{TcpListener, TcpStream};
-use tracepress_core::{MaxRequestBodyBytes, MaxResponseBodyBytes};
+use tracepress_core::{ResourceLimits, ResourceLimitsConfig};
 use tracepress_provider::{
     ObservationStatus, ProviderEndpoint, ProviderResponseState, RequestObservation,
     ResponseObservation, UsageStatus,
 };
 use tracepress_proxy::{
     ForwardId, ForwardMetadata, InboundRoute, MetadataSink, MetadataSinkError,
-    ObservationSinkError, ProviderObservationSink, ProxyConfig, TransparentProxy, TransportFailure,
+    ObservationSinkError, ProviderObservationSink, ProxyConfig, RequestContextObservation,
+    TransparentProxy, TransportFailure,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+fn resource_limits(
+    request_bytes: u64,
+    response_bytes: u64,
+) -> Result<ResourceLimits, Box<dyn std::error::Error>> {
+    Ok(ResourceLimits::try_from(ResourceLimitsConfig {
+        max_raw_bytes: Some(i128::from(request_bytes)),
+        max_request_body_bytes: Some(i128::from(request_bytes)),
+        max_response_body_bytes: Some(i128::from(response_bytes)),
+        max_decompressed_bytes: Some(i128::from(response_bytes)),
+        max_ipc_frame_bytes: Some(65_536),
+        max_ipc_queue_items: Some(128),
+        max_json_nesting: Some(64),
+        max_json_items: Some(100_000),
+        max_line_bytes: Some(i128::from(request_bytes)),
+        max_processing_time_ms: Some(250),
+        max_cpu_work_units: Some(1_000_000),
+    })?)
+}
 
 const AUTH_CANARY: &str = "auth-canary-7f3a";
 const COOKIE_CANARY: &str = "cookie-canary-1c2b";
@@ -86,15 +106,14 @@ impl MetadataSink for RecordingSink {
 }
 
 impl ProviderObservationSink for RecordingSink {
-    fn try_record_request(
+    fn try_record_request_context(
         &self,
-        forward: ForwardId,
-        observation: RequestObservation,
+        context: RequestContextObservation,
     ) -> Result<(), ObservationSinkError> {
         self.requests
             .lock()
             .map_err(|_error| ObservationSinkError::rejected())?
-            .push((forward, observation));
+            .push((context.forward, context.observation));
         Ok(())
     }
 
@@ -517,7 +536,6 @@ async fn spawn_upstream(
         task,
     ))
 }
-
 async fn spawn_proxy(
     config: ProxyTestConfig,
 ) -> Result<(String, tokio::task::JoinHandle<()>), Box<dyn std::error::Error>> {
@@ -527,11 +545,11 @@ async fn spawn_proxy(
         response_limit,
         sink,
     } = config;
+
     let proxy = TransparentProxy::new(ProxyConfig::new(
         upstream,
-        MaxRequestBodyBytes::new(request_limit)?,
-        MaxResponseBodyBytes::new(response_limit)?,
-    ))?
+        resource_limits(request_limit, response_limit)?,
+    )?)?
     .with_metadata_sink(Arc::<RecordingSink>::clone(&sink))
     .with_observation_sink(Arc::<RecordingSink>::clone(&sink));
     let listener = TcpListener::bind("127.0.0.1:0").await?;

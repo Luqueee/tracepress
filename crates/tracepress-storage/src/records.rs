@@ -6,8 +6,8 @@
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 
 use crate::{
-    ContextBlockKind, ContextOrigin, ContextRole, StorageError, WriteBatch, WriteCommand,
-    WriteReceipt,
+    ContextAnalysisStatus, ContextBlockKind, ContextOrigin, ContextRole, StorageError, WriteBatch,
+    WriteCommand, WriteReceipt,
     encode::{
         causal_relationship, content_kind, content_role, context_analysis_status_text,
         context_block_kind_text, context_correlation_status_text, context_origin_text,
@@ -18,6 +18,8 @@ use crate::{
         session_state, sqlite, sqlite_optional, sqlite_u64, usage_status_text,
     },
 };
+
+use tracepress_core::{EventId, UuidV7Generator};
 
 pub(crate) fn execute_single(
     connection: &mut Connection,
@@ -34,7 +36,7 @@ pub(crate) fn recover_stale_sessions(
     recovered_at: &str,
 ) -> Result<WriteReceipt, StorageError> {
     let transaction = sqlite(connection.transaction_with_behavior(TransactionBehavior::Immediate))?;
-    let rows = sqlite(transaction.execute(
+    let mut rows_changed = sqlite(transaction.execute(
         "UPDATE sessions SET state = ?1, ended_at = COALESCE(ended_at, ?2) WHERE state IN (?3, ?4)",
         params![
             session_state(tracepress_core::SessionState::Stale),
@@ -43,8 +45,64 @@ pub(crate) fn recover_stale_sessions(
             session_state(tracepress_core::SessionState::Closing)
         ],
     ))?;
+
+    // A Begin has no terminal outcome yet, so `completed_at_us IS NULL` is the durable marker of
+    // an interrupted analysis. Finalized partial analyses have a completion timestamp and must
+    // not emit a second recovery event when startup recovery is retried.
+    let snapshots = {
+        let mut statement = sqlite(transaction.prepare(
+            "SELECT snapshot_id, session_id, inference_operation_id \
+             FROM context_snapshots WHERE completed_at_us IS NULL",
+        ))?;
+        let result = statement.query_map([], |row| {
+            Ok((
+                row.get::<_, String>(0)?,
+                row.get::<_, String>(1)?,
+                row.get::<_, String>(2)?,
+            ))
+        });
+        let result = sqlite(result)?;
+        let mut snapshots = Vec::new();
+        for snapshot in result {
+            snapshots.push(sqlite(snapshot)?);
+        }
+        snapshots
+    };
+    let generator = UuidV7Generator::new();
+    for (snapshot_id, session_id, operation_id) in snapshots {
+        let changed = sqlite(transaction.execute(
+            "UPDATE context_snapshots SET status = ?2 \
+             WHERE snapshot_id = ?1 AND completed_at_us IS NULL",
+            params![
+                snapshot_id,
+                context_analysis_status_text(ContextAnalysisStatus::Partial),
+            ],
+        ))?;
+        if changed == 0 {
+            continue;
+        }
+        rows_changed = rows_changed.saturating_add(changed);
+        let event_id = EventId::generate(&generator);
+        let payload = format!(r#"{{"reason":"startup_recovery","snapshot_id":"{snapshot_id}"}}"#)
+            .into_bytes()
+            .into_boxed_slice();
+        let event_rows = sqlite(transaction.execute(
+            "INSERT INTO events(event_id, session_id, operation_id, timestamp, event_type, payload, schema_version) \
+             VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+            params![
+                event_id.to_string(),
+                session_id,
+                operation_id,
+                recovered_at,
+                "context.analysis.partial",
+                payload.as_ref(),
+                "1",
+            ],
+        ))?;
+        rows_changed = rows_changed.saturating_add(event_rows);
+    }
     sqlite(transaction.commit())?;
-    committed(rows)
+    committed(rows_changed)
 }
 
 pub(crate) fn execute_batch(

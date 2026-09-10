@@ -10,13 +10,32 @@ use axum::response::Response;
 use axum::routing::post;
 use futures_util::stream;
 use tokio::net::{TcpListener, TcpStream};
-use tracepress_core::{MaxRequestBodyBytes, MaxResponseBodyBytes};
+use tracepress_core::{ResourceLimits, ResourceLimitsConfig};
 use tracepress_provider::ProviderEndpoint;
 use tracepress_proxy::{
     ForwardMetadata, InboundRoute, MetadataSink, MetadataSinkError, ProxyConfig, TransparentProxy,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+fn resource_limits(
+    request_bytes: u64,
+    response_bytes: u64,
+) -> Result<ResourceLimits, Box<dyn std::error::Error>> {
+    Ok(ResourceLimits::try_from(ResourceLimitsConfig {
+        max_raw_bytes: Some(i128::from(request_bytes)),
+        max_request_body_bytes: Some(i128::from(request_bytes)),
+        max_response_body_bytes: Some(i128::from(response_bytes)),
+        max_decompressed_bytes: Some(i128::from(response_bytes)),
+        max_ipc_frame_bytes: Some(65_536),
+        max_ipc_queue_items: Some(128),
+        max_json_nesting: Some(64),
+        max_json_items: Some(100_000),
+        max_line_bytes: Some(i128::from(request_bytes)),
+        max_processing_time_ms: Some(250),
+        max_cpu_work_units: Some(1_000_000),
+    })?)
+}
 
 #[derive(Clone)]
 struct UpstreamState {
@@ -438,9 +457,8 @@ async fn spawn_proxy(
     } = config;
     let proxy = TransparentProxy::new(ProxyConfig::new(
         upstream,
-        MaxRequestBodyBytes::new(request_limit)?,
-        MaxResponseBodyBytes::new(response_limit)?,
-    ))?
+        resource_limits(request_limit, response_limit)?,
+    )?)?
     .with_metadata_sink(sink);
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;

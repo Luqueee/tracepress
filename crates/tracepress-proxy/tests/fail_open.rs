@@ -15,14 +15,34 @@ use axum::{
 };
 use futures_util::stream;
 use tokio::net::TcpListener;
-use tracepress_core::{MaxRequestBodyBytes, MaxResponseBodyBytes};
+use tracepress_core::{ResourceLimits, ResourceLimitsConfig};
 use tracepress_provider::{ProviderEndpoint, RequestObservation, ResponseObservation};
 use tracepress_proxy::{
     ForwardId, ForwardMetadata, MetadataSink, MetadataSinkError, ObservationSinkError,
-    ProviderObservationSink, ProxyConfig, TransparentProxy, TransportFailure,
+    ProviderObservationSink, ProxyConfig, RequestContextObservation, TransparentProxy,
+    TransportFailure,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+fn resource_limits(
+    request_bytes: u64,
+    response_bytes: u64,
+) -> Result<ResourceLimits, Box<dyn std::error::Error>> {
+    Ok(ResourceLimits::try_from(ResourceLimitsConfig {
+        max_raw_bytes: Some(i128::from(request_bytes)),
+        max_request_body_bytes: Some(i128::from(request_bytes)),
+        max_response_body_bytes: Some(i128::from(response_bytes)),
+        max_decompressed_bytes: Some(i128::from(response_bytes)),
+        max_ipc_frame_bytes: Some(65_536),
+        max_ipc_queue_items: Some(128),
+        max_json_nesting: Some(64),
+        max_json_items: Some(100_000),
+        max_line_bytes: Some(i128::from(request_bytes)),
+        max_processing_time_ms: Some(250),
+        max_cpu_work_units: Some(1_000_000),
+    })?)
+}
 
 #[derive(Debug, Default)]
 struct FailingSink;
@@ -35,15 +55,14 @@ struct RecordingObservationSink {
 }
 
 impl ProviderObservationSink for RecordingObservationSink {
-    fn try_record_request(
+    fn try_record_request_context(
         &self,
-        _forward: ForwardId,
-        observation: RequestObservation,
+        context: RequestContextObservation,
     ) -> Result<(), ObservationSinkError> {
         self.requests
             .lock()
             .map_err(|_error| ObservationSinkError::rejected())?
-            .push(observation);
+            .push(context.observation);
         Ok(())
     }
 
@@ -83,10 +102,9 @@ struct BehaviorObservationSink {
 }
 
 impl ProviderObservationSink for BehaviorObservationSink {
-    fn try_record_request(
+    fn try_record_request_context(
         &self,
-        _forward: ForwardId,
-        _observation: RequestObservation,
+        _context: RequestContextObservation,
     ) -> Result<(), ObservationSinkError> {
         self.apply()
     }
@@ -138,12 +156,8 @@ async fn metadata_sink_failure_does_not_block_or_mutate_response() -> TestResult
     let endpoint =
         ProviderEndpoint::new(&format!("http://{upstream_address}/v1/chat/completions"))?;
     let sink = FailingSink;
-    let proxy = TransparentProxy::new(ProxyConfig::new(
-        endpoint,
-        MaxRequestBodyBytes::new(1_024)?,
-        MaxResponseBodyBytes::new(1_024)?,
-    ))?
-    .with_metadata_sink(Arc::new(sink));
+    let proxy = TransparentProxy::new(ProxyConfig::new(endpoint, resource_limits(1_024, 1_024)?)?)?
+        .with_metadata_sink(Arc::new(sink));
     let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
     let proxy_address = proxy_listener.local_addr()?;
     let proxy_task = tokio::spawn(async move { axum::serve(proxy_listener, proxy.router()).await });
@@ -182,12 +196,8 @@ async fn responses_observations_are_delivered_as_a_side_channel() -> TestResult 
     });
     let endpoint = ProviderEndpoint::new(&format!("http://{upstream_address}/v1/responses"))?;
     let sink = Arc::new(RecordingObservationSink::default());
-    let proxy = TransparentProxy::new(ProxyConfig::new(
-        endpoint,
-        MaxRequestBodyBytes::new(4_096)?,
-        MaxResponseBodyBytes::new(4_096)?,
-    ))?
-    .with_observation_sink(Arc::<RecordingObservationSink>::clone(&sink));
+    let proxy = TransparentProxy::new(ProxyConfig::new(endpoint, resource_limits(4_096, 4_096)?)?)?
+        .with_observation_sink(Arc::<RecordingObservationSink>::clone(&sink));
     let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
     let proxy_address = proxy_listener.local_addr()?;
     let proxy_task = tokio::spawn(async move {
@@ -282,12 +292,9 @@ async fn failing_and_slow_observation_sinks_are_fail_open_for_streams() -> TestR
             let _result = axum::serve(upstream_listener, app).await;
         });
         let endpoint = ProviderEndpoint::new(&format!("http://{upstream_address}/v1/responses"))?;
-        let proxy = TransparentProxy::new(ProxyConfig::new(
-            endpoint,
-            MaxRequestBodyBytes::new(4_096)?,
-            MaxResponseBodyBytes::new(4_096)?,
-        ))?
-        .with_observation_sink(Arc::new(BehaviorObservationSink { behavior }));
+        let proxy =
+            TransparentProxy::new(ProxyConfig::new(endpoint, resource_limits(4_096, 4_096)?)?)?
+                .with_observation_sink(Arc::new(BehaviorObservationSink { behavior }));
         let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
         let proxy_address = proxy_listener.local_addr()?;
         let proxy_task = tokio::spawn(async move {

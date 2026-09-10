@@ -2,14 +2,19 @@
 
 use rusqlite::Connection;
 use tempfile::TempDir;
+use tracepress_context::{
+    ContextAnalysisLimitValues, ContextAnalysisLimits, ContextAnalysisStatus, TokenReconciliation,
+    analyze,
+};
 use tracepress_core::{
-    HttpStatusCode, MaxIpcQueueItems, OperationId, OperationKind, SessionId, SessionState,
-    UuidV7Generator,
+    ContextSnapshotId, HttpStatusCode, MaxIpcQueueItems, OperationId, OperationKind, SessionId,
+    SessionState, UuidV7Generator,
 };
 use tracepress_daemon::{
-    CorrelationDegradation, DaemonError, DaemonService, PersistProviderObservation,
-    ProviderObservation, ProviderObservationOutcome, RecordCorrelationDegradation,
-    RecordProviderObservation,
+    ContextAnalysisBegin, ContextAnalysisFinalize, ContextAnalysisMetrics, ContextBlockBatch,
+    ContextCorrelationStatusWire, ControlRequest, CorrelationDegradation, DaemonError,
+    DaemonService, PersistProviderObservation, ProviderObservation, ProviderObservationOutcome,
+    RecordCorrelationDegradation, RecordProviderObservation,
 };
 use tracepress_provider::{
     ObservationInput, ObservationLimits, ProviderResponseState, StreamingObserver, parse_request,
@@ -174,6 +179,336 @@ async fn rejects_orphan_and_wrong_kind_provider_observations() -> TestResult {
         Err(DaemonError::OperationNotInference { .. })
     ));
     daemon.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the scenario asserts a complete bounded protocol lifecycle"
+)]
+async fn context_batches_are_bounded_and_preserve_five_thousand_blocks() -> TestResult {
+    let directory = TempDir::new()?;
+    let daemon = daemon(&directory).await?;
+    let session = daemon.start_session("t0").await?;
+    let inference = daemon
+        .create_operation(session.session_id, OperationKind::LlmInference, "t1", None)
+        .await?;
+    let receipt = daemon
+        .persist_provider_observation(PersistProviderObservation::new(
+            session.session_id,
+            inference,
+            ProviderObservation::new(1, request(), "t2")
+                .with_response(response(br#"{"status":"completed"}"#)),
+        ))
+        .await?;
+    let snapshot = daemon
+        .begin_context_analysis(ContextAnalysisBegin::new(
+            session.session_id,
+            receipt.request_id,
+            inference,
+            1,
+            1,
+        ))
+        .await?;
+    let analysis = analyze(
+        br#"{"input":[{"role":"user","content":[{"type":"input_text","text":"x"}]}]}"#,
+        context_limits()?,
+    );
+    let template = analysis
+        .blocks
+        .first()
+        .cloned()
+        .ok_or("fixture must produce one context block")?;
+    let mut sequence = 0_u32;
+    let mut next_ordinal = 0_u32;
+    let mut max_serialized_body = 0_usize;
+    let mut batch = Vec::new();
+    for ordinal in 0..5_000_u32 {
+        let mut block = template.clone();
+        block.ordinal = ordinal;
+        block.parent_ordinal = None;
+        let mut candidate = batch.clone();
+        candidate.push(block.clone());
+        let encoded = serde_json::to_vec(&ControlRequest::AppendContextBlocks {
+            snapshot_id: snapshot,
+            sequence,
+            blocks: candidate,
+        })?;
+        max_serialized_body = max_serialized_body.max(encoded.len());
+        assert!(
+            encoded.len() <= 32_768,
+            "one append exceeded the bounded body: {} bytes",
+            encoded.len()
+        );
+        if encoded.len() > 30_000 && !batch.is_empty() {
+            daemon
+                .append_context_blocks(ContextBlockBatch::new(
+                    snapshot,
+                    sequence,
+                    std::mem::take(&mut batch),
+                ))
+                .await?;
+            sequence = sequence.saturating_add(1);
+            let singleton = serde_json::to_vec(&ControlRequest::AppendContextBlocks {
+                snapshot_id: snapshot,
+                sequence,
+                blocks: vec![block.clone()],
+            })?;
+            max_serialized_body = max_serialized_body.max(singleton.len());
+            assert!(singleton.len() <= 32_768);
+        }
+        batch.push(block);
+        next_ordinal = next_ordinal.saturating_add(1);
+    }
+    if !batch.is_empty() {
+        daemon
+            .append_context_blocks(ContextBlockBatch::new(snapshot, sequence, batch))
+            .await?;
+    }
+    assert_eq!(next_ordinal, 5_000);
+    assert!(
+        sequence > 0,
+        "5000 blocks must span multiple append requests"
+    );
+    assert!(max_serialized_body <= 32_768);
+    daemon
+        .finalize_context_analysis(
+            ContextAnalysisFinalize::builder(snapshot, ContextAnalysisStatus::Complete, 2)
+                .request_content_hash(Some(analysis.request_content_hash))
+                .explicit_block_count(Some(5_000))
+                .analyzed_bytes(Some(analysis.analyzed_bytes))
+                .skipped_bytes(Some(analysis.skipped_bytes))
+                .visibility(analysis.visibility)
+                .duplicate_key_detected(Some(analysis.duplicate_key_detected))
+                .reference_resolved_locally(Some(
+                    analysis.visibility_facts.reference_resolved_locally,
+                ))
+                .correlation_status(ContextCorrelationStatusWire::Correlated)
+                .metrics(empty_context_metrics())
+                .delta(None)
+                .reconciliation(TokenReconciliation::reconcile(
+                    snapshot,
+                    analysis.visibility,
+                    None,
+                    None,
+                    false,
+                ))
+                .attempt_id(Some(receipt.attempt_id))
+                .build()?,
+        )
+        .await?;
+    daemon.shutdown().await?;
+
+    let database = Connection::open(directory.path().join("tracepress.sqlite3"))?;
+    let blocks: i64 = database.query_row(
+        "SELECT COUNT(*) FROM context_block_occurrences WHERE snapshot_id = ?1",
+        [snapshot.to_string()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(blocks, 5_000);
+    let snapshot_state: (String, Option<i64>) = database.query_row(
+        "SELECT status, completed_at_us FROM context_snapshots WHERE snapshot_id = ?1",
+        [snapshot.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(snapshot_state, ("complete".to_owned(), Some(2)));
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the scenario covers every rejected batch and recovery transition"
+)]
+async fn context_protocol_rejects_bad_batches_and_recovers_unfinalized_snapshots() -> TestResult {
+    let directory = TempDir::new()?;
+    let daemon = daemon(&directory).await?;
+    let session = daemon.start_session("t0").await?;
+    let other_session = daemon.start_session("t0-other").await?;
+    let inference = daemon
+        .create_operation(session.session_id, OperationKind::LlmInference, "t1", None)
+        .await?;
+    let receipt = daemon
+        .persist_provider_observation(PersistProviderObservation::new(
+            session.session_id,
+            inference,
+            ProviderObservation::new(1, request(), "t2")
+                .with_response(response(br#"{"status":"completed"}"#)),
+        ))
+        .await?;
+    let unknown_session = SessionId::generate(&UuidV7Generator::new());
+    let orphan_begin = daemon
+        .begin_context_analysis(ContextAnalysisBegin::new(
+            unknown_session,
+            receipt.request_id,
+            inference,
+            1,
+            1,
+        ))
+        .await;
+    assert!(matches!(
+        orphan_begin,
+        Err(DaemonError::UnknownSession { .. })
+    ));
+    let wrong_parent = daemon
+        .begin_context_analysis(ContextAnalysisBegin::new(
+            other_session.session_id,
+            receipt.request_id,
+            inference,
+            1,
+            1,
+        ))
+        .await;
+    assert!(matches!(
+        wrong_parent,
+        Err(DaemonError::InvalidContextAssociation { .. })
+    ));
+
+    let snapshot = daemon
+        .begin_context_analysis(ContextAnalysisBegin::new(
+            session.session_id,
+            receipt.request_id,
+            inference,
+            1,
+            1,
+        ))
+        .await?;
+    let analysis = analyze(
+        br#"{"input":[{"role":"user","content":[{"type":"input_text","text":"x"}]}]}"#,
+        context_limits()?,
+    );
+    let template = analysis
+        .blocks
+        .first()
+        .cloned()
+        .ok_or("fixture must produce one context block")?;
+    let mut child = template.clone();
+    child.ordinal = 0;
+    child.parent_ordinal = Some(1);
+    let mut parent = template.clone();
+    parent.ordinal = 1;
+    parent.parent_ordinal = None;
+    let bad_sequence = daemon
+        .append_context_blocks(ContextBlockBatch::new(snapshot, 1, vec![template.clone()]))
+        .await;
+    assert!(matches!(
+        bad_sequence,
+        Err(DaemonError::ContextSequence { .. })
+    ));
+    let bad_parent = daemon
+        .append_context_blocks(ContextBlockBatch::new(snapshot, 0, vec![child, parent]))
+        .await;
+    assert!(matches!(
+        bad_parent,
+        Err(DaemonError::InvalidContextBlock { .. })
+    ));
+    let orphan_append = daemon
+        .append_context_blocks(ContextBlockBatch::new(
+            ContextSnapshotId::generate(&UuidV7Generator::new()),
+            0,
+            vec![template.clone()],
+        ))
+        .await;
+    assert!(matches!(
+        orphan_append,
+        Err(DaemonError::UnknownContextSnapshot { .. })
+    ));
+    let mut first = template.clone();
+    first.ordinal = 0;
+    first.parent_ordinal = None;
+    daemon
+        .append_context_blocks(ContextBlockBatch::new(snapshot, 0, vec![first]))
+        .await?;
+    daemon
+        .finalize_context_analysis(
+            ContextAnalysisFinalize::builder(snapshot, ContextAnalysisStatus::Partial, 2)
+                .request_content_hash(Some(analysis.request_content_hash))
+                .explicit_block_count(Some(1))
+                .analyzed_bytes(Some(analysis.analyzed_bytes))
+                .skipped_bytes(Some(analysis.skipped_bytes))
+                .visibility(analysis.visibility)
+                .duplicate_key_detected(Some(analysis.duplicate_key_detected))
+                .reference_resolved_locally(Some(
+                    analysis.visibility_facts.reference_resolved_locally,
+                ))
+                .correlation_status(ContextCorrelationStatusWire::Correlated)
+                .metrics(empty_context_metrics())
+                .delta(None)
+                .reconciliation(TokenReconciliation::reconcile(
+                    snapshot,
+                    analysis.visibility,
+                    None,
+                    None,
+                    false,
+                ))
+                .attempt_id(Some(receipt.attempt_id))
+                .build()?,
+        )
+        .await?;
+    let duplicate_finalize = daemon
+        .finalize_context_analysis(
+            ContextAnalysisFinalize::builder(snapshot, ContextAnalysisStatus::Partial, 3)
+                .explicit_block_count(Some(1))
+                .visibility(analysis.visibility)
+                .correlation_status(ContextCorrelationStatusWire::Correlated)
+                .metrics(empty_context_metrics())
+                .delta(None)
+                .reconciliation(TokenReconciliation::reconcile(
+                    snapshot,
+                    analysis.visibility,
+                    None,
+                    None,
+                    false,
+                ))
+                .build()?,
+        )
+        .await;
+    assert!(matches!(
+        duplicate_finalize,
+        Err(DaemonError::UnknownContextSnapshot { .. })
+    ));
+
+    let second_inference = daemon
+        .create_operation(session.session_id, OperationKind::LlmInference, "t3", None)
+        .await?;
+    let second_receipt = daemon
+        .persist_provider_observation(PersistProviderObservation::new(
+            session.session_id,
+            second_inference,
+            ProviderObservation::new(2, request(), "t4")
+                .with_response(response(br#"{"status":"completed"}"#)),
+        ))
+        .await?;
+    let unfinished = daemon
+        .begin_context_analysis(ContextAnalysisBegin::new(
+            session.session_id,
+            second_receipt.request_id,
+            second_inference,
+            1,
+            4,
+        ))
+        .await?;
+    daemon
+        .append_context_blocks(ContextBlockBatch::new(unfinished, 0, vec![template]))
+        .await?;
+    daemon.shutdown().await?;
+
+    let writer = StorageWriter::open(StorageConfig::new(
+        directory.path().join("tracepress.sqlite3"),
+        Durability::Strict,
+        MaxIpcQueueItems::new(16)?,
+    ))
+    .await?;
+    let reopened = DaemonService::open(writer, "reopened").await?;
+    reopened.shutdown().await?;
+    let database = Connection::open(directory.path().join("tracepress.sqlite3"))?;
+    let recovered: (String, Option<i64>) = database.query_row(
+        "SELECT status, completed_at_us FROM context_snapshots WHERE snapshot_id = ?1",
+        [unfinished.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(recovered, ("partial".to_owned(), None));
     Ok(())
 }
 
@@ -619,6 +954,22 @@ fn table_count(database: &Connection, table: &str) -> rusqlite::Result<i64> {
     database.query_row(&format!("SELECT COUNT(*) FROM {table}"), [], |row| {
         row.get(0)
     })
+}
+
+fn context_limits() -> Result<ContextAnalysisLimits, Box<dyn std::error::Error>> {
+    Ok(ContextAnalysisLimits::new(ContextAnalysisLimitValues {
+        max_analyzed_bytes: ContextAnalysisLimits::ANALYZED_BYTES_CEILING,
+        max_blocks: ContextAnalysisLimits::MAX_BLOCKS,
+        max_json_depth: ContextAnalysisLimits::MAX_JSON_DEPTH,
+        max_string_bytes_inspected: ContextAnalysisLimits::MAX_STRING_BYTES_INSPECTED,
+        max_analysis_work_units: 100_000,
+        max_analysis_wall_time_ms: ContextAnalysisLimits::MAX_ANALYSIS_WALL_TIME_MS,
+        max_batches: ContextAnalysisLimits::MAX_BATCHES,
+    })?)
+}
+
+const fn empty_context_metrics() -> ContextAnalysisMetrics {
+    ContextAnalysisMetrics::new()
 }
 
 fn request() -> tracepress_provider::RequestObservation {

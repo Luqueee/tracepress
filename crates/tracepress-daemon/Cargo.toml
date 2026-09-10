@@ -20,6 +20,7 @@ tracing = { version = "0.1", default-features = false, features = ["std"] }
 tracepress-ipc = { path = "../tracepress-ipc" }
 tokio-util = "0.7"
 tracepress-core = { path = "../tracepress-core" }
+tracepress-context = { path = "../tracepress-context" }
 tracepress-storage = { path = "../tracepress-storage" }
 tracepress-provider = { path = "../tracepress-provider" }
 

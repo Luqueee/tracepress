@@ -7,12 +7,19 @@
 
 use std::collections::HashMap;
 
+mod context;
+
+pub use context::{
+    ContextAnalysisBegin, ContextAnalysisFinalize, ContextAnalysisMetrics, ContextBlockBatch,
+    ContextCorrelationStatusWire,
+};
 use thiserror::Error;
 use tokio::sync::Mutex;
 use tracepress_core::{
-    AttemptId, CausalEdge, CausalEdgeError, CausalRelationship, EventId, HttpStatusCode,
-    InferenceStatus, OperationId, OperationKind, OperationStatus, RequestId, RequestMetadata,
-    SessionId, SessionState, UsageStatus, UuidV7Generator,
+    AttemptId, CausalEdge, CausalEdgeError, CausalRelationship, ContextBlockOccurrenceId,
+    ContextSnapshotId, EventId, HttpStatusCode, InferenceStatus, OperationId, OperationKind,
+    OperationStatus, RequestId, RequestMetadata, SessionId, SessionState, UsageStatus,
+    UuidV7Generator,
 };
 use tracepress_provider::{
     AnomalyFlags, ObservationStatus as ProviderObservationStatus,
@@ -58,6 +65,47 @@ pub enum DaemonError {
     SessionNotActive {
         session_id: SessionId,
         state: SessionState,
+    },
+    /// The requested context snapshot is unknown or has already been finalized.
+    #[error("context snapshot {snapshot_id} is not active")]
+    UnknownContextSnapshot {
+        snapshot_id: tracepress_core::ContextSnapshotId,
+    },
+    /// A context analysis identity does not match its provider request and inference operation.
+    #[error("context analysis identities are not associated with session {session_id}")]
+    InvalidContextAssociation { session_id: SessionId },
+    /// An append sequence was not the next expected sequence.
+    #[error("context snapshot {snapshot_id} expected sequence {expected}, received {actual}")]
+    ContextSequence {
+        snapshot_id: tracepress_core::ContextSnapshotId,
+        expected: u32,
+        actual: u32,
+    },
+    /// A context append exceeded one of the bounded analysis dimensions.
+    #[error("context snapshot {snapshot_id} exceeded {dimension}")]
+    ContextLimit {
+        snapshot_id: tracepress_core::ContextSnapshotId,
+        dimension: &'static str,
+    },
+    /// A context block was not in the required document order or had an unknown parent.
+    #[error("context snapshot {snapshot_id} has invalid block ordinal or parent")]
+    InvalidContextBlock {
+        snapshot_id: tracepress_core::ContextSnapshotId,
+    },
+    /// A context snapshot was finalized more than once.
+    #[error("context snapshot {snapshot_id} was already finalized")]
+    ContextAlreadyFinalized {
+        snapshot_id: tracepress_core::ContextSnapshotId,
+    },
+    /// A finalize payload referred to a different snapshot.
+    #[error("context finalize payload does not match snapshot {snapshot_id}")]
+    ContextFinalizeMismatch {
+        snapshot_id: tracepress_core::ContextSnapshotId,
+    },
+    /// A context finalize payload was not internally consistent.
+    #[error("context finalize payload for snapshot {snapshot_id} is invalid")]
+    InvalidContextFinalize {
+        snapshot_id: tracepress_core::ContextSnapshotId,
     },
     /// The requested causal edge violates the core DAG contract.
     #[error(transparent)]
@@ -303,6 +351,26 @@ impl RecordCorrelationDegradation {
     }
 }
 
+/// A bounded count of context analyses rejected by observer backpressure.
+#[derive(Clone, Debug)]
+pub struct RecordContextAnalysisDropped {
+    session_id: SessionId,
+    dropped: u64,
+    observed_at_us: u64,
+}
+
+impl RecordContextAnalysisDropped {
+    /// Creates a context-analysis backpressure report for one active session.
+    #[must_use]
+    pub const fn new(session_id: SessionId, dropped: u64, observed_at_us: u64) -> Self {
+        Self {
+            session_id,
+            dropped,
+            observed_at_us,
+        }
+    }
+}
+
 /// Identities assigned to a persisted provider observation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -315,6 +383,28 @@ pub struct ProviderObservationReceipt {
     pub ordinal: u64,
 }
 
+impl ProviderObservationReceipt {
+    /// Returns the provider request identity using the Phase 2 correlation vocabulary.
+    #[must_use]
+    pub const fn provider_request_id(self) -> RequestId {
+        self.request_id
+    }
+}
+
+impl RecordedProviderObservation {
+    /// Returns the inference operation identity using the Phase 2 correlation vocabulary.
+    #[must_use]
+    pub const fn inference_operation_id(self) -> OperationId {
+        self.operation_id
+    }
+
+    /// Returns the provider request identity using the Phase 2 correlation vocabulary.
+    #[must_use]
+    pub const fn provider_request_id(self) -> RequestId {
+        self.receipt.request_id
+    }
+}
+
 /// Identities assigned to one observation recorded beneath a root operation.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -325,12 +415,23 @@ pub struct RecordedProviderObservation {
     pub receipt: ProviderObservationReceipt,
 }
 
+#[derive(Debug)]
+struct ActiveContextAnalysis {
+    session_id: SessionId,
+    inference_operation_id: OperationId,
+    analysis_version: u32,
+    next_sequence: u32,
+    next_ordinal: u32,
+    occurrences: HashMap<u32, ContextBlockOccurrenceId>,
+}
+
 /// Sole daemon owner of lifecycle memory and durable writes.
 #[derive(Debug)]
 pub struct DaemonService {
     writer: StorageWriter,
     ids: Mutex<UuidV7Generator>,
     sessions: Mutex<HashMap<SessionId, SessionRecord>>,
+    pub(crate) context_analyses: Mutex<HashMap<ContextSnapshotId, ActiveContextAnalysis>>,
     recovered_stale_sessions: u64,
 }
 
@@ -349,6 +450,7 @@ impl DaemonService {
             writer,
             ids: Mutex::new(UuidV7Generator::new()),
             sessions: Mutex::new(HashMap::new()),
+            context_analyses: Mutex::new(HashMap::new()),
             recovered_stale_sessions,
         };
         tracing::info!(
@@ -694,6 +796,58 @@ impl DaemonService {
         drop(generator);
         let _receipt = self.writer.submit(event).await?;
         tracing::info!(%session_id, ?reason, "correlation degraded");
+        Ok(())
+    }
+
+    /// Records one aggregate event for analyses dropped by observer backpressure.
+    ///
+    /// The event carries only the session, reason, count, and timestamp. It never carries
+    /// request content, block data, or provider usage.
+    ///
+    /// # Errors
+    /// Returns [`DaemonError::UnknownSession`] or [`DaemonError::SessionNotActive`] when the
+    /// session cannot accept another event, or a storage error when the event cannot commit.
+    #[allow(
+        clippy::significant_drop_tightening,
+        reason = "the session guard must outlive the durable append"
+    )]
+    pub async fn record_context_analysis_dropped(
+        &self,
+        input: RecordContextAnalysisDropped,
+    ) -> Result<(), DaemonError> {
+        let RecordContextAnalysisDropped {
+            session_id,
+            dropped,
+            observed_at_us,
+        } = input;
+        let sessions = self.sessions.lock().await;
+        let record = sessions
+            .get(&session_id)
+            .ok_or(DaemonError::UnknownSession { session_id })?;
+        if record.state != SessionState::Active {
+            return Err(DaemonError::SessionNotActive {
+                session_id,
+                state: record.state,
+            });
+        }
+        let generator = self.ids.lock().await;
+        let payload = serde_json::json!({
+            "session_id": session_id.to_string(),
+            "status": "observer_backpressure",
+            "dropped_count": dropped,
+        });
+        let event = WriteCommand::Event {
+            event_id: EventId::generate(&generator),
+            session_id: Some(session_id),
+            operation_id: None,
+            timestamp: observed_at_us.to_string(),
+            event_type: "context.analysis.dropped".to_owned(),
+            payload: payload.to_string().into_bytes().into(),
+            schema_version: CONTEXT_EVENT_SCHEMA_VERSION.to_owned(),
+        };
+        drop(generator);
+        let _receipt = self.writer.submit(event).await?;
+        tracing::info!(%session_id, dropped, "context analyses dropped");
         Ok(())
     }
 
@@ -1309,10 +1463,34 @@ pub enum ControlRequest {
         reason: CorrelationDegradation,
         observed_at: String,
     },
+    /// Records context analyses rejected by the bounded observer queue.
+    RecordContextAnalysisDropped {
+        session_id: SessionId,
+        dropped: u64,
+        observed_at_us: u64,
+    },
     /// Finishes a previously started session.
     FinishSession {
         session_id: SessionId,
         ended_at: String,
+    },
+    /// Begins a bounded shadow context analysis for an already recorded provider request.
+    BeginContextAnalysis {
+        session_id: SessionId,
+        provider_request_id: RequestId,
+        inference_operation_id: OperationId,
+        analysis_version: u32,
+        started_at_us: u64,
+    },
+    /// Appends one ordered batch of compact context block drafts.
+    AppendContextBlocks {
+        snapshot_id: ContextSnapshotId,
+        sequence: u32,
+        blocks: Vec<tracepress_context::ContextBlockDraft>,
+    },
+    /// Atomically finalizes one context analysis and its derived records.
+    FinalizeContextAnalysis {
+        summary: Box<context::ContextAnalysisFinalize>,
     },
 }
 
@@ -1333,6 +1511,14 @@ pub enum ControlResponse {
         session: Option<SessionSnapshot>,
         /// Operation created by the request, when applicable.
         operation_id: Option<OperationId>,
+        /// Provider request identity returned by provider observation recording.
+        provider_request_id: Option<RequestId>,
+        /// Provider attempt identity returned by provider observation recording.
+        attempt_id: Option<AttemptId>,
+        /// Inference operation identity returned by provider observation recording.
+        inference_operation_id: Option<OperationId>,
+        /// Context snapshot identity returned by `BeginContextAnalysis`.
+        context_snapshot_id: Option<ContextSnapshotId>,
     },
     /// Request failed inside the daemon.
     Error { message: String },
@@ -1346,6 +1532,10 @@ impl ControlResponse {
             state: state.into(),
             session: None,
             operation_id: None,
+            provider_request_id: None,
+            attempt_id: None,
+            inference_operation_id: None,
+            context_snapshot_id: None,
         }
     }
 }

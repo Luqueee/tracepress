@@ -12,17 +12,36 @@ use axum::response::Response;
 use axum::routing::post;
 use futures_util::{StreamExt as _, stream};
 use tokio::net::{TcpListener, TcpStream};
-use tracepress_core::{MaxRequestBodyBytes, MaxResponseBodyBytes};
+use tracepress_core::{ResourceLimits, ResourceLimitsConfig};
 use tracepress_provider::{
     ObservationStatus, ProviderEndpoint, ProviderResponseState, RequestObservation,
     ResponseObservation, UsageStatus,
 };
 use tracepress_proxy::{
-    ForwardId, ObservationSinkError, ProviderObservationSink, ProxyConfig, TransparentProxy,
-    TransportFailure,
+    ForwardId, ObservationSinkError, ProviderObservationSink, ProxyConfig,
+    RequestContextObservation, TransparentProxy, TransportFailure,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+fn resource_limits(
+    request_bytes: u64,
+    response_bytes: u64,
+) -> Result<ResourceLimits, Box<dyn std::error::Error>> {
+    Ok(ResourceLimits::try_from(ResourceLimitsConfig {
+        max_raw_bytes: Some(i128::from(request_bytes)),
+        max_request_body_bytes: Some(i128::from(request_bytes)),
+        max_response_body_bytes: Some(i128::from(response_bytes)),
+        max_decompressed_bytes: Some(i128::from(response_bytes)),
+        max_ipc_frame_bytes: Some(65_536),
+        max_ipc_queue_items: Some(128),
+        max_json_nesting: Some(64),
+        max_json_items: Some(100_000),
+        max_line_bytes: Some(i128::from(request_bytes)),
+        max_processing_time_ms: Some(250),
+        max_cpu_work_units: Some(1_000_000),
+    })?)
+}
 /// Concurrent forwards used to expose semantic parsing left on the forwarding task.
 const HOT_PATH_FORWARDS: usize = 12;
 /// Nested groups per body, sized to saturate the parser's bounded item budget.
@@ -119,10 +138,9 @@ impl Default for RecordingSink {
 }
 
 impl ProviderObservationSink for RecordingSink {
-    fn try_record_request(
+    fn try_record_request_context(
         &self,
-        forward: ForwardId,
-        observation: RequestObservation,
+        context: RequestContextObservation,
     ) -> Result<(), ObservationSinkError> {
         if self.request_delay > Duration::ZERO {
             std::thread::sleep(self.request_delay);
@@ -130,7 +148,7 @@ impl ProviderObservationSink for RecordingSink {
         self.requests
             .lock()
             .map_err(|_error| ObservationSinkError::rejected())?
-            .push((forward, observation));
+            .push((context.forward, context.observation));
         Ok(())
     }
 
@@ -558,9 +576,8 @@ async fn spawn_proxy(
     } = config;
     let proxy = TransparentProxy::new(ProxyConfig::new(
         upstream,
-        MaxRequestBodyBytes::new(request_limit)?,
-        MaxResponseBodyBytes::new(response_limit)?,
-    ))?
+        resource_limits(request_limit, response_limit)?,
+    )?)?
     .with_observation_sink(sink);
     let listener = TcpListener::bind("127.0.0.1:0").await?;
     let address = listener.local_addr()?;

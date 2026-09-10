@@ -15,14 +15,33 @@ use axum::http::{StatusCode, header};
 use axum::response::Response;
 use axum::routing::post;
 use tokio::net::{TcpListener, TcpStream};
-use tracepress_core::{MaxRequestBodyBytes, MaxResponseBodyBytes};
-use tracepress_provider::{ProviderEndpoint, RequestObservation, ResponseObservation};
+use tracepress_core::{ResourceLimits, ResourceLimitsConfig};
+use tracepress_provider::{ProviderEndpoint, ResponseObservation};
 use tracepress_proxy::{
-    ForwardId, ObservationSinkError, ProviderObservationSink, ProxyConfig, TransparentProxy,
-    TransportFailure,
+    ForwardId, ObservationSinkError, ProviderObservationSink, ProxyConfig,
+    RequestContextObservation, TransparentProxy, TransportFailure,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
+
+fn resource_limits(
+    request_bytes: u64,
+    response_bytes: u64,
+) -> Result<ResourceLimits, Box<dyn std::error::Error>> {
+    Ok(ResourceLimits::try_from(ResourceLimitsConfig {
+        max_raw_bytes: Some(i128::from(request_bytes)),
+        max_request_body_bytes: Some(i128::from(request_bytes)),
+        max_response_body_bytes: Some(i128::from(response_bytes)),
+        max_decompressed_bytes: Some(i128::from(response_bytes)),
+        max_ipc_frame_bytes: Some(65_536),
+        max_ipc_queue_items: Some(128),
+        max_json_nesting: Some(64),
+        max_json_items: Some(100_000),
+        max_line_bytes: Some(i128::from(request_bytes)),
+        max_processing_time_ms: Some(250),
+        max_cpu_work_units: Some(1_000_000),
+    })?)
+}
 
 /// Output items per buffered document, sized to the parser's bounded item budget.
 const DOCUMENT_OUTPUT_ITEMS: usize = 24_750;
@@ -119,10 +138,9 @@ impl CountingSink {
 }
 
 impl ProviderObservationSink for CountingSink {
-    fn try_record_request(
+    fn try_record_request_context(
         &self,
-        _forward: ForwardId,
-        _observation: RequestObservation,
+        _context: RequestContextObservation,
     ) -> Result<(), ObservationSinkError> {
         let _previous = self.requests.fetch_add(1, Ordering::Relaxed);
         Ok(())
@@ -236,9 +254,8 @@ fn spawn_isolated_proxy(
 ) -> Result<IsolatedProxy, Box<dyn std::error::Error>> {
     let proxy = TransparentProxy::new(ProxyConfig::new(
         upstream.clone(),
-        MaxRequestBodyBytes::new(4 * 1024 * 1024)?,
-        MaxResponseBodyBytes::new(4 * 1024 * 1024)?,
-    ))?
+        resource_limits(4 * 1024 * 1024, 4 * 1024 * 1024)?,
+    )?)?
     .with_observation_sink(sink);
     // Binding before the thread starts publishes the address without a readiness handshake.
     let listener = std::net::TcpListener::bind("127.0.0.1:0")?;

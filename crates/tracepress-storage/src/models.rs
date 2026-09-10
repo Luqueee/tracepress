@@ -464,6 +464,212 @@ impl EstimatedTokenComposition {
     }
 }
 
+/// Maximum number of context blocks returned by one metadata inspection.
+///
+/// The bound is part of the read contract: a large request never expands an IPC response with
+/// one row per block.
+pub const CONTEXT_INSPECTION_MAX_BLOCKS: usize = 10;
+
+/// A bounded, metadata-only view of one persisted context snapshot.
+///
+/// Values that were not observed remain `None`; this type never substitutes zero for missing
+/// evidence. String fields are canonical enum names or bounded provider metadata, never request
+/// content, tool arguments, paths, or fingerprints.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[non_exhaustive]
+pub struct ContextInspection {
+    /// Logical provider request identity selected by the query.
+    pub request_id: RequestId,
+    /// Durable context snapshot identity.
+    pub snapshot_id: ContextSnapshotId,
+    /// Session that owns the request.
+    pub session_id: SessionId,
+    /// Inference operation that produced the request.
+    pub inference_operation_id: OperationId,
+    /// Provider attempt used for reconciliation, when one was recorded.
+    pub attempt_id: Option<AttemptId>,
+    /// Provider family, when observed.
+    pub provider: Option<String>,
+    /// Provider protocol, when observed.
+    pub protocol: Option<String>,
+    /// Accepted request byte count.
+    pub request_bytes: Option<u64>,
+    /// Provider model identifier, bounded before it crosses IPC.
+    pub model: Option<String>,
+    /// Context analyzer version.
+    pub analysis_version: u32,
+    /// Context analyzer terminal status.
+    pub analysis_status: String,
+    /// Context-to-provider correlation state, when recorded.
+    pub correlation_status: Option<String>,
+    /// Visibility and logical-context state.
+    pub visibility: ContextInspectionVisibility,
+    /// Provider-reported input tokens, when observed.
+    pub provider_input_tokens: Option<u64>,
+    /// Local visible-context estimate.
+    pub visible_estimated_tokens: Option<u64>,
+    /// Estimator identifier.
+    pub estimator: Option<String>,
+    /// Estimator version.
+    pub estimator_version: Option<u32>,
+    /// Confidence class for the local estimate.
+    pub estimate_confidence: Option<String>,
+    /// Reconciliation comparability status.
+    pub reconciliation_status: Option<String>,
+    /// Signed residual (`provider_input_tokens - visible_estimated_tokens`).
+    pub residual_tokens: Option<i64>,
+    /// Bounded token composition and named shares.
+    pub composition: ContextInspectionComposition,
+    /// Cross-snapshot repetition metrics.
+    pub repetition: ContextInspectionRepetition,
+    /// Stable explicit-prefix estimate, when available.
+    pub stable_explicit_prefix_estimate: Option<u64>,
+    /// Analysis coverage and visibility evidence.
+    pub coverage: ContextInspectionCoverage,
+    /// Largest blocks by raw bytes, bounded to [`CONTEXT_INSPECTION_MAX_BLOCKS`].
+    pub largest_blocks: Vec<ContextInspectionBlock>,
+}
+
+/// Visibility metadata for one context inspection.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[non_exhaustive]
+pub struct ContextInspectionVisibility {
+    /// Whether every request byte was explicit to Tracepress.
+    pub explicit_request_complete: Option<bool>,
+    /// Whether the request reuses a previous provider response.
+    pub uses_previous_response: Option<bool>,
+    /// Whether provider conversation state contributes context.
+    pub uses_conversation_state: Option<bool>,
+    /// Whether provider-held item references contribute context.
+    pub uses_item_references: Option<bool>,
+    /// Whether a provider-held prompt reference contributes context.
+    pub uses_prompt_reference: Option<bool>,
+    /// Whether external files contribute context.
+    pub uses_external_files: Option<bool>,
+    /// Whether external images contribute context.
+    pub uses_external_images: Option<bool>,
+    /// Whether opaque items were observed.
+    pub contains_opaque_items: Option<bool>,
+    /// Logical accounting status.
+    pub logical_context_status: Option<String>,
+    /// Whether duplicate object keys were observed.
+    pub duplicate_key_detected: Option<bool>,
+    /// Whether references were resolved locally.
+    pub reference_resolved_locally: Option<bool>,
+}
+
+/// A named token estimate in a composition breakdown.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[non_exhaustive]
+pub struct ContextInspectionNamedEstimate {
+    /// Stable enum name.
+    pub name: String,
+    /// Estimated tokens attributed to this name.
+    pub estimated_tokens: Option<u64>,
+}
+
+/// Bounded token composition for a context snapshot.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[non_exhaustive]
+pub struct ContextInspectionComposition {
+    /// Estimates grouped by structural block kind.
+    pub by_kind: Vec<ContextInspectionNamedEstimate>,
+    /// Estimates grouped by conversational role.
+    pub by_role: Vec<ContextInspectionNamedEstimate>,
+    /// Estimates grouped by producer origin.
+    pub by_origin: Vec<ContextInspectionNamedEstimate>,
+    /// Share of estimated tokens in tool definitions.
+    pub estimated_tool_definition_share: Option<f64>,
+    /// Share of estimated tokens in tool results.
+    pub estimated_tool_result_share: Option<f64>,
+    /// Share of estimated tokens in human-authored text.
+    pub estimated_human_text_share: Option<f64>,
+    /// Share of estimated tokens in assistant history.
+    pub estimated_assistant_history_share: Option<f64>,
+    /// Share of estimated tokens in unique content.
+    pub estimated_unique_content_share: Option<f64>,
+    /// Share of estimated tokens in repeated content.
+    pub estimated_repeated_content_share: Option<f64>,
+    /// Number of tool definitions observed.
+    pub tool_count: Option<u64>,
+    /// Bytes occupied by tool schemas.
+    pub schema_bytes: Option<u64>,
+    /// Estimated tokens in tool schemas.
+    pub estimated_schema_tokens: Option<u64>,
+    /// Largest tool schema in bytes.
+    pub largest_tool_schema: Option<u64>,
+    /// Estimated tokens in repeated tool schemas.
+    pub repeated_schema_tokens: Option<u64>,
+    /// Signals raised across analyzed blocks.
+    pub opportunity_signals: Vec<String>,
+}
+
+/// Cross-snapshot repetition and stable-prefix metrics.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[non_exhaustive]
+pub struct ContextInspectionRepetition {
+    /// Number of blocks repeated from the previous snapshot.
+    pub repeated_blocks: Option<u64>,
+    /// Number of new blocks.
+    pub new_blocks: Option<u64>,
+    /// Number of changed blocks.
+    pub changed_blocks: Option<u64>,
+    /// Number of removed blocks.
+    pub removed_blocks: Option<u64>,
+    /// Estimated tokens in repeated blocks.
+    pub repeated_estimated_tokens: Option<u64>,
+    /// Estimated tokens in new blocks.
+    pub new_estimated_tokens: Option<u64>,
+    /// Stable common-prefix block count.
+    pub common_prefix_blocks: Option<u64>,
+    /// Estimated tokens in the stable common prefix.
+    pub common_prefix_estimated_tokens: Option<u64>,
+}
+
+/// Coverage fields retained by bounded context analysis.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[non_exhaustive]
+pub struct ContextInspectionCoverage {
+    /// Number of explicit blocks retained.
+    pub explicit_block_count: Option<u64>,
+    /// Bytes admitted to analysis.
+    pub analyzed_bytes: Option<u64>,
+    /// Bytes skipped by analysis bounds.
+    pub skipped_bytes: Option<u64>,
+    /// Explicit bytes reported by aggregate metrics.
+    pub explicit_bytes: Option<u64>,
+}
+
+/// Metadata for one of the largest context blocks.
+#[derive(Clone, Debug, serde::Deserialize, serde::Serialize)]
+#[non_exhaustive]
+pub struct ContextInspectionBlock {
+    /// Stable position in the request.
+    pub ordinal: u64,
+    /// Structural block kind.
+    pub kind: String,
+    /// Conversational role.
+    pub role: String,
+    /// Producer origin.
+    pub origin: String,
+    /// Raw bytes occupied by the block.
+    pub raw_bytes: u64,
+    /// Local estimate for this block.
+    pub estimated_tokens: Option<u64>,
+    /// Detector result, when available.
+    pub detected_kind: Option<String>,
+    /// Detector confidence, when available.
+    pub detector_confidence: Option<f64>,
+    /// Detector implementation version, when available.
+    pub detector_version: Option<u32>,
+    /// Structural opportunity signals only.
+    pub opportunity_signals: Vec<String>,
+    /// Existing estimate attached to a raised opportunity signal.
+    pub candidate_estimated_tokens: Option<u64>,
+    /// Bounded repetition score.
+    pub repetition_score: Option<f64>,
+}
+
 /// One typed mutation accepted by the daemon-owned `SQLite` writer.
 #[allow(
     missing_docs,

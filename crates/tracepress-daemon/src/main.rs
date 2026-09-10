@@ -253,17 +253,28 @@ async fn handle_request(
         }
         ControlRequest::RecordContextAnalysisDropped {
             session_id,
+            reason,
             dropped,
             observed_at_us,
         } => {
-            match daemon
-                .record_context_analysis_dropped(RecordContextAnalysisDropped::new(
-                    session_id,
-                    dropped,
-                    observed_at_us,
-                ))
-                .await
+            let input = match RecordContextAnalysisDropped::builder()
+                .session_id(session_id)
+                .reason(reason)
+                .dropped(dropped)
+                .observed_at_us(observed_at_us)
+                .build()
             {
+                Ok(input) => input,
+                Err(error) => {
+                    return (
+                        ControlResponse::Error {
+                            message: error.to_string(),
+                        },
+                        false,
+                    );
+                }
+            };
+            match daemon.record_context_analysis_dropped(input).await {
                 Ok(()) => (ControlResponse::ok("running"), false),
                 Err(error) => (
                     ControlResponse::Error {
@@ -273,6 +284,20 @@ async fn handle_request(
                 ),
             }
         }
+        ControlRequest::Context { request_id } => match daemon.inspect_context(request_id).await {
+            Ok(inspection) => (
+                ControlResponse::Context {
+                    inspection: Box::new(inspection),
+                },
+                false,
+            ),
+            Err(error) => (
+                ControlResponse::Error {
+                    message: error.to_string(),
+                },
+                false,
+            ),
+        },
         ControlRequest::FinishSession {
             session_id,
             ended_at,

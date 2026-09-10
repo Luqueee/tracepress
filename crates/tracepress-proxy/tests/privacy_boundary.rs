@@ -17,9 +17,9 @@ use tracepress_provider::{
     ResponseObservation, UsageStatus,
 };
 use tracepress_proxy::{
-    ForwardId, ForwardMetadata, InboundRoute, MetadataSink, MetadataSinkError,
-    ObservationSinkError, ProviderObservationSink, ProxyConfig, RequestContextObservation,
-    TransparentProxy, TransportFailure,
+    ContextAnalysisMode, ContextAnalysisObservation, ForwardId, ForwardMetadata, InboundRoute,
+    MetadataSink, MetadataSinkError, ObservationSinkError, ProviderObservationSink, ProxyConfig,
+    RequestContextObservation, TransparentProxy, TransportFailure,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -114,6 +114,12 @@ impl ProviderObservationSink for RecordingSink {
             .lock()
             .map_err(|_error| ObservationSinkError::rejected())?
             .push((context.forward, context.observation));
+        Ok(())
+    }
+    fn try_record_context_analysis(
+        &self,
+        _observation: ContextAnalysisObservation,
+    ) -> Result<(), ObservationSinkError> {
         Ok(())
     }
 
@@ -549,6 +555,7 @@ async fn spawn_proxy(
     let proxy = TransparentProxy::new(ProxyConfig::new(
         upstream,
         resource_limits(request_limit, response_limit)?,
+        ContextAnalysisMode::Shadow,
     )?)?
     .with_metadata_sink(Arc::<RecordingSink>::clone(&sink))
     .with_observation_sink(Arc::<RecordingSink>::clone(&sink));

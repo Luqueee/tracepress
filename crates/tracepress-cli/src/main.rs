@@ -18,7 +18,7 @@ use std::{
     path::PathBuf,
     process::Stdio,
     sync::{
-        Arc,
+        Arc, Condvar, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
@@ -51,15 +51,27 @@ use tracepress_provider::{
     ProviderEndpoint, ProviderResponseState, RequestObservation, ResponseObservation,
 };
 use tracepress_proxy::{
-    ForwardId, ForwardMetadata, InboundRoute, MetadataSink, MetadataSinkError,
-    ObservationSinkError, ProviderObservationSink, ProxyConfig, RequestContextObservation,
-    TransparentProxy, TransportFailure,
+    BackgroundTaskSpawner, ContextAnalysisDropReason, ContextAnalysisMode,
+    ContextAnalysisObservation, ContextAnalysisOutcome, ForwardId, ForwardMetadata, InboundRoute,
+    MetadataSink, MetadataSinkError, ObservationSinkError, ProviderObservationSink, ProxyConfig,
+    RequestContextObservation, TransparentProxy, TransportFailure,
+};
+use tracepress_storage::{
+    ContextInspection, ContextInspectionBlock, ContextInspectionNamedEstimate,
 };
 
 const FRAME_BYTES: u64 = 65_536;
 
 /// Bounded queue of transport and semantic records awaiting durable recording.
 const RECORDER_QUEUE_ITEMS: usize = 128;
+
+/// Explicit cap for heavy context-ingestion jobs. One item may contain thousands of blocks, so
+/// this queue is intentionally much smaller than the IPC item-count queue.
+const CONTEXT_INGESTION_QUEUE_HARD_CAP: usize = 4;
+
+fn context_ingestion_queue_capacity(configured: usize) -> usize {
+    configured.clamp(1, CONTEXT_INGESTION_QUEUE_HARD_CAP)
+}
 
 /// Bound on forwards whose transport and semantic halves are still being correlated.
 const IN_FLIGHT_FORWARDS: usize = 64;
@@ -72,8 +84,9 @@ const IN_FLIGHT_FORWARDS: usize = 64;
 /// likely to still have a half in flight.
 const RETIRED_IDENTITIES: usize = 256;
 
-/// Maximum wait for the recorder to drain after the agent exits.
-const RECORDER_DRAIN_SECONDS: u64 = 30;
+/// Maximum total wait, after the agent and proxy have stopped, for provider observers, the
+/// recorder, and context ingestion to finish.
+const RECORDER_DRAIN_TIMEOUT: Duration = Duration::from_secs(30);
 
 /// Correlation accounting of one run, published while the recorder is still working.
 ///
@@ -128,6 +141,8 @@ enum RunEvent {
     /// Allowlisted transport facts, observed once per forward.
     Transport(ForwardMetadata),
     RequestContext(Box<RequestContextObservation>),
+    /// The detached Phase 3 outcome for a previously parsed request.
+    ContextAnalysis(ForwardId, ContextAnalysisOutcome),
     /// The interpreted response of one forward.
     Response(ForwardId, Box<ResponseObservation>),
     /// The classified transport failure of a forward that obtained no upstream response.
@@ -149,28 +164,140 @@ struct ContextIngestionJob {
     correlation: CorrelationStatus,
 }
 
+/// Compact provider receipt retained while the detached context outcome is still in flight.
+#[derive(Debug)]
+struct ContextReceipt {
+    provider_request_id: RequestId,
+    attempt_id: AttemptId,
+    inference_operation_id: OperationId,
+    provider_input_tokens: Option<u64>,
+    provider_usage_comparable: bool,
+    correlation: CorrelationStatus,
+}
+
 struct ContextAppendInput<'analysis> {
     snapshot_id: ContextSnapshotId,
     analysis: &'analysis ContextAnalysisResult,
     status: ContextAnalysisStatus,
 }
 
-/// Accounting for context analyses rejected by the bounded ingestion queue.
+/// Accounting for context analyses rejected before context persistence.
 #[derive(Debug, Default)]
 struct ContextCounters {
     observer_backpressure: AtomicU64,
+    resource_limit: AtomicU64,
+    malformed: AtomicU64,
+    correlation_degraded: AtomicU64,
+    unsupported: AtomicU64,
+    cancelled: AtomicU64,
 }
 
 impl ContextCounters {
-    fn observer_backpressure(&self) {
-        let _counted = self.observer_backpressure.fetch_add(1, Ordering::Relaxed);
+    const fn counter(&self, reason: ContextAnalysisDropReason) -> &AtomicU64 {
+        match reason {
+            ContextAnalysisDropReason::ObserverBackpressure => &self.observer_backpressure,
+            ContextAnalysisDropReason::ResourceLimit => &self.resource_limit,
+            ContextAnalysisDropReason::Malformed => &self.malformed,
+            ContextAnalysisDropReason::CorrelationDegraded => &self.correlation_degraded,
+            ContextAnalysisDropReason::Cancelled => &self.cancelled,
+            _ => &self.unsupported,
+        }
+    }
+
+    fn dropped(&self, reason: ContextAnalysisDropReason) {
+        let _counted = self.counter(reason).fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn count(&self, reason: ContextAnalysisDropReason) -> u64 {
+        self.counter(reason).load(Ordering::Relaxed)
     }
 
     fn report(&self) -> String {
         format!(
-            "context_observer_backpressure_total={}",
+            "context_observer_backpressure_total={}\ncontext_resource_limit_total={}\ncontext_malformed_total={}\ncontext_correlation_degraded_total={}\ncontext_unsupported_total={}\ncontext_cancelled_total={}",
             self.observer_backpressure.load(Ordering::Relaxed),
+            self.resource_limit.load(Ordering::Relaxed),
+            self.malformed.load(Ordering::Relaxed),
+            self.correlation_degraded.load(Ordering::Relaxed),
+            self.unsupported.load(Ordering::Relaxed),
+            self.cancelled.load(Ordering::Relaxed),
         )
+    }
+}
+
+/// Coordinates the detached transport handoff with its terminal provider observation.
+///
+/// Each metadata event is submitted before the matching response observer can run. A response
+/// observer that races the metadata worker waits on this latch, preserving the queue's event order
+/// without making the forwarding task wait for recorder capacity.
+#[derive(Debug, Default)]
+struct TransportOrdering {
+    pending: Mutex<BTreeMap<ForwardId, Arc<TransportLatch>>>,
+}
+
+#[derive(Debug, Default)]
+struct TransportLatch {
+    complete: Mutex<bool>,
+    wake: Condvar,
+}
+
+impl TransportOrdering {
+    fn register(&self, forward: ForwardId) -> Arc<TransportLatch> {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        Arc::clone(
+            pending
+                .entry(forward)
+                .or_insert_with(|| Arc::new(TransportLatch::default())),
+        )
+    }
+
+    fn take(&self, forward: ForwardId) -> Option<Arc<TransportLatch>> {
+        self.pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .remove(&forward)
+    }
+
+    fn remove(&self, forward: ForwardId, latch: &Arc<TransportLatch>) {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let remove = pending
+            .get(&forward)
+            .is_some_and(|current| Arc::ptr_eq(current, latch));
+        if remove {
+            let _ = pending.remove(&forward);
+        }
+    }
+}
+
+impl TransportLatch {
+    fn complete(&self) {
+        let mut complete = self
+            .complete
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *complete = true;
+        drop(complete);
+        self.wake.notify_all();
+    }
+
+    fn wait(&self) {
+        let mut complete = self
+            .complete
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while !*complete {
+            complete = self
+                .wake
+                .wait(complete)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        drop(complete);
     }
 }
 
@@ -181,6 +308,8 @@ impl ContextCounters {
 #[derive(Debug)]
 struct RecorderSink {
     sender: tokio::sync::mpsc::Sender<RunEvent>,
+    background: BackgroundTaskSpawner,
+    ordering: Arc<TransportOrdering>,
 }
 
 impl RecorderSink {
@@ -189,20 +318,77 @@ impl RecorderSink {
             .try_send(event)
             .map_err(|_error| MetadataSinkError::rejected())
     }
+
+    /// Enqueues one transport event from a tracked blocking task so the forwarding task never
+    /// waits for recorder capacity.
+    fn offer_transport(&self, metadata: ForwardMetadata) -> Result<(), MetadataSinkError> {
+        let forward = metadata.forward;
+        let latch = self.ordering.register(forward);
+        let task_latch = Arc::clone(&latch);
+        let ordering = Arc::clone(&self.ordering);
+        let sender = self.sender.clone();
+        if !self.background.spawn_blocking(move || {
+            let _ = sender.blocking_send(RunEvent::Transport(metadata));
+            task_latch.complete();
+            ordering.remove(forward, &task_latch);
+        }) {
+            latch.complete();
+            self.ordering.remove(forward, &latch);
+            return Err(MetadataSinkError::rejected());
+        }
+        Ok(())
+    }
+
+    /// Preserves transport-before-response ordering without making the forwarding or observer
+    /// runtime task wait. The one-shot wait and durable send are both covered by the shutdown
+    /// tracker.
+    fn offer_ordered(&self, forward: ForwardId, event: RunEvent) -> Result<(), MetadataSinkError> {
+        let Some(latch) = self.ordering.take(forward) else {
+            return self.offer_durable(event);
+        };
+        let task_latch = Arc::clone(&latch);
+        let sender = self.sender.clone();
+        if !self.background.spawn_blocking(move || {
+            task_latch.wait();
+            let _ = sender.blocking_send(event);
+        }) {
+            latch.complete();
+            self.ordering.remove(forward, &latch);
+            return Err(MetadataSinkError::rejected());
+        }
+        Ok(())
+    }
+
+    /// Provider observations are produced by detached observer tasks, so a full recorder queue
+    /// may stall those tasks without stalling the forwarding path. Waiting here preserves every
+    /// Phase 2 provider receipt instead of silently dropping an observation during a burst.
+    fn offer_durable(&self, event: RunEvent) -> Result<(), MetadataSinkError> {
+        self.sender
+            .blocking_send(event)
+            .map_err(|_error| MetadataSinkError::rejected())
+    }
 }
 
 impl MetadataSink for RecorderSink {
     fn try_record(&self, metadata: ForwardMetadata) -> Result<(), MetadataSinkError> {
-        self.offer(RunEvent::Transport(metadata))
+        self.offer_transport(metadata)
     }
 }
-
 impl ProviderObservationSink for RecorderSink {
     fn try_record_request_context(
         &self,
         observation: RequestContextObservation,
     ) -> Result<(), ObservationSinkError> {
-        self.offer(RunEvent::RequestContext(Box::new(observation)))
+        self.offer_durable(RunEvent::RequestContext(Box::new(observation)))
+    }
+    fn try_record_context_analysis(
+        &self,
+        observation: ContextAnalysisObservation,
+    ) -> Result<(), ObservationSinkError> {
+        self.offer(RunEvent::ContextAnalysis(
+            observation.forward,
+            observation.outcome,
+        ))
     }
 
     fn try_record_response(
@@ -210,7 +396,8 @@ impl ProviderObservationSink for RecorderSink {
         forward: ForwardId,
         observation: ResponseObservation,
     ) -> Result<(), ObservationSinkError> {
-        self.offer(RunEvent::Response(forward, Box::new(observation)))
+        self.offer_ordered(forward, RunEvent::Response(forward, Box::new(observation)))
+            .map_err(|_error| ObservationSinkError::rejected())
     }
 
     fn try_record_transport_failure(
@@ -218,7 +405,8 @@ impl ProviderObservationSink for RecorderSink {
         forward: ForwardId,
         failure: TransportFailure,
     ) -> Result<(), ObservationSinkError> {
-        self.offer(RunEvent::TransportFailure(forward, failure))
+        self.offer_durable(RunEvent::TransportFailure(forward, failure))
+            .map_err(|_error| ObservationSinkError::rejected())
     }
 }
 
@@ -234,7 +422,9 @@ struct PendingObservation {
 struct ForwardState {
     request: Option<PendingObservation>,
     response: Option<ResponseObservation>,
-    context: Option<ContextAnalysisResult>,
+    context: Option<ContextAnalysisOutcome>,
+    /// A Phase 2 request event arrived before its detached Phase 3 outcome.
+    context_pending: bool,
     status_code: Option<u16>,
     transport_failure: Option<TransportFailure>,
     transport: bool,
@@ -247,7 +437,7 @@ impl ForwardState {
     /// A response without its request half carries no logical request, so it is dropped in
     /// favour of whatever transport evidence the forward has, and the forward reports that its
     /// correlation is missing rather than presenting transport evidence as a whole exchange.
-    fn evidence(&mut self) -> ForwardEvidence {
+    fn evidence(&mut self, forward: ForwardId) -> ForwardEvidence {
         let status_code = self.status_code;
         let response = self.response.take();
         let context = self.context.take();
@@ -255,6 +445,7 @@ impl ForwardState {
         let orphaned_semantic =
             self.request.is_none() && (response.is_some() || transport_failure.is_some());
         ForwardEvidence {
+            forward,
             semantic: self.request.take().map(|pending| SemanticRecord {
                 pending,
                 response,
@@ -267,10 +458,10 @@ impl ForwardState {
         }
     }
 }
-
 /// Everything one settled forward contributes to durable storage.
 #[derive(Debug)]
 struct ForwardEvidence {
+    forward: ForwardId,
     semantic: Option<SemanticRecord>,
     orphaned_semantic: bool,
     transport: bool,
@@ -281,9 +472,14 @@ struct ForwardEvidence {
 struct SemanticRecord {
     pending: PendingObservation,
     response: Option<ResponseObservation>,
-    context: Option<ContextAnalysisResult>,
+    context: Option<ContextAnalysisOutcome>,
     status_code: Option<u16>,
     transport_failure: Option<TransportFailure>,
+}
+struct RecordObservationInput {
+    forward: ForwardId,
+    semantic: SemanticRecord,
+    correlation: CorrelationStatus,
 }
 
 /// Joins the transport and semantic records of every forward by correlation identity.
@@ -303,6 +499,10 @@ struct RunRecorder {
     context_sender: tokio::sync::mpsc::Sender<ContextIngestionJob>,
     context_counters: Arc<ContextCounters>,
     forwards: BTreeMap<ForwardId, ForwardState>,
+    /// Terminal response halves retained briefly when a request parser finishes after eviction.
+    retired_orphans: BTreeMap<ForwardId, ForwardState>,
+    /// Bounded receipts waiting for a detached context outcome.
+    pending_context: BTreeMap<ForwardId, ContextReceipt>,
     /// Identities dropped from correlation state that the watermark does not cover yet.
     ///
     /// Bounded by [`RETIRED_IDENTITIES`]; its contiguous prefix is folded into the watermark.
@@ -328,6 +528,9 @@ impl RunRecorder {
                 RunEvent::RequestContext(observation) => {
                     self.request_context(*observation).await;
                 }
+                RunEvent::ContextAnalysis(forward, outcome) => {
+                    self.context_analysis(forward, outcome).await;
+                }
                 RunEvent::Response(forward, observation) => {
                     self.response(forward, *observation).await;
                 }
@@ -342,7 +545,10 @@ impl RunRecorder {
             if state.settled {
                 continue;
             }
-            let evidence = state.evidence();
+            if state.request.is_none() {
+                self.drop_unpaired_context(&mut state);
+            }
+            let evidence = state.evidence(forward);
             // The run ending is not a bound degradation: the forward keeps the evidence it has.
             self.record(evidence, CorrelationStatus::Correlated).await;
         }
@@ -356,30 +562,56 @@ impl RunRecorder {
             return match self.record_forward().await? {
                 ControlResponse::Ok { .. } => Ok(()),
                 ControlResponse::Error { message } => Err(message),
+                ControlResponse::Context { .. } => {
+                    Err("daemon returned an unexpected context response".to_owned())
+                }
             };
         }
-        self.admit(metadata.forward).await;
-        let Some(state) = self.forwards.get_mut(&metadata.forward) else {
-            return Ok(());
+        let evidence = {
+            self.admit(metadata.forward).await;
+            let Some(state) = self.forwards.get_mut(&metadata.forward) else {
+                return Ok(());
+            };
+            if state.settled {
+                return Ok(());
+            }
+            state.transport = true;
+            state.status_code = metadata.status_code;
+            if state.request.is_none() || state.response.is_none() {
+                return Ok(());
+            }
+            // Metadata is handed off from a tracked blocking task. A response observer can
+            // therefore reach the recorder first; settle only once both terminal halves and
+            // transport status are present so successful attempts keep their status code.
+            state.settled = true;
+            state.evidence(metadata.forward)
         };
-        if state.settled {
-            return Ok(());
-        }
-        state.transport = true;
-        state.status_code = metadata.status_code;
+        self.record(evidence, CorrelationStatus::Correlated).await;
         Ok(())
     }
 
-    /// Buffers a request and its detached analysis atomically before checking terminal evidence.
-    ///
-    /// Responses can reach the recorder before the blocking observer finishes. Keeping the pair
-    /// in one recorder event prevents that race from silently settling a provider request before
-    /// its context result is attached.
+    /// Buffers the Phase 2 request half before dispatch and waits for its detached Phase 3 outcome
+    /// before checking terminal evidence.
     async fn request_context(&mut self, observation: RequestContextObservation) {
         let forward = observation.forward;
         let Ok(started_at) = current_timestamp() else {
             return;
         };
+        if let Some(mut state) = self.retired_orphans.remove(&forward) {
+            if state.settled {
+                return;
+            }
+            state.request = Some(PendingObservation {
+                request: observation.observation,
+                started_at,
+            });
+            state.context = observation.context;
+            state.context_pending = state.context.is_none();
+            state.settled = true;
+            let evidence = state.evidence(forward);
+            self.record(evidence, CorrelationStatus::Correlated).await;
+            return;
+        }
         self.admit(forward).await;
         let Some(state) = self.forwards.get_mut(&forward) else {
             return;
@@ -391,19 +623,47 @@ impl RunRecorder {
             request: observation.observation,
             started_at,
         });
-        state.context = Some(observation.analysis);
+        state.context = observation.context;
+        state.context_pending = state.context.is_none();
         if state.response.is_none() && state.transport_failure.is_none() {
             return;
         }
         state.settled = true;
-        let evidence = state.evidence();
+        let evidence = state.evidence(forward);
+        self.record(evidence, CorrelationStatus::Correlated).await;
+    }
+
+    /// Attaches the detached Phase 3 outcome after the forwarding task has crossed dispatch.
+    async fn context_analysis(&mut self, forward: ForwardId, outcome: ContextAnalysisOutcome) {
+        if let Some(receipt) = self.pending_context.remove(&forward) {
+            self.enqueue_context(&receipt, outcome);
+            return;
+        }
+        let Some(state) = self.forwards.get_mut(&forward) else {
+            self.context_counters
+                .dropped(ContextAnalysisDropReason::CorrelationDegraded);
+            return;
+        };
+        if state.settled {
+            self.context_counters
+                .dropped(ContextAnalysisDropReason::CorrelationDegraded);
+            return;
+        }
+        state.context = Some(outcome);
+        state.context_pending = false;
+        if state.request.is_none() || state.response.is_none() && state.transport_failure.is_none()
+        {
+            return;
+        }
+        state.settled = true;
+        let evidence = state.evidence(forward);
         self.record(evidence, CorrelationStatus::Correlated).await;
     }
 
     /// Buffers the terminal semantic response half, settling the forward once paired.
     ///
-    /// The proxy delivers the request half from its own task, so it may still be in flight
-    /// here; the forward then waits for it instead of losing its logical request.
+    /// The forwarding half reports transport metadata from a detached task, so it may still be
+    /// in flight here; successful responses wait for that status before they are persisted.
     async fn response(&mut self, forward: ForwardId, observation: ResponseObservation) {
         self.admit(forward).await;
         let Some(state) = self.forwards.get_mut(&forward) else {
@@ -413,19 +673,18 @@ impl RunRecorder {
             return;
         }
         state.response = Some(observation);
-        if state.request.is_none() {
+        if state.request.is_none() || !state.transport {
             return;
         }
         state.settled = true;
-        let evidence = state.evidence();
+        let evidence = state.evidence(forward);
         self.record(evidence, CorrelationStatus::Correlated).await;
     }
 
     /// Settles a forward that obtained no upstream response with its transport evidence.
     ///
     /// The forwarding half reports the failure from its own task, so the request half may still
-    /// be in flight here; the forward then waits for it instead of losing its logical request.
-    /// A failed forward is never left pending: its attempt is closed with the failure class.
+    /// be in flight here; the forward then waits for it and its detached context outcome.
     async fn transport_failure(&mut self, forward: ForwardId, failure: TransportFailure) {
         self.admit(forward).await;
         let Some(state) = self.forwards.get_mut(&forward) else {
@@ -439,7 +698,7 @@ impl RunRecorder {
             return;
         }
         state.settled = true;
-        let evidence = state.evidence();
+        let evidence = state.evidence(forward);
         self.record(evidence, CorrelationStatus::Correlated).await;
     }
 
@@ -472,7 +731,34 @@ impl RunRecorder {
             if state.settled {
                 continue;
             }
-            let evidence = state.evidence();
+            if state.request.is_none() {
+                self.drop_unpaired_context(&mut state);
+            }
+            if state.request.is_none()
+                && (state.response.is_some() || state.transport_failure.is_some())
+            {
+                // Terminal semantic evidence without a request cannot become a provider row.
+                // Persist its transport-only operation now, then retain a settled tombstone so
+                // the late parser half is consumed rather than re-admitting this identity.
+                let evidence = state.evidence(oldest);
+                self.record(
+                    evidence,
+                    CorrelationStatus::Degraded(CorrelationDegradation::InFlightLimit),
+                )
+                .await;
+                let _previous = self.retired_orphans.insert(
+                    oldest,
+                    ForwardState {
+                        settled: true,
+                        ..state
+                    },
+                );
+                while self.retired_orphans.len() > RETIRED_IDENTITIES {
+                    let _forgotten = self.retired_orphans.pop_first();
+                }
+                continue;
+            }
+            let evidence = state.evidence(oldest);
             // The bound, not the exchange, ended this forward's correlation: it is recorded
             // with the evidence it has and marked degraded, never as a whole exchange.
             self.record(
@@ -520,12 +806,9 @@ impl RunRecorder {
     /// Records the single inference operation one settled forward is entitled to.
     ///
     /// Semantic evidence owns that operation whenever the record reaches the daemon, including
-    /// when the daemon rejects it: the daemon owns the outcome either way, so the same forward
-    /// never gets a second operation. A record the CLI could not deliver at all — a dropped or
-    /// oversized observation — falls back to the transport record, so the forward still leaves
-    /// evidence behind.
-    async fn record(&self, evidence: ForwardEvidence, correlation: CorrelationStatus) {
+    async fn record(&mut self, evidence: ForwardEvidence, correlation: CorrelationStatus) {
         let ForwardEvidence {
+            forward,
             semantic,
             orphaned_semantic,
             transport,
@@ -536,7 +819,14 @@ impl RunRecorder {
         // The record carries its own correlation status, so the daemon commits the degradation
         // event in the very transaction that persists the evidence.
         let recorded = match semantic {
-            Some(semantic) => self.record_observation(semantic, correlation).await,
+            Some(semantic) => {
+                self.record_observation(RecordObservationInput {
+                    forward,
+                    semantic,
+                    correlation,
+                })
+                .await
+            }
             None => false,
         };
         if !recorded {
@@ -582,11 +872,12 @@ impl RunRecorder {
         .await;
     }
 
-    async fn record_observation(
-        &self,
-        semantic: SemanticRecord,
-        correlation: CorrelationStatus,
-    ) -> bool {
+    async fn record_observation(&mut self, input: RecordObservationInput) -> bool {
+        let RecordObservationInput {
+            forward,
+            semantic,
+            correlation,
+        } = input;
         let Ok(ended_at) = current_timestamp() else {
             return false;
         };
@@ -613,23 +904,64 @@ impl RunRecorder {
         else {
             return false;
         };
-        if let Some(context) = context {
-            let job = ContextIngestionJob {
-                provider_request_id,
-                attempt_id,
-                inference_operation_id,
-                analysis: context,
-                provider_input_tokens: provider_input,
-                provider_usage_comparable,
-                correlation,
-            };
-            if self.context_sender.try_send(job).is_err() {
-                // The provider record is already durable. Dropping only this auxiliary analysis
-                // must never make request/attempt/usage persistence fail or block event draining.
-                self.context_counters.observer_backpressure();
+        let receipt = ContextReceipt {
+            provider_request_id,
+            attempt_id,
+            inference_operation_id,
+            provider_input_tokens: provider_input,
+            provider_usage_comparable,
+            correlation,
+        };
+        match context {
+            Some(outcome) => self.enqueue_context(&receipt, outcome),
+            None => {
+                if self.pending_context.len() >= IN_FLIGHT_FORWARDS {
+                    self.context_counters
+                        .dropped(ContextAnalysisDropReason::ObserverBackpressure);
+                } else {
+                    let _previous = self.pending_context.insert(forward, receipt);
+                }
             }
         }
         true
+    }
+
+    fn enqueue_context(&self, receipt: &ContextReceipt, outcome: ContextAnalysisOutcome) {
+        match outcome {
+            ContextAnalysisOutcome::Analyzed(analysis) => {
+                let job = ContextIngestionJob {
+                    provider_request_id: receipt.provider_request_id,
+                    attempt_id: receipt.attempt_id,
+                    inference_operation_id: receipt.inference_operation_id,
+                    analysis,
+                    provider_input_tokens: receipt.provider_input_tokens,
+                    provider_usage_comparable: receipt.provider_usage_comparable,
+                    correlation: receipt.correlation,
+                };
+                if self.context_sender.try_send(job).is_err() {
+                    self.context_counters
+                        .dropped(ContextAnalysisDropReason::ObserverBackpressure);
+                }
+            }
+            ContextAnalysisOutcome::Dropped(reason) => self.context_counters.dropped(reason),
+            _ => self
+                .context_counters
+                .dropped(ContextAnalysisDropReason::Unsupported),
+        }
+    }
+
+    fn drop_unpaired_context(&self, state: &mut ForwardState) {
+        let Some(outcome) = state.context.take() else {
+            return;
+        };
+        let reason = match outcome {
+            ContextAnalysisOutcome::Analyzed(_analysis) => {
+                ContextAnalysisDropReason::CorrelationDegraded
+            }
+            ContextAnalysisOutcome::Dropped(reason) => reason,
+            _ => ContextAnalysisDropReason::Unsupported,
+        };
+        self.context_counters.dropped(reason);
     }
 
     /// Records one transport-only inference operation beneath the agent root.
@@ -679,22 +1011,33 @@ impl ContextIngestionWorker {
     }
 
     async fn flush_drops(&self) {
-        let dropped = self.counters.observer_backpressure.load(Ordering::Relaxed);
-        if dropped == 0 {
-            return;
-        }
+        let reasons = [
+            ContextAnalysisDropReason::ObserverBackpressure,
+            ContextAnalysisDropReason::ResourceLimit,
+            ContextAnalysisDropReason::Malformed,
+            ContextAnalysisDropReason::CorrelationDegraded,
+            ContextAnalysisDropReason::Unsupported,
+            ContextAnalysisDropReason::Cancelled,
+        ];
         let Ok(observed_at_us) = current_timestamp_us() else {
             return;
         };
-        let _ = control(
-            &self.config,
-            ControlRequest::RecordContextAnalysisDropped {
-                session_id: self.session_id,
-                dropped,
-                observed_at_us,
-            },
-        )
-        .await;
+        for reason in reasons {
+            let dropped = self.counters.count(reason);
+            if dropped == 0 {
+                continue;
+            }
+            let _ = control(
+                &self.config,
+                ControlRequest::RecordContextAnalysisDropped {
+                    session_id: self.session_id,
+                    reason,
+                    dropped,
+                    observed_at_us,
+                },
+            )
+            .await;
+        }
     }
 
     async fn begin_context(
@@ -931,7 +1274,7 @@ fn observation_record(
     correlation: CorrelationStatus,
 ) -> Option<(
     ObservationRecord,
-    Option<ContextAnalysisResult>,
+    Option<ContextAnalysisOutcome>,
     Option<u64>,
     bool,
 )> {
@@ -941,6 +1284,7 @@ fn observation_record(
         context,
         status_code,
         transport_failure,
+        ..
     } = semantic;
     // The parser always measures its bounded input; an unmeasured body is never invented.
     let request_bytes = pending.request.request_bytes?;
@@ -1301,6 +1645,7 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
         previous_context,
     } = recording;
     let (sender, receiver) = tokio::sync::mpsc::channel(RECORDER_QUEUE_ITEMS);
+    let context_queue_items = context_ingestion_queue_capacity(context_queue_items);
     let (context_sender, context_receiver) = tokio::sync::mpsc::channel(context_queue_items);
     let counters = Arc::new(CorrelationCounters::default());
     let context_counters = Arc::new(ContextCounters::default());
@@ -1322,17 +1667,29 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
             context_sender,
             context_counters: Arc::clone(&context_counters),
             forwards: BTreeMap::new(),
+            retired_orphans: BTreeMap::new(),
+            pending_context: BTreeMap::new(),
             retired: BTreeSet::new(),
             retired_through: None,
             counters: Arc::clone(&counters),
         }
         .run(receiver),
     );
+    let background = proxy.background_task_spawner();
+    let ordering = Arc::new(TransportOrdering::default());
+    let metadata_sink = Arc::new(RecorderSink {
+        sender: sender.clone(),
+        background: background.clone(),
+        ordering: Arc::clone(&ordering),
+    });
+    let observation_sink = Arc::new(RecorderSink {
+        sender,
+        background,
+        ordering,
+    });
     let proxy = proxy
-        .with_metadata_sink(Arc::new(RecorderSink {
-            sender: sender.clone(),
-        }))
-        .with_observation_sink(Arc::new(RecorderSink { sender }));
+        .with_metadata_sink(metadata_sink)
+        .with_observation_sink(observation_sink);
     SpawnedRecorder {
         proxy,
         recorder_task,
@@ -1367,6 +1724,9 @@ enum CommandKind {
         agent: String,
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
+    },
+    Context {
+        request_id: RequestId,
     },
     Proxy,
 }
@@ -1490,6 +1850,9 @@ async fn daemon_running(config: &Config) -> Result<bool, String> {
     match control(config, ControlRequest::Status).await? {
         ControlResponse::Ok { .. } => Ok(true),
         ControlResponse::Error { message } => Err(message),
+        ControlResponse::Context { .. } => {
+            Err("daemon returned an unexpected context response".to_owned())
+        }
     }
 }
 async fn init(config: &Config) -> Result<(), String> {
@@ -1560,6 +1923,9 @@ async fn daemon_stop(config: &Config) -> Result<(), String> {
     match response {
         ControlResponse::Ok { .. } => {}
         ControlResponse::Error { message } => return Err(message),
+        ControlResponse::Context { .. } => {
+            return Err("daemon returned an unexpected context response".to_owned());
+        }
     }
     for _ in 0..50 {
         if !config.socket.exists() {
@@ -1592,6 +1958,23 @@ fn proxy_resource_limits(
     .map_err(|error| error.to_string())
 }
 
+fn context_analysis_mode() -> Result<ContextAnalysisMode, String> {
+    let value = std::env::var("TRACEPRESS_CONTEXT_ANALYSIS")
+        .unwrap_or_else(|_| "shadow".to_owned())
+        .to_ascii_lowercase();
+    match value.as_str() {
+        "off" => Ok(ContextAnalysisMode::Off),
+        "shadow" => Ok(ContextAnalysisMode::Shadow),
+        _ => Err(format!(
+            "TRACEPRESS_CONTEXT_ANALYSIS must be `off` or `shadow`, got `{value}`"
+        )),
+    }
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the existing run path keeps lifecycle cleanup and reporting ordered"
+)]
 async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<(), String> {
     if !daemon_running(config).await? {
         return Err("daemon is not running; run `tracepress daemon start` first".to_owned());
@@ -1600,12 +1983,14 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         .map_err(|_| "TRACEPRESS_UPSTREAM is required by `tracepress run`")?;
     let endpoint = ProviderEndpoint::new(&upstream).map_err(|error| error.to_string())?;
     let resource_limits = proxy_resource_limits(8 * 1024 * 1024, 32 * 1024 * 1024)?;
+    let analysis_mode = context_analysis_mode()?;
     let context_queue_items = usize::try_from(resource_limits.max_ipc_queue_items.get())
         .map_err(|error| format!("context queue capacity does not fit usize: {error}"))?;
     let context_analysis_limits = ContextAnalysisLimits::from_resource_limits(&resource_limits)
         .map_err(|error| error.to_string())?;
     let proxy = TransparentProxy::new(
-        ProxyConfig::new(endpoint, resource_limits).map_err(|error| error.to_string())?,
+        ProxyConfig::new(endpoint, resource_limits, analysis_mode)
+            .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
     let listener = TcpListener::bind("127.0.0.1:0")
@@ -1623,6 +2008,9 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         ControlResponse::Error { message } => return Err(message),
         ControlResponse::Ok { .. } => {
             return Err("daemon did not return a session and root operation".to_owned());
+        }
+        ControlResponse::Context { .. } => {
+            return Err("daemon returned an unexpected context response".to_owned());
         }
     };
     let SpawnedRecorder {
@@ -1642,6 +2030,7 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         },
         proxy,
     );
+    let background_proxy = proxy.clone();
     let proxy_task = tokio::spawn(async move { serve(listener, proxy.router()).await });
     let base_url = format!("http://{proxy_address}/v1");
     let status_result = Command::new(&agent)
@@ -1660,7 +2049,25 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         .await;
     proxy_task.abort();
     let _proxy_result = proxy_task.await;
-    let recorded = drain_recorders(&mut recorder_task, &mut context_task).await;
+    let recorded = match tokio::time::timeout(RECORDER_DRAIN_TIMEOUT, async {
+        background_proxy.wait_for_background_tasks().await;
+        // The recorder's channel must be closed before it is drained; otherwise the recorder
+        // cannot observe end-of-run and wait for more events forever.
+        drop(background_proxy);
+        drain_recorders(&mut recorder_task, &mut context_task).await
+    })
+    .await
+    {
+        Ok(result) => result,
+        Err(_elapsed) => {
+            recorder_task.abort();
+            context_task.abort();
+            Err(format!(
+                "provider observer/recorder drain exceeded {}s",
+                RECORDER_DRAIN_TIMEOUT.as_secs()
+            ))
+        }
+    };
     // Correlation degradation is reported for every run, before anything else can fail: a run
     // whose bounded state lost evidence must never look like a run that lost none.
     println!("{}", counters.report());
@@ -1683,6 +2090,9 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
                 "agent finished but session finalization failed: {message}"
             ));
         }
+        ControlResponse::Context { .. } => {
+            return Err("daemon returned an unexpected context response".to_owned());
+        }
     }
     match status.code() {
         Some(code) if code != 0 => Err(format!("agent exited with status {code}")),
@@ -1695,28 +2105,17 @@ async fn drain_recorders(
     recorder_task: &mut tokio::task::JoinHandle<Result<(), String>>,
     context_task: &mut tokio::task::JoinHandle<Result<(), String>>,
 ) -> Result<(), String> {
-    match tokio::time::timeout(Duration::from_secs(RECORDER_DRAIN_SECONDS), async {
-        let recorder_result = (&mut *recorder_task)
-            .await
-            .map_err(|error| format!("recording worker failed: {error}"))
-            .and_then(|result| result);
-        // Always wait for the context worker after the recorder has stopped, even when the
-        // provider worker reported an IPC error.
-        let context_result = (&mut *context_task)
-            .await
-            .map_err(|error| format!("context worker failed: {error}"))
-            .and_then(|result| result);
-        recorder_result.and(context_result)
-    })
-    .await
-    {
-        Ok(result) => result,
-        Err(_elapsed) => {
-            recorder_task.abort();
-            context_task.abort();
-            Ok(())
-        }
-    }
+    let recorder_result = (&mut *recorder_task)
+        .await
+        .map_err(|error| format!("recording worker failed: {error}"))
+        .and_then(|result| result);
+    // Always wait for the context worker after the recorder has stopped, even when the
+    // provider worker reported an IPC error.
+    let context_result = (&mut *context_task)
+        .await
+        .map_err(|error| format!("context worker failed: {error}"))
+        .and_then(|result| result);
+    recorder_result.and(context_result)
 }
 
 fn current_timestamp() -> Result<String, String> {
@@ -1733,8 +2132,10 @@ async fn proxy() -> Result<(), String> {
         .map_err(|_| "TRACEPRESS_UPSTREAM must be set to /v1/chat/completions")?;
     let endpoint = ProviderEndpoint::new(&upstream).map_err(|error| error.to_string())?;
     let resource_limits = proxy_resource_limits(8 * 1024 * 1024, 32 * 1024 * 1024)?;
+    let analysis_mode = context_analysis_mode()?;
     let proxy = TransparentProxy::new(
-        ProxyConfig::new(endpoint, resource_limits).map_err(|error| error.to_string())?,
+        ProxyConfig::new(endpoint, resource_limits, analysis_mode)
+            .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
     let listen =
@@ -1769,6 +2170,353 @@ async fn doctor(config: &Config) -> Result<(), String> {
     Ok(())
 }
 
+async fn context(config: &Config, request_id: RequestId) -> Result<(), String> {
+    match control(config, ControlRequest::Context { request_id }).await? {
+        ControlResponse::Context { inspection } => print_context_inspection(&inspection),
+        ControlResponse::Error { message } => return Err(message),
+        ControlResponse::Ok { .. } => {
+            return Err("daemon returned an unexpected context response".to_owned());
+        }
+    }
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the command intentionally renders the stable inspection sections together"
+)]
+fn print_context_inspection(inspection: &ContextInspection) {
+    println!("Context visibility");
+    println!("  request id: {}", inspection.request_id);
+    println!("  snapshot id: {}", inspection.snapshot_id);
+    println!(
+        "  explicit request complete: {}",
+        bool_text(inspection.visibility.explicit_request_complete)
+    );
+    println!(
+        "  logical context status: {}",
+        optional_text(inspection.visibility.logical_context_status.as_ref())
+    );
+    println!(
+        "  previous response state: {}",
+        bool_text(inspection.visibility.uses_previous_response)
+    );
+    println!(
+        "  conversation state: {}",
+        bool_text(inspection.visibility.uses_conversation_state)
+    );
+    println!(
+        "  item references: {}",
+        bool_text(inspection.visibility.uses_item_references)
+    );
+    println!(
+        "  prompt reference: {}",
+        bool_text(inspection.visibility.uses_prompt_reference)
+    );
+    println!(
+        "  external files: {}",
+        bool_text(inspection.visibility.uses_external_files)
+    );
+    println!(
+        "  external images: {}",
+        bool_text(inspection.visibility.uses_external_images)
+    );
+    println!(
+        "  opaque items: {}",
+        bool_text(inspection.visibility.contains_opaque_items)
+    );
+    println!(
+        "  duplicate keys: {}",
+        bool_text(inspection.visibility.duplicate_key_detected)
+    );
+    println!(
+        "  references resolved locally: {}",
+        bool_text(inspection.visibility.reference_resolved_locally)
+    );
+
+    println!("\nProvider input observed");
+    println!(
+        "  provider: {}",
+        optional_text(inspection.provider.as_ref())
+    );
+    println!(
+        "  protocol: {}",
+        optional_text(inspection.protocol.as_ref())
+    );
+    println!("  model: {}", optional_text(inspection.model.as_ref()));
+    println!(
+        "  accepted request bytes: {}",
+        optional_number(inspection.request_bytes)
+    );
+    println!(
+        "  input tokens observed: {}",
+        optional_number(inspection.provider_input_tokens)
+    );
+
+    println!("\nVisible estimate + estimator + reconciliation/residual");
+    println!(
+        "  visible tokens (estimated): {}",
+        estimated_number(inspection.visible_estimated_tokens)
+    );
+    println!(
+        "  estimator: {}",
+        optional_text(inspection.estimator.as_ref())
+    );
+    println!(
+        "  estimator version: {}",
+        optional_number(inspection.estimator_version.map(u64::from))
+    );
+    println!(
+        "  estimate confidence: {}",
+        optional_text(inspection.estimate_confidence.as_ref())
+    );
+    println!(
+        "  reconciliation status: {}",
+        optional_text(inspection.reconciliation_status.as_ref())
+    );
+    println!(
+        "  residual (provider minus visible estimate, signed): {}",
+        signed_number(inspection.residual_tokens)
+    );
+
+    println!("\nComposition (estimated)");
+    print_named_estimates("  by kind", &inspection.composition.by_kind);
+    print_named_estimates("  by role", &inspection.composition.by_role);
+    print_named_estimates("  by origin", &inspection.composition.by_origin);
+    print_share(
+        "  tool definition share (estimated)",
+        inspection.composition.estimated_tool_definition_share,
+    );
+    print_share(
+        "  tool result share (estimated)",
+        inspection.composition.estimated_tool_result_share,
+    );
+    print_share(
+        "  human text share (estimated)",
+        inspection.composition.estimated_human_text_share,
+    );
+    print_share(
+        "  assistant history share (estimated)",
+        inspection.composition.estimated_assistant_history_share,
+    );
+    print_share(
+        "  unique content share (estimated)",
+        inspection.composition.estimated_unique_content_share,
+    );
+    print_share(
+        "  repeated content share (estimated)",
+        inspection.composition.estimated_repeated_content_share,
+    );
+    println!(
+        "  tool count: {}",
+        optional_number(inspection.composition.tool_count)
+    );
+    println!(
+        "  schema bytes: {}",
+        optional_number(inspection.composition.schema_bytes)
+    );
+    println!(
+        "  schema tokens (estimated): {}",
+        estimated_number(inspection.composition.estimated_schema_tokens)
+    );
+    println!(
+        "  largest tool schema bytes: {}",
+        optional_number(inspection.composition.largest_tool_schema)
+    );
+    println!(
+        "  repeated schema tokens (estimated): {}",
+        estimated_number(inspection.composition.repeated_schema_tokens)
+    );
+    println!(
+        "  opportunity signals: {}",
+        if inspection.composition.opportunity_signals.is_empty() {
+            "none".to_owned()
+        } else {
+            inspection.composition.opportunity_signals.join(", ")
+        }
+    );
+
+    println!("\nRepetition");
+    println!(
+        "  repeated blocks: {}",
+        optional_number(inspection.repetition.repeated_blocks)
+    );
+    println!(
+        "  new blocks: {}",
+        optional_number(inspection.repetition.new_blocks)
+    );
+    println!(
+        "  changed blocks: {}",
+        optional_number(inspection.repetition.changed_blocks)
+    );
+    println!(
+        "  removed blocks: {}",
+        optional_number(inspection.repetition.removed_blocks)
+    );
+    println!(
+        "  repeated tokens (estimated): {}",
+        estimated_number(inspection.repetition.repeated_estimated_tokens)
+    );
+    println!(
+        "  new tokens (estimated): {}",
+        estimated_number(inspection.repetition.new_estimated_tokens)
+    );
+
+    println!("\nStable explicit prefix");
+    println!(
+        "  common-prefix blocks: {}",
+        optional_number(inspection.repetition.common_prefix_blocks)
+    );
+    println!(
+        "  common-prefix tokens (estimated): {}",
+        estimated_number(inspection.repetition.common_prefix_estimated_tokens)
+    );
+    println!(
+        "  stable explicit-prefix estimate (estimated): {}",
+        estimated_number(inspection.stable_explicit_prefix_estimate)
+    );
+
+    println!("\nLargest blocks");
+    if inspection.largest_blocks.is_empty() {
+        println!("  unavailable");
+    } else {
+        for block in &inspection.largest_blocks {
+            print_block(block);
+        }
+    }
+
+    println!("\nAnalysis");
+    println!("  status: {}", analysis_status_text(inspection));
+    println!("  version: {}", inspection.analysis_version);
+    println!(
+        "  explicit blocks: {}",
+        optional_number(inspection.coverage.explicit_block_count)
+    );
+    println!(
+        "  analyzed bytes: {}",
+        optional_number(inspection.coverage.analyzed_bytes)
+    );
+    println!(
+        "  skipped bytes: {}",
+        optional_number(inspection.coverage.skipped_bytes)
+    );
+    println!(
+        "  explicit bytes: {}",
+        optional_number(inspection.coverage.explicit_bytes)
+    );
+
+    println!("\nCorrelation");
+    println!(
+        "  context correlation: {}",
+        optional_text(inspection.correlation_status.as_ref())
+    );
+    println!(
+        "  attempt id: {}",
+        inspection
+            .attempt_id
+            .map_or_else(|| "unknown".to_owned(), |value| value.to_string())
+    );
+}
+
+fn analysis_status_text(inspection: &ContextInspection) -> String {
+    if inspection.analysis_status == "complete"
+        && inspection
+            .visibility
+            .logical_context_status
+            .as_deref()
+            .is_some_and(|status| status.ends_with("_partial"))
+    {
+        "finalized (logical context partial)".to_owned()
+    } else {
+        inspection.analysis_status.clone()
+    }
+}
+
+fn print_named_estimates(label: &str, values: &[ContextInspectionNamedEstimate]) {
+    println!("{label}:");
+    for value in values {
+        println!(
+            "    {}: {} estimated tokens",
+            value.name,
+            estimated_number(value.estimated_tokens)
+        );
+    }
+}
+
+fn print_share(label: &str, value: Option<f64>) {
+    println!(
+        "{label}: {}",
+        value.map_or_else(|| "unknown".to_owned(), |value| format!("{value:.3}"))
+    );
+}
+
+fn print_block(block: &ContextInspectionBlock) {
+    println!(
+        "  ordinal {}: kind={} role={} origin={} raw bytes={}",
+        block.ordinal, block.kind, block.role, block.origin, block.raw_bytes
+    );
+    println!(
+        "    estimated tokens: {}",
+        estimated_number(block.estimated_tokens)
+    );
+    println!(
+        "    detection: {}",
+        optional_text(block.detected_kind.as_ref())
+    );
+    println!(
+        "    detector confidence: {}",
+        block
+            .detector_confidence
+            .map_or_else(|| "unknown".to_owned(), |value| format!("{value:.3}"))
+    );
+    println!(
+        "    detector version: {}",
+        optional_number(block.detector_version.map(u64::from))
+    );
+    println!(
+        "    repetition score: {}",
+        block
+            .repetition_score
+            .map_or_else(|| "unknown".to_owned(), |value| format!("{value:.3}"))
+    );
+    println!(
+        "    opportunity signals: {}",
+        if block.opportunity_signals.is_empty() {
+            "none".to_owned()
+        } else {
+            block.opportunity_signals.join(", ")
+        }
+    );
+    println!(
+        "    candidate tokens (estimated): {}",
+        estimated_number(block.candidate_estimated_tokens)
+    );
+}
+
+fn optional_text(value: Option<&String>) -> String {
+    value.cloned().unwrap_or_else(|| "unknown".to_owned())
+}
+
+fn optional_number(value: Option<u64>) -> String {
+    value.map_or_else(|| "unknown".to_owned(), |value| value.to_string())
+}
+
+fn estimated_number(value: Option<u64>) -> String {
+    optional_number(value)
+}
+
+fn signed_number(value: Option<i64>) -> String {
+    value.map_or_else(|| "unknown".to_owned(), |value| format!("{value:+}"))
+}
+
+const fn bool_text(value: Option<bool>) -> &'static str {
+    match value {
+        Some(true) => "true",
+        Some(false) => "false",
+        None => "unknown",
+    }
+}
+
 fn current_timestamp_us() -> Result<u64, String> {
     u64::try_from(
         std::time::SystemTime::now()
@@ -1789,6 +2537,7 @@ async fn main() -> Result<(), String> {
         CommandKind::Daemon {
             command: DaemonCommand::Start,
         } => daemon_start(&config).await,
+        CommandKind::Context { request_id } => context(&config, request_id).await,
         CommandKind::Daemon {
             command: DaemonCommand::Stop,
         } => daemon_stop(&config).await,
@@ -1807,5 +2556,24 @@ async fn main() -> Result<(), String> {
         }
         CommandKind::Run { agent, args } => run_agent(&config, agent, args).await,
         CommandKind::Proxy => proxy().await,
+    }
+}
+#[cfg(test)]
+mod tests {
+    use super::{CONTEXT_INGESTION_QUEUE_HARD_CAP, context_ingestion_queue_capacity};
+
+    #[test]
+    fn context_ingestion_queue_is_hard_capped_without_zero_capacity() {
+        assert_eq!(context_ingestion_queue_capacity(0), 1);
+        assert_eq!(context_ingestion_queue_capacity(1), 1);
+        assert_eq!(
+            context_ingestion_queue_capacity(CONTEXT_INGESTION_QUEUE_HARD_CAP),
+            CONTEXT_INGESTION_QUEUE_HARD_CAP
+        );
+        assert_eq!(
+            context_ingestion_queue_capacity(CONTEXT_INGESTION_QUEUE_HARD_CAP + 1),
+            CONTEXT_INGESTION_QUEUE_HARD_CAP
+        );
+        assert_eq!(context_ingestion_queue_capacity(128), 4);
     }
 }

@@ -1,0 +1,50 @@
+[package]
+name = "tracepress-context-fuzz"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tracepress-context = { path = ".." }
+tracepress-core = { path = "../../tracepress-core" }
+
+[[bin]]
+name = "span_indexer"
+path = "fuzz_targets/span_indexer.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "responses_extractor"
+path = "fuzz_targets/responses_extractor.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "semantic_fingerprint"
+path = "fuzz_targets/semantic_fingerprint.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "content_detector"
+path = "fuzz_targets/content_detector.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "delta_builder"
+path = "fuzz_targets/delta_builder.rs"
+test = false
+doc = false
+bench = false

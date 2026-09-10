@@ -18,9 +18,9 @@ use tokio::net::TcpListener;
 use tracepress_core::{ResourceLimits, ResourceLimitsConfig};
 use tracepress_provider::{ProviderEndpoint, RequestObservation, ResponseObservation};
 use tracepress_proxy::{
-    ForwardId, ForwardMetadata, MetadataSink, MetadataSinkError, ObservationSinkError,
-    ProviderObservationSink, ProxyConfig, RequestContextObservation, TransparentProxy,
-    TransportFailure,
+    ContextAnalysisMode, ContextAnalysisObservation, ForwardId, ForwardMetadata, MetadataSink,
+    MetadataSinkError, ObservationSinkError, ProviderObservationSink, ProxyConfig,
+    RequestContextObservation, TransparentProxy, TransportFailure,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -63,6 +63,12 @@ impl ProviderObservationSink for RecordingObservationSink {
             .lock()
             .map_err(|_error| ObservationSinkError::rejected())?
             .push(context.observation);
+        Ok(())
+    }
+    fn try_record_context_analysis(
+        &self,
+        _observation: ContextAnalysisObservation,
+    ) -> Result<(), ObservationSinkError> {
         Ok(())
     }
 
@@ -108,7 +114,12 @@ impl ProviderObservationSink for BehaviorObservationSink {
     ) -> Result<(), ObservationSinkError> {
         self.apply()
     }
-
+    fn try_record_context_analysis(
+        &self,
+        _observation: ContextAnalysisObservation,
+    ) -> Result<(), ObservationSinkError> {
+        self.apply()
+    }
     fn try_record_response(
         &self,
         _forward: ForwardId,
@@ -156,8 +167,12 @@ async fn metadata_sink_failure_does_not_block_or_mutate_response() -> TestResult
     let endpoint =
         ProviderEndpoint::new(&format!("http://{upstream_address}/v1/chat/completions"))?;
     let sink = FailingSink;
-    let proxy = TransparentProxy::new(ProxyConfig::new(endpoint, resource_limits(1_024, 1_024)?)?)?
-        .with_metadata_sink(Arc::new(sink));
+    let proxy = TransparentProxy::new(ProxyConfig::new(
+        endpoint,
+        resource_limits(1_024, 1_024)?,
+        ContextAnalysisMode::Shadow,
+    )?)?
+    .with_metadata_sink(Arc::new(sink));
     let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
     let proxy_address = proxy_listener.local_addr()?;
     let proxy_task = tokio::spawn(async move { axum::serve(proxy_listener, proxy.router()).await });
@@ -196,8 +211,12 @@ async fn responses_observations_are_delivered_as_a_side_channel() -> TestResult 
     });
     let endpoint = ProviderEndpoint::new(&format!("http://{upstream_address}/v1/responses"))?;
     let sink = Arc::new(RecordingObservationSink::default());
-    let proxy = TransparentProxy::new(ProxyConfig::new(endpoint, resource_limits(4_096, 4_096)?)?)?
-        .with_observation_sink(Arc::<RecordingObservationSink>::clone(&sink));
+    let proxy = TransparentProxy::new(ProxyConfig::new(
+        endpoint,
+        resource_limits(4_096, 4_096)?,
+        ContextAnalysisMode::Shadow,
+    )?)?
+    .with_observation_sink(Arc::<RecordingObservationSink>::clone(&sink));
     let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
     let proxy_address = proxy_listener.local_addr()?;
     let proxy_task = tokio::spawn(async move {
@@ -292,9 +311,12 @@ async fn failing_and_slow_observation_sinks_are_fail_open_for_streams() -> TestR
             let _result = axum::serve(upstream_listener, app).await;
         });
         let endpoint = ProviderEndpoint::new(&format!("http://{upstream_address}/v1/responses"))?;
-        let proxy =
-            TransparentProxy::new(ProxyConfig::new(endpoint, resource_limits(4_096, 4_096)?)?)?
-                .with_observation_sink(Arc::new(BehaviorObservationSink { behavior }));
+        let proxy = TransparentProxy::new(ProxyConfig::new(
+            endpoint,
+            resource_limits(4_096, 4_096)?,
+            ContextAnalysisMode::Shadow,
+        )?)?
+        .with_observation_sink(Arc::new(BehaviorObservationSink { behavior }));
         let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
         let proxy_address = proxy_listener.local_addr()?;
         let proxy_task = tokio::spawn(async move {

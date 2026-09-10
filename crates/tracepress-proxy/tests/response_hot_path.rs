@@ -18,8 +18,9 @@ use tokio::net::{TcpListener, TcpStream};
 use tracepress_core::{ResourceLimits, ResourceLimitsConfig};
 use tracepress_provider::{ProviderEndpoint, ResponseObservation};
 use tracepress_proxy::{
-    ForwardId, ObservationSinkError, ProviderObservationSink, ProxyConfig,
-    RequestContextObservation, TransparentProxy, TransportFailure,
+    ContextAnalysisMode, ContextAnalysisObservation, ForwardId, ObservationSinkError,
+    ProviderObservationSink, ProxyConfig, RequestContextObservation, TransparentProxy,
+    TransportFailure,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -145,6 +146,12 @@ impl ProviderObservationSink for CountingSink {
         let _previous = self.requests.fetch_add(1, Ordering::Relaxed);
         Ok(())
     }
+    fn try_record_context_analysis(
+        &self,
+        _observation: ContextAnalysisObservation,
+    ) -> Result<(), ObservationSinkError> {
+        Ok(())
+    }
 
     fn try_record_response(
         &self,
@@ -255,6 +262,7 @@ fn spawn_isolated_proxy(
     let proxy = TransparentProxy::new(ProxyConfig::new(
         upstream.clone(),
         resource_limits(4 * 1024 * 1024, 4 * 1024 * 1024)?,
+        ContextAnalysisMode::Shadow,
     )?)?
     .with_observation_sink(sink);
     // Binding before the thread starts publishes the address without a readiness handshake.

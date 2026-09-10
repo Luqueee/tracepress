@@ -53,9 +53,9 @@ pub use detector::{
 pub use digest::{ContextDigest, ContextDigestParseError};
 pub use domain::{
     ANALYZED_PROVIDER_KIND, ANALYZED_PROVIDER_PROTOCOL, BlockLocator, CONTEXT_ANALYSIS_VERSION,
-    ContextAnalysisStatus, ContextBlockKind, ContextBlockOccurrence, ContextOrigin, ContextRole,
-    ContextSnapshot, DetectedContentKind, DetectionConfidence, DetectionResult, EstimateConfidence,
-    SemanticFingerprint, TokenEstimate,
+    ContextAnalysisDropReason, ContextAnalysisStatus, ContextBlockKind, ContextBlockOccurrence,
+    ContextOrigin, ContextRole, ContextSnapshot, DetectedContentKind, DetectionConfidence,
+    DetectionResult, EstimateConfidence, SemanticFingerprint, TokenEstimate,
 };
 pub use estimator::{
     EstimateUnavailable, EstimationRequest, StructuralHeuristicEstimator, TokenEstimateAggregate,

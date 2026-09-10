@@ -127,6 +127,43 @@ pub enum ContextAnalysisStatus {
     Cancelled,
 }
 
+/// Why a context analysis was not run or could not be handed to its sink.
+///
+/// A dropped analysis carries this compact reason instead of fabricating a digest, status, or
+/// block list. The reason is also the wire value used by the CLI/daemon drop accounting.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, Hash, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ContextAnalysisDropReason {
+    /// The proxy's non-blocking analysis permit or a bounded downstream queue was unavailable.
+    ObserverBackpressure,
+    /// A resource bound rejected the analysis before a result could be produced.
+    ResourceLimit,
+    /// The request could not be interpreted by the context analyzer.
+    Malformed,
+    /// Correlation degradation made attribution unsafe.
+    CorrelationDegraded,
+    /// The route or protocol is not supported by this analyzer.
+    Unsupported,
+    /// Analysis was cancelled before a result was handed to the sink.
+    Cancelled,
+}
+
+impl ContextAnalysisDropReason {
+    /// Returns the stable wire and durable name of this reason.
+    #[must_use]
+    pub const fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::ObserverBackpressure => "observer_backpressure",
+            Self::ResourceLimit => "resource_limit",
+            Self::Malformed => "malformed",
+            Self::CorrelationDegraded => "correlation_degraded",
+            Self::Unsupported => "unsupported",
+            Self::Cancelled => "cancelled",
+        }
+    }
+}
+
 define_extensible_enums! {
     #[doc = "Canonical kind of one context block."]
     ContextBlockKind("a context block kind") {

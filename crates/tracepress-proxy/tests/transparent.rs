@@ -13,7 +13,8 @@ use tokio::net::{TcpListener, TcpStream};
 use tracepress_core::{ResourceLimits, ResourceLimitsConfig};
 use tracepress_provider::ProviderEndpoint;
 use tracepress_proxy::{
-    ForwardMetadata, InboundRoute, MetadataSink, MetadataSinkError, ProxyConfig, TransparentProxy,
+    ContextAnalysisMode, ForwardMetadata, InboundRoute, MetadataSink, MetadataSinkError,
+    ProxyConfig, TransparentProxy,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -458,6 +459,7 @@ async fn spawn_proxy(
     let proxy = TransparentProxy::new(ProxyConfig::new(
         upstream,
         resource_limits(request_limit, response_limit)?,
+        ContextAnalysisMode::Shadow,
     )?)?
     .with_metadata_sink(sink);
     let listener = TcpListener::bind("127.0.0.1:0").await?;

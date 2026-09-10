@@ -142,7 +142,7 @@ async fn storage_failure_forwards_original() -> TestResult {
     use tokio::net::TcpListener as TokioTcpListener;
     use tracepress_core::{ResourceLimits, ResourceLimitsConfig};
     use tracepress_provider::ProviderEndpoint;
-    use tracepress_proxy::{ProxyConfig, TransparentProxy};
+    use tracepress_proxy::{ContextAnalysisMode, ProxyConfig, TransparentProxy};
 
     let upstream = TokioTcpListener::bind("127.0.0.1:0").await?;
     let upstream_address = upstream.local_addr()?;
@@ -172,6 +172,7 @@ async fn storage_failure_forwards_original() -> TestResult {
     let proxy = TransparentProxy::new(ProxyConfig::new(
         ProviderEndpoint::new(&format!("http://{upstream_address}/v1/chat/completions"))?,
         resource_limits,
+        ContextAnalysisMode::Shadow,
     )?)?
     .with_metadata_sink(Arc::new(RejectedPersistence));
     let listener = TokioTcpListener::bind("127.0.0.1:0").await?;

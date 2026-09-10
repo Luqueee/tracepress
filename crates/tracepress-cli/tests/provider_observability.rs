@@ -119,6 +119,10 @@ struct Recorded {
 }
 
 fn run_streamed_case(events: Vec<String>) -> SetupResult<Recorded> {
+    run_streamed_case_with_mode(events, "shadow")
+}
+
+fn run_streamed_case_with_mode(events: Vec<String>, analysis_mode: &str) -> SetupResult<Recorded> {
     let directory = TempDir::new()?;
     let upstream = TcpListener::bind("127.0.0.1:0")?;
     let upstream_address = upstream.local_addr()?;
@@ -138,6 +142,7 @@ fn run_streamed_case(events: Vec<String>) -> SetupResult<Recorded> {
         .env("TRACEPRESS_E2E_REQUEST", &request)
         .env("TRACEPRESS_E2E_STREAM", &stream)
         .env("TRACEPRESS_E2E_AUTH", AUTH_CANARY)
+        .env("TRACEPRESS_CONTEXT_ANALYSIS", analysis_mode)
         .args(["run", "python3", "--", "-c", AGENT_SCRIPT])
         .output()?;
     assert!(
@@ -1319,6 +1324,39 @@ fn streamed_responses_run_records_provider_observability_durably() -> TestResult
 }
 
 #[test]
+fn context_analysis_off_preserves_bytes_and_phase2_provider_rows() -> TestResult {
+    let shadow = run_streamed_case_with_mode(stream_events(), "shadow")?;
+    let off = run_streamed_case_with_mode(stream_events(), "off")?;
+
+    assert_eq!(shadow.request, off.request);
+    assert_eq!(shadow.stream, off.stream);
+    assert_upstream_saw_exact_request(&shadow.received, &shadow.request)?;
+    assert_upstream_saw_exact_request(&off.received, &off.request)?;
+
+    let shadow_database = Connection::open(shadow.directory.path().join("tracepress.sqlite3"))?;
+    assert_provider_request(&shadow_database, i64::try_from(shadow.request.len())?)?;
+    assert_provider_attempt(&shadow_database, i64::try_from(shadow.stream.len())?)?;
+    assert_provider_usage(&shadow_database)?;
+    assert_measured_timings(&shadow_database)?;
+    assert_canonical_events(&shadow_database)?;
+    assert_context_events(&shadow_database)?;
+    assert_context_storage(&shadow_database, 1, false)?;
+    drop(shadow_database);
+
+    let off_database = Connection::open(off.directory.path().join("tracepress.sqlite3"))?;
+    assert_provider_request(&off_database, i64::try_from(off.request.len())?)?;
+    assert_provider_attempt(&off_database, i64::try_from(off.stream.len())?)?;
+    assert_provider_usage(&off_database)?;
+    assert_measured_timings(&off_database)?;
+    assert_canonical_events(&off_database)?;
+    assert_no_context_storage(&off_database)?;
+    drop(off_database);
+
+    assert_no_canaries_in_storage(shadow.directory.path())?;
+    assert_no_canaries_in_storage(off.directory.path())
+}
+
+#[test]
 fn observation_rejected_by_the_control_frame_bound_never_disturbs_the_agent() -> TestResult {
     let recorded = run_streamed_case(oversized_usage_events())?;
     // The child asserted byte-exact response bytes, so forwarding survived the rejected record.
@@ -1892,6 +1930,31 @@ fn assert_context_storage(
             "the first context snapshot has no predecessor",
         );
     }
+    Ok(())
+}
+
+fn assert_no_context_storage(database: &Connection) -> TestResult {
+    for table in [
+        "context_snapshots",
+        "context_block_occurrences",
+        "context_analysis_metrics",
+        "context_deltas",
+        "token_reconciliations",
+    ] {
+        assert_eq!(
+            integer(database, &format!("SELECT COUNT(*) FROM {table}"))?,
+            0,
+            "context analysis OFF must not persist rows in {table}",
+        );
+    }
+    assert_eq!(
+        integer(
+            database,
+            "SELECT COUNT(*) FROM events WHERE event_type LIKE 'context.%'",
+        )?,
+        0,
+        "context analysis OFF must not emit context lifecycle events",
+    );
     Ok(())
 }
 

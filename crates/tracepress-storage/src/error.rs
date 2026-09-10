@@ -36,6 +36,18 @@ pub enum StorageError {
         /// Rejected unsigned value.
         value: u64,
     },
+    /// The requested provider request has no finalized context snapshot.
+    #[error("no context snapshot found for request {request_id}")]
+    ContextSnapshotNotFound {
+        /// Provider request identity used for the lookup.
+        request_id: tracepress_core::RequestId,
+    },
+    /// A persisted context inspection value violated its storage invariant.
+    #[error("context inspection contains an invalid value in {field}")]
+    InvalidContextInspection {
+        /// Logical field containing the invalid value.
+        field: &'static str,
+    },
     /// The configured writer queue exceeds Tokio's bounded channel capacity.
     #[error("writer queue capacity {requested} exceeds Tokio maximum {maximum}")]
     WriterQueueCapacityExceeded {

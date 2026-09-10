@@ -3,6 +3,7 @@
 mod blob_store;
 mod encode;
 mod error;
+pub(crate) mod inspection;
 mod models;
 mod records;
 mod schema;
@@ -18,7 +19,10 @@ pub use blob_store::{
 };
 pub use error::StorageError;
 pub use models::{
-    ContextAnalysisStatus, ContextBlockKind, ContextCorrelationStatus, ContextOrigin, ContextRole,
+    CONTEXT_INSPECTION_MAX_BLOCKS, ContextAnalysisStatus, ContextBlockKind,
+    ContextCorrelationStatus, ContextInspection, ContextInspectionBlock,
+    ContextInspectionComposition, ContextInspectionCoverage, ContextInspectionNamedEstimate,
+    ContextInspectionRepetition, ContextInspectionVisibility, ContextOrigin, ContextRole,
     DetectedContentKind, EstimateConfidence, EstimatedTokenComposition, EstimatedTokensByKind,
     EstimatedTokensByOrigin, EstimatedTokensByRole, FidelityClass, LogicalContextStatus,
     ObservationStatus, OpportunitySignal, ProviderKind, ProviderProtocol, ProviderResponseState,

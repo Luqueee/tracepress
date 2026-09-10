@@ -6,10 +6,11 @@
 use std::{path::PathBuf, thread::JoinHandle};
 
 use tokio::sync::{Semaphore, mpsc, oneshot};
-use tracepress_core::{ContentId, MaxIpcQueueItems};
+use tracepress_core::{ContentId, MaxIpcQueueItems, RequestId};
 
 use crate::{
-    ConnectionSettings, Durability, StorageError, WriteBatch, WriteCommand, WriteReceipt,
+    ConnectionSettings, ContextInspection, Durability, StorageError, WriteBatch, WriteCommand,
+    WriteReceipt,
     blob_store::{
         BlobError,
         database::{
@@ -17,6 +18,7 @@ use crate::{
             InlineRegistration, PinChange,
         },
     },
+    inspection::query_context_inspection,
     records::{execute_batch, execute_single},
 };
 
@@ -57,9 +59,16 @@ struct BlobEnvelope {
 }
 
 #[derive(Debug)]
+struct ContextInspectionEnvelope {
+    request_id: RequestId,
+    reply: oneshot::Sender<Result<ContextInspection, StorageError>>,
+}
+
+#[derive(Debug)]
 enum WriterMessage {
     Write(Envelope),
     Blob(BlobEnvelope),
+    ContextInspection(ContextInspectionEnvelope),
 }
 
 /// Startup configuration for the single `SQLite` writer.
@@ -134,6 +143,11 @@ impl StorageWriter {
                                 let result = database::execute(&mut connection, envelope.operation);
                                 let _sent = envelope.reply.send(result);
                             }
+                            WriterMessage::ContextInspection(envelope) => {
+                                let result =
+                                    query_context_inspection(&connection, envelope.request_id);
+                                let _sent = envelope.reply.send(result);
+                            }
                         }
                     }
                     drop(connection);
@@ -172,6 +186,24 @@ impl StorageWriter {
                 }
                 .into(),
             )
+            .await
+            .map_err(|_error| StorageError::QueueClosed)?;
+        result.await.map_err(|_error| StorageError::ReplyStopped)?
+    }
+
+    /// Reads one bounded context inspection through the daemon-owned `SQLite` connection.
+    ///
+    /// # Errors
+    /// Returns a typed not-found, queue, query, or reply error. No client connection is opened.
+    pub async fn inspect_context(
+        &self,
+        request_id: RequestId,
+    ) -> Result<ContextInspection, StorageError> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(WriterMessage::ContextInspection(
+                ContextInspectionEnvelope { request_id, reply },
+            ))
             .await
             .map_err(|_error| StorageError::QueueClosed)?;
         result.await.map_err(|_error| StorageError::ReplyStopped)?

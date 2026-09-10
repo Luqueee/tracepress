@@ -8,10 +8,11 @@ use tracepress_core::{
 
 use crate::test_support::TestResult;
 use crate::{
-    ContextAnalysisStatus, ContextBlockKind, ContextCorrelationStatus, ContextOrigin, ContextRole,
-    Durability, EstimatedTokenComposition, EstimatedTokensByKind, EstimatedTokensByOrigin,
-    EstimatedTokensByRole, LogicalContextStatus, ReconciliationStatus, StorageConfig, StorageError,
-    StorageWriter, WriteBatch, WriteCommand, WriteReceipt,
+    CONTEXT_INSPECTION_MAX_BLOCKS, ContextAnalysisStatus, ContextBlockKind,
+    ContextCorrelationStatus, ContextOrigin, ContextRole, Durability, EstimatedTokenComposition,
+    EstimatedTokensByKind, EstimatedTokensByOrigin, EstimatedTokensByRole, LogicalContextStatus,
+    ReconciliationStatus, StorageConfig, StorageError, StorageWriter, WriteBatch, WriteCommand,
+    WriteReceipt,
 };
 
 const ALL_KINDS: [ContextBlockKind; 15] = [
@@ -733,5 +734,51 @@ async fn an_unrepresentable_context_measurement_is_typed_and_commits_nothing() -
         |row| row.get(0),
     )?;
     assert_eq!(blocks, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn context_inspection_returns_only_bounded_largest_blocks() -> TestResult {
+    // Given: one provider request with more blocks than the inspection IPC contract permits.
+    let directory = TempDir::new()?;
+    let database = directory.path().join("context-inspection.sqlite3");
+    let generator = UuidV7Generator::new();
+    let writer = open_writer(&database).await?;
+    let (fixture, batch) = ancestry(&generator);
+    let _setup = writer.submit_batch(batch).await?;
+
+    let mut blocks = WriteBatch::new(unknown_block(
+        ContextBlockOccurrenceId::generate(&generator),
+        fixture.snapshot,
+        0,
+    ));
+    for ordinal in 1..5_000 {
+        blocks = blocks.and(unknown_block(
+            ContextBlockOccurrenceId::generate(&generator),
+            fixture.snapshot,
+            ordinal,
+        ));
+    }
+    let _blocks = writer.submit_batch(blocks).await?;
+
+    // When: the daemon-owned writer handles the metadata-only inspection read.
+    let inspection = writer.inspect_context(fixture.request).await?;
+    assert_eq!(inspection.provider_input_tokens, Some(1_200));
+
+    // Then: the largest-block list and serialized result remain bounded.
+    assert_eq!(
+        inspection.largest_blocks.len(),
+        CONTEXT_INSPECTION_MAX_BLOCKS
+    );
+    assert_eq!(
+        inspection
+            .largest_blocks
+            .first()
+            .ok_or("missing largest block")?
+            .raw_bytes,
+        3_968
+    );
+    assert!(serde_json::to_vec(&inspection)?.len() < 32_768);
+    writer.shutdown().await?;
     Ok(())
 }

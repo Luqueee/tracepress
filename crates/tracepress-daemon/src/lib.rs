@@ -15,6 +15,7 @@ pub use context::{
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
+use tracepress_context::ContextAnalysisDropReason;
 use tracepress_core::{
     AttemptId, CausalEdge, CausalEdgeError, CausalRelationship, ContextBlockOccurrenceId,
     ContextSnapshotId, EventId, HttpStatusCode, InferenceStatus, OperationId, OperationKind,
@@ -28,7 +29,7 @@ use tracepress_provider::{
     UsageStatus as ProviderUsageStatus,
 };
 use tracepress_storage::{
-    ObservationStatus, ProviderKind, ProviderProtocol,
+    ContextInspection, ObservationStatus, ProviderKind, ProviderProtocol,
     ProviderResponseState as StorageResponseState, StorageError, StorageWriter, WriteBatch,
     WriteCommand, WriteReceipt,
 };
@@ -71,6 +72,9 @@ pub enum DaemonError {
     UnknownContextSnapshot {
         snapshot_id: tracepress_core::ContextSnapshotId,
     },
+    /// The requested provider request has no finalized context snapshot.
+    #[error("context inspection request {request_id} was not found")]
+    ContextInspectionNotFound { request_id: RequestId },
     /// A context analysis identity does not match its provider request and inference operation.
     #[error("context analysis identities are not associated with session {session_id}")]
     InvalidContextAssociation { session_id: SessionId },
@@ -351,23 +355,109 @@ impl RecordCorrelationDegradation {
     }
 }
 
-/// A bounded count of context analyses rejected by observer backpressure.
+/// Missing required input while constructing a context-analysis drop report.
+#[derive(Clone, Copy, Debug, Eq, Error, PartialEq)]
+#[non_exhaustive]
+pub enum RecordContextAnalysisDroppedBuildError {
+    /// A required builder field was not supplied.
+    #[error("context analysis drop builder is missing `{0}`")]
+    MissingField(&'static str),
+}
+
+/// Builder for a bounded count of context analyses rejected before context persistence.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct RecordContextAnalysisDroppedBuilder {
+    session_id: Option<SessionId>,
+    reason: Option<ContextAnalysisDropReason>,
+    dropped: Option<u64>,
+    observed_at_us: Option<u64>,
+}
+
+/// A bounded count of context analyses rejected before context persistence.
 #[derive(Clone, Debug)]
 pub struct RecordContextAnalysisDropped {
     session_id: SessionId,
+    reason: ContextAnalysisDropReason,
     dropped: u64,
     observed_at_us: u64,
 }
 
 impl RecordContextAnalysisDropped {
-    /// Creates a context-analysis backpressure report for one active session.
+    /// Starts building a compact context-analysis drop report.
     #[must_use]
-    pub const fn new(session_id: SessionId, dropped: u64, observed_at_us: u64) -> Self {
-        Self {
+    pub const fn builder() -> RecordContextAnalysisDroppedBuilder {
+        RecordContextAnalysisDroppedBuilder {
+            session_id: None,
+            reason: None,
+            dropped: None,
+            observed_at_us: None,
+        }
+    }
+}
+
+impl RecordContextAnalysisDroppedBuilder {
+    /// Sets the active session identity.
+    #[must_use]
+    pub const fn session_id(mut self, value: SessionId) -> Self {
+        self.session_id = Some(value);
+        self
+    }
+
+    /// Sets the reason analyses were dropped.
+    #[must_use]
+    pub const fn reason(mut self, value: ContextAnalysisDropReason) -> Self {
+        self.reason = Some(value);
+        self
+    }
+
+    /// Sets the number of analyses dropped.
+    #[must_use]
+    pub const fn dropped(mut self, value: u64) -> Self {
+        self.dropped = Some(value);
+        self
+    }
+
+    /// Sets the observation timestamp in microseconds.
+    #[must_use]
+    pub const fn observed_at_us(mut self, value: u64) -> Self {
+        self.observed_at_us = Some(value);
+        self
+    }
+
+    /// Completes the context-analysis drop report after all fields are supplied.
+    ///
+    /// # Errors
+    /// Returns the missing required field when the builder is incomplete.
+    pub const fn build(
+        self,
+    ) -> Result<RecordContextAnalysisDropped, RecordContextAnalysisDroppedBuildError> {
+        let Some(session_id) = self.session_id else {
+            return Err(RecordContextAnalysisDroppedBuildError::MissingField(
+                "session_id",
+            ));
+        };
+        let Some(reason) = self.reason else {
+            return Err(RecordContextAnalysisDroppedBuildError::MissingField(
+                "reason",
+            ));
+        };
+        let Some(dropped) = self.dropped else {
+            return Err(RecordContextAnalysisDroppedBuildError::MissingField(
+                "dropped",
+            ));
+        };
+        let Some(observed_at_us) = self.observed_at_us else {
+            return Err(RecordContextAnalysisDroppedBuildError::MissingField(
+                "observed_at_us",
+            ));
+        };
+        Ok(RecordContextAnalysisDropped {
             session_id,
+            reason,
             dropped,
             observed_at_us,
-        }
+        })
     }
 }
 
@@ -799,7 +889,7 @@ impl DaemonService {
         Ok(())
     }
 
-    /// Records one aggregate event for analyses dropped by observer backpressure.
+    /// Records one aggregate event for analyses dropped before context persistence.
     ///
     /// The event carries only the session, reason, count, and timestamp. It never carries
     /// request content, block data, or provider usage.
@@ -817,6 +907,7 @@ impl DaemonService {
     ) -> Result<(), DaemonError> {
         let RecordContextAnalysisDropped {
             session_id,
+            reason,
             dropped,
             observed_at_us,
         } = input;
@@ -833,7 +924,7 @@ impl DaemonService {
         let generator = self.ids.lock().await;
         let payload = serde_json::json!({
             "session_id": session_id.to_string(),
-            "status": "observer_backpressure",
+            "status": reason.as_wire_str(),
             "dropped_count": dropped,
         });
         let event = WriteCommand::Event {
@@ -847,8 +938,26 @@ impl DaemonService {
         };
         drop(generator);
         let _receipt = self.writer.submit(event).await?;
-        tracing::info!(%session_id, dropped, "context analyses dropped");
+        tracing::info!(%session_id, ?reason, dropped, "context analyses dropped");
         Ok(())
+    }
+
+    /// Returns one bounded metadata-only context inspection through daemon-owned storage.
+    ///
+    /// # Errors
+    /// Returns [`DaemonError::ContextInspectionNotFound`] when no finalized snapshot exists for
+    /// the request, or a storage error for the read boundary.
+    pub async fn inspect_context(
+        &self,
+        request_id: RequestId,
+    ) -> Result<ContextInspection, DaemonError> {
+        match self.writer.inspect_context(request_id).await {
+            Ok(inspection) => Ok(inspection),
+            Err(StorageError::ContextSnapshotNotFound { request_id }) => {
+                Err(DaemonError::ContextInspectionNotFound { request_id })
+            }
+            Err(error) => Err(DaemonError::Storage(error)),
+        }
     }
 
     /// Returns the current in-memory state for one session.
@@ -1463,9 +1572,10 @@ pub enum ControlRequest {
         reason: CorrelationDegradation,
         observed_at: String,
     },
-    /// Records context analyses rejected by the bounded observer queue.
+    /// Records context analyses rejected before context persistence.
     RecordContextAnalysisDropped {
         session_id: SessionId,
+        reason: ContextAnalysisDropReason,
         dropped: u64,
         observed_at_us: u64,
     },
@@ -1474,6 +1584,8 @@ pub enum ControlRequest {
         session_id: SessionId,
         ended_at: String,
     },
+    /// Reads one bounded metadata-only context inspection by provider request identity.
+    Context { request_id: RequestId },
     /// Begins a bounded shadow context analysis for an already recorded provider request.
     BeginContextAnalysis {
         session_id: SessionId,
@@ -1519,6 +1631,11 @@ pub enum ControlResponse {
         inference_operation_id: Option<OperationId>,
         /// Context snapshot identity returned by `BeginContextAnalysis`.
         context_snapshot_id: Option<ContextSnapshotId>,
+    },
+    /// Bounded metadata-only context inspection.
+    Context {
+        /// Bounded metadata-only context inspection payload.
+        inspection: Box<ContextInspection>,
     },
     /// Request failed inside the daemon.
     Error { message: String },

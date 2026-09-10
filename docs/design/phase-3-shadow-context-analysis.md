@@ -16,18 +16,24 @@ A new crate `tracepress-context` owns the analysis domain: canonical types, the 
 
 `tracepress-provider` is not extended with context decomposition: its parsers answer "what did the provider report", while context analysis answers "what did we send". Keeping them apart is what lets Phase 4 rewrite a request payload without touching usage/lifecycle parsing.
 
-`tracepress-proxy` runs the analyzer inside the existing detached blocking observation task and hands the result to a sink. `tracepress-cli` batches it over IPC. `tracepress-daemon` owns identity allocation and durable writes. `tracepress-storage` gains migration `0003`.
+`tracepress-proxy` keeps Phase 2 provider observation independent, retains a context-analysis trigger with response-body state, and submits bounded Shadow work after settlement. `tracepress-cli` batches it over IPC. `tracepress-daemon` owns identity allocation and durable writes. `tracepress-storage` gains migration `0003`.
 
 ## Transparency and execution model
 
-The forwarding task performs no analysis and never awaits one. Analysis runs on the same detached `spawn_blocking` task that already parses the request semantically, over the refcounted `Bytes` handle of the accepted request buffer. The externally observable invariants of Phase 2 hold unchanged:
+The selected execution mode is typed `ContextAnalysisMode { Off, Shadow }`. Production defaults to `Shadow`; `TRACEPRESS_CONTEXT_ANALYSIS=off` disables every Phase 3 context-analysis task and handoff, while `TRACEPRESS_CONTEXT_ANALYSIS=shadow` enables bounded analysis. `Off` leaves Phase 2 provider request/response observation enabled. In either mode the forwarding path preserves the exact byte identities:
 
 ```text
 forwarded_request_bytes  == original_request_bytes
 forwarded_response_bytes == upstream_response_bytes
 ```
 
-Analysis may complete, be partial, hit a resource limit, find malformed input, be dropped by bounded-queue backpressure, be degraded by correlation, be unsupported, or be cancelled. None of those outcomes may alter bytes, status, headers, or forwarding progress. Every sink and IPC call is non-blocking and fail-open.
+Request observation is queued independently as soon as the request body is available. In `Shadow`, the Phase 3 trigger is retained alongside the response-body state and starts only after the response is settled — downstream completion, downstream drop, or upstream failure. It then observes a 10 ms quiescence window so a newly admitted forward has priority. Analysis is admitted only when no forward is active; an active forward, or an unavailable analyzer permit, produces explicit `ObserverBackpressure`. Analyzer admission is non-blocking and capped at two concurrent analyses.
+
+The heavy context-ingestion queue is capped at four items. The Phase 2 recorder queue remains capped at 128 items, and correlation remains bounded at 64 in-flight and 256 retired identities. `BackgroundTracker` acquires a guard before each detached durable provider half is spawned. `TransportOrdering` preserves provider/response ordering without making forwarding wait for recorder capacity. After the child exits and response forwarding is stopped, shutdown drains tracked background work under a bounded 30-second timeout; forwarding never blocks on context analysis or recording.
+
+Provider settlement never waits for context analysis. Bounded receipts and pending-context maps join a late context outcome when it arrives; an unpaired late outcome is recorded as explicit `CorrelationDegraded` or dropped with `ObserverBackpressure`, never retained without a bound.
+
+Analysis may complete, be partial, hit a resource limit, find malformed input, be dropped by bounded-queue backpressure, be degraded by correlation, be unsupported, or be cancelled. None of those outcomes may alter bytes, status, headers, or forwarding progress. Detached sink and IPC work is fail-open, with backpressure and missing joins represented explicitly rather than by a fabricated success.
 
 `analyze(raw)` never mutates `raw`; the analyzer takes a shared slice and owns no mutable view of the request.
 
@@ -142,15 +148,23 @@ Crossing a bound stops that dimension of the work, sets `ResourceLimit`, and per
 
 Memory discipline: one refcounted handle to the request bytes, spans instead of copies, streaming hash, and bounded decode buffers. A request above `max_analyzed_bytes` is forwarded in full and analysed partially or skipped, with `skipped_bytes` recording the difference.
 
+`max_batches = 128` is the analyzer's per-snapshot batch limit, not an ingestion-queue capacity. Runtime capacities are separate: the heavy Phase 3 ingestion queue is capped at 4, the Phase 2 recorder queue at 128, and analyzer admission at 2 concurrent non-blocking permits.
+
 ## Batched ingestion
 
-The CLI/daemon control protocol gains three messages. `BeginContextAnalysis` names the session, the provider request, and the inference operation, and returns the daemon-allocated `ContextSnapshotId`. `AppendContextBlocks` carries the snapshot id, a monotonic `sequence`, and a bounded slice of block records. `FinalizeContextAnalysis` carries the snapshot id, the terminal status, and the summary metrics, deltas, and reconciliation.
+The CLI/daemon control protocol has three messages. `BeginContextAnalysis` binds `session_id`, `provider_request_id`, `inference_operation_id`, `analysis_version`, and `started_at_us`, then returns the daemon-allocated `ContextSnapshotId`. The daemon writes the initial `Partial` snapshot and `context.analysis.started` event in the same writer batch. `AppendContextBlocks` carries the snapshot id, a monotonic `sequence`, and a bounded slice of block records. `FinalizeContextAnalysis` carries the snapshot id, terminal status and timestamp, visibility, correlation, summary metrics, delta, reconciliation, and attempt data.
 
-Every message is sized to fit the existing 32 KiB IPC body bound, which is not raised. The batch block count is chosen so a worst-case block record still fits, and a test pins that a full batch of maximum-size records stays under the bound. A record that cannot fit even alone is dropped with the snapshot degraded, never truncated into something that looks complete.
+Every message is sized to fit the existing 32 KiB IPC body bound, which is not raised. The maximum measured serialized append batch is 30,231 bytes (30,231 / 32,768). The batch block count is chosen so a worst-case block record still fits, and a record that cannot fit even alone is dropped with the snapshot degraded, never truncated into something that looks complete.
 
 Block records carry ids, kinds, roles, origins, spans, byte counts, fingerprints, estimates, detector results, and features. They never carry prompt text, tool result text, function arguments, schema contents, URLs, or file content. Long metadata strings such as `semantic_path` and tool names are bounded and, when truncated, are recorded as truncated plus a hash of the full value.
 
-A snapshot is `Complete` only after its `Finalize` commits. A crash between `Begin` and `Finalize` leaves a snapshot whose status is not `Complete`; deterministic startup recovery marks such snapshots `Partial`, in the same spirit as Phase 1 stale-session recovery.
+`FinalizeContextAnalysis` commits metrics, delta, reconciliation, outcome, and applicable visibility, reconciliation, terminal, and correlation events in one writer transaction/batch. A crash after `BeginContextAnalysis` and before `FinalizeContextAnalysis` leaves `status = Partial` and `completed_at_us = NULL`; deterministic startup recovery preserves the incomplete state as `Partial` rather than creating a complete snapshot.
+
+## Metadata-only context inspection
+
+`tracepress context <request-id>` returns bounded metadata sections: `Context visibility`; `Provider input observed`; `Visible estimate + estimator + reconciliation/residual`; `Composition (estimated)`; `Repetition`; `Stable explicit prefix`; `Largest blocks`; `Analysis`; and `Correlation`. `Largest blocks` is limited to the top-10 largest blocks by raw-byte size.
+
+The maximum measured serialized inspection response is 5,859 bytes (5,859 / 32,768). It contains metadata only: no prompt or instruction text, tool arguments or results, schemas, URLs, file contents, decoded buffers, or other request content.
 
 ## Correlation degradation
 
@@ -172,7 +186,7 @@ New tables: `context_snapshots`, `context_block_occurrences`, `context_analysis_
 
 New event types: `context.analysis.started`, `context.analysis.completed`, `context.analysis.partial`, `context.analysis.dropped`, `context.correlation.degraded`, `context.visibility.partial`, `context.reconciliation.completed`, `context.reconciliation.unavailable`. Payloads carry identifiers, versions, statuses, counts, and timings only.
 
-The single daemon-owned writer remains the only SQLite mutation path. A `Finalize` commits its metrics, delta, reconciliation, and terminal events in one transaction.
+The single daemon-owned writer remains the only SQLite mutation path. `BeginContextAnalysis` commits the initial `Partial` snapshot and `context.analysis.started` event in one batch. `FinalizeContextAnalysis` commits metrics, delta, reconciliation, outcome, and applicable terminal/visibility/reconciliation/correlation events in one transaction; no snapshot is `Complete` before this finalization.
 
 ## Privacy boundary
 
@@ -180,10 +194,21 @@ The durable and IPC allowlist is exactly the structural and statistical fields n
 
 ## Performance gate
 
-A benchmark compares Phase 2 baseline forwarding against Phase 3 forwarding on identical inputs, measuring dispatch latency, proxy TTFB and TTFT overhead, RSS, and observer queue depth. No target number is fixed before measuring. Phase 3 may not cause a significant forwarding regression; if one appears, a performance investigation precedes closing the phase.
+The final benchmark uses `scripts/benchmark_phase3.py` with the exact `phase-2-complete` baseline (`2b5fd6f`), current `TRACEPRESS_CONTEXT_ANALYSIS=off`, and current `TRACEPRESS_CONTEXT_ANALYSIS=shadow` arms on the deterministic local HTTP upstream. It builds the release profile with `--locked`, takes 3 warmups and 15 samples per workload, and includes the gap0 priority cases (`post_response_settle_seconds = 0`). The decision uses bootstrap confidence intervals and measured A/A envelopes, not an arbitrary fixed threshold. Request errors are required to be zero and were zero for the accepted runs.
+
+The measured ON−OFF proxy-TTFB deltas are:
+
+| workload | ON−OFF median | measured A/A envelope |
+| --- | ---: | ---: |
+| small JSON | +22.910 µs | 107.730 µs |
+| streamed responses | +22.661 µs | 34.650 µs |
+| burst 32 | +3.500 µs | 17.245 µs |
+| burst 64 | +11.125 µs | 11.490 µs |
+
+The 1 MiB context case measured +23.120 µs and its confidence interval crosses zero. The over-budget case measured −22.380 µs and its confidence interval crosses zero. Its worst peak-minus-idle RSS delta was +34,708 KiB, bounded by the two-analysis cap. This RSS figure is the worst-case measured memory cost, not a claim of zero regression. Under the rule that each target interval must cross zero or remain within its measured A/A envelope, the operational gate was accepted with request errors = 0.
 
 ## Verification
 
-Format, strict Clippy, workspace tests, workspace build, and the fuzz-package check all stay green. New fuzz targets cover the span indexer, the Responses context extractor, the semantic fingerprint, the content detectors, and the delta builder, reusing the Phase 2 fuzz workflow.
+The shipped verification covers 452 green workspace tests and strict Clippy clean. The Phase 3 fuzz package has five targets — `span_indexer`, `responses_extractor`, `semantic_fingerprint`, `content_detector`, and `delta_builder` — plus a finite smoke check. CI discovers standalone fuzz packages by `*/fuzz/Cargo.toml`, enumerates their targets, and runs each target under bounded time and RSS limits.
 
 Two independent reviews are mandatory: one on correctness, data model, spans, missingness, and causality; one on privacy, resource limits, performance, dataset quality, and Phase 4 rewrite safety. Every P0 and P1 is closed with a regression test that fails without the fix.

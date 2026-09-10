@@ -553,7 +553,9 @@ def run_agent(
     sample_gap_ms: float,
 ) -> dict[str, Any]:
     burst_width = int(specs[workload].get("burst_width", 1))
-    run_namespace = f"{phase}-{analysis_mode}-{workload}-{time.time_ns()}"
+    # Unix-domain socket paths have a small platform-defined limit. Keep the
+    # diagnostic labels in the report, but never encode them in TRACEPRESS_HOME.
+    run_namespace = f"r{time.time_ns()}"
     home: Path | None = None
     env: dict[str, str] | None = None
     daemon_process: subprocess.Popen[str] | None = None
@@ -1385,7 +1387,9 @@ def main() -> int:
         },
         "results": {},
     }
-    with tempfile.TemporaryDirectory(prefix="tracepress-phase3-benchmark-") as temporary:
+    # Keep the temporary root short because each isolated run contains a Unix
+    # control socket below it. The labels remain in report metadata and errors.
+    with tempfile.TemporaryDirectory(prefix="tp3-") as temporary:
         temporary_root = Path(temporary)
         baseline_worktree = temporary_root / "phase-2-complete-worktree"
         baseline_target = temporary_root / "phase-2-complete-target"

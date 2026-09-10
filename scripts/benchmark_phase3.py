@@ -14,7 +14,8 @@ intentionally absent because it does not exercise the production recorder/analys
 
 The command prints a concise comparison table followed by JSON. ``--json-output`` writes the
 same JSON document separately for machine use. No request or response content is included in
-reports; only timing, process-resource, and bounded queue counters are emitted.
+reports; durable lifecycle counters are included as bounded observability evidence. The
+``--self-test`` mode exercises the lifecycle gate without building or starting any process.
 """
 
 from __future__ import annotations
@@ -552,10 +553,10 @@ def run_agent(
     sample_gap_ms: float,
 ) -> dict[str, Any]:
     burst_width = int(specs[workload].get("burst_width", 1))
+    run_namespace = f"{phase}-{analysis_mode}-{workload}-{time.time_ns()}"
     home: Path | None = None
     env: dict[str, str] | None = None
     daemon_process: subprocess.Popen[str] | None = None
-
     def attempt_environment(attempt_home: Path) -> dict[str, str]:
         attempt_env = os.environ.copy()
         attempt_env.update(
@@ -635,7 +636,7 @@ def run_agent(
 
     start_error: BenchmarkError | None = None
     for attempt in range(5):
-        attempt_home = root / f"h{attempt}"
+        attempt_home = root / f"{run_namespace}-h{attempt}"
         attempt_home.mkdir(parents=True, exist_ok=True)
         attempt_env = attempt_environment(attempt_home)
         try:
@@ -797,12 +798,22 @@ def run_agent(
 
 
 def durable_queue_metrics(database: Path) -> dict[str, int | None]:
+    """Read bounded lifecycle evidence from one isolated run database.
+
+    ``None`` means the database/schema did not expose the requested evidence.  The
+    acceptance gate deliberately rejects that state for current Phase 3 arms rather
+    than treating an unobservable analysis path as a successful zero.
+    """
+    empty = {
+        "context_snapshots": None,
+        "terminal_context_snapshots": None,
+        "observer_backpressure_snapshots": None,
+        "context_analysis_dropped_events": None,
+        "context_analysis_event_count": None,
+        "phase2_provider_requests": None,
+    }
     if not database.exists():
-        return {
-            "context_snapshots": None,
-            "observer_backpressure_snapshots": None,
-            "context_analysis_dropped_events": None,
-        }
+        return empty
     import sqlite3
 
     connection = sqlite3.connect(database)
@@ -813,29 +824,232 @@ def durable_queue_metrics(database: Path) -> dict[str, int | None]:
         }
         if "context_snapshots" not in tables:
             snapshots = None
+            terminal = None
             backpressure = None
-            dropped = None
         else:
             snapshots = int(connection.execute("SELECT COUNT(*) FROM context_snapshots").fetchone()[0])
+            terminal = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM context_snapshots "
+                    "WHERE completed_at_us IS NOT NULL OR recovered_at_us IS NOT NULL"
+                ).fetchone()[0]
+            )
             backpressure = int(
                 connection.execute(
                     "SELECT COUNT(*) FROM context_snapshots WHERE status = 'observer_backpressure'"
                 ).fetchone()[0]
             )
+        if "events" not in tables:
             dropped = None
-            if "events" in tables:
-                dropped = int(
-                    connection.execute(
-                        "SELECT COUNT(*) FROM events WHERE event_type = 'context.analysis.dropped'"
-                    ).fetchone()[0]
-                )
+            phase3_events = None
+        else:
+            dropped = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM events WHERE event_type = 'context.analysis.dropped'"
+                ).fetchone()[0]
+            )
+            phase3_events = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM events WHERE event_type LIKE 'context.analysis.%'"
+                ).fetchone()[0]
+            )
+        phase2_requests = (
+            int(connection.execute("SELECT COUNT(*) FROM provider_requests").fetchone()[0])
+            if "provider_requests" in tables
+            else None
+        )
         return {
             "context_snapshots": snapshots,
+            "terminal_context_snapshots": terminal,
             "observer_backpressure_snapshots": backpressure,
             "context_analysis_dropped_events": dropped,
+            "context_analysis_event_count": phase3_events,
+            "phase2_provider_requests": phase2_requests,
         }
+    except sqlite3.OperationalError:
+        return empty
     finally:
         connection.close()
+
+
+def _required_counter(counters: dict[str, int], name: str, label: str) -> int:
+    value = counters.get(name)
+    if not isinstance(value, int) or value < 0:
+        raise BenchmarkError(f"{label} is missing non-negative counter {name}")
+    return value
+
+
+def validate_analysis_lifecycle(
+    measured: dict[str, Any],
+    *,
+    phase: str,
+    analysis_mode: str,
+    workload: str,
+    burst_width: int,
+) -> None:
+    """Reject an arm whose forwarding succeeds but whose analysis is unobservable."""
+    label = f"{phase}/{analysis_mode}/{workload}"
+    queue = measured.get("queue_observability")
+    if not isinstance(queue, dict):
+        raise BenchmarkError(f"{label} did not report queue/lifecycle observability")
+    durable = queue.get("durable")
+    if not isinstance(durable, dict):
+        raise BenchmarkError(f"{label} did not report durable lifecycle evidence")
+    phase2_requests = durable.get("phase2_provider_requests")
+    if not isinstance(phase2_requests, int) or phase2_requests <= 0:
+        raise BenchmarkError(f"{label} did not persist any Phase 2 provider request")
+
+    snapshots = durable.get("context_snapshots")
+    phase3_events = durable.get("context_analysis_event_count")
+    if analysis_mode == "off":
+        if snapshots != 0 or phase3_events != 0:
+            raise BenchmarkError(
+                f"{label} OFF arm persisted Phase 3 evidence: "
+                f"snapshots={snapshots!r}, events={phase3_events!r}"
+            )
+        return
+    if analysis_mode != "shadow":
+        raise BenchmarkError(f"{label} has unknown analysis mode")
+
+    counters = queue.get("stdout_counters")
+    if not isinstance(counters, dict):
+        raise BenchmarkError(f"{label} did not report Shadow counters")
+    seen = _required_counter(counters, "analysis_requests_seen", label)
+    complete = _required_counter(counters, "analysis_requests_complete", label)
+    partial = _required_counter(counters, "analysis_requests_partial", label)
+    dropped = _required_counter(counters, "analysis_requests_dropped", label)
+    if seen == 0:
+        raise BenchmarkError(f"{label} Shadow arm saw no eligible analysis request")
+    if seen != complete + partial + dropped:
+        raise BenchmarkError(
+            f"{label} has non-terminal analysis partition: "
+            f"seen={seen}, complete={complete}, partial={partial}, dropped={dropped}"
+        )
+
+    terminal_snapshots = durable.get("terminal_context_snapshots")
+    dropped_events = durable.get("context_analysis_dropped_events")
+    if not isinstance(terminal_snapshots, int) or not isinstance(dropped_events, int):
+        raise BenchmarkError(f"{label} did not report durable Shadow terminal evidence")
+    persisted = complete + partial
+    if persisted > 0 and terminal_snapshots == 0:
+        raise BenchmarkError(
+            f"{label} reports persisted analysis outcomes without a durable terminal snapshot"
+        )
+    if dropped > 0 and dropped_events == 0:
+        raise BenchmarkError(
+            f"{label} reports dropped analyses without a durable context.analysis.dropped event"
+        )
+    if terminal_snapshots + dropped_events == 0:
+        raise BenchmarkError(
+            f"{label} Shadow arm has no durable terminal snapshot or matching drop event"
+        )
+    if workload == "context_1m" and burst_width == 1 and terminal_snapshots == 0:
+        raise BenchmarkError(
+            f"{label} sequential context_1m produced no durable snapshot; all analyses dropped"
+        )
+
+
+def run_self_test() -> None:
+    """Exercise the lifecycle gate without building or starting the benchmark."""
+    no_op = {
+        "queue_observability": {
+            "stdout_counters": {
+                "analysis_requests_seen": 1,
+                "analysis_requests_complete": 0,
+                "analysis_requests_partial": 0,
+                "analysis_requests_dropped": 0,
+            },
+            "durable": {
+                "phase2_provider_requests": 1,
+                "context_snapshots": 0,
+                "terminal_context_snapshots": 0,
+                "context_analysis_dropped_events": 0,
+                "context_analysis_event_count": 0,
+            },
+        }
+    }
+    try:
+        validate_analysis_lifecycle(
+            no_op,
+            phase="on",
+            analysis_mode="shadow",
+            workload="small_json",
+            burst_width=1,
+        )
+    except BenchmarkError:
+        pass
+    else:
+        raise AssertionError("a no-op Shadow analysis must be rejected")
+
+    valid_on = {
+        "queue_observability": {
+            "stdout_counters": {
+                "analysis_requests_seen": 1,
+                "analysis_requests_complete": 1,
+                "analysis_requests_partial": 0,
+                "analysis_requests_dropped": 0,
+            },
+            "durable": {
+                "phase2_provider_requests": 1,
+                "context_snapshots": 1,
+                "terminal_context_snapshots": 1,
+                "context_analysis_dropped_events": 0,
+                "context_analysis_event_count": 3,
+            },
+        }
+    }
+    validate_analysis_lifecycle(
+        valid_on,
+        phase="on",
+        analysis_mode="shadow",
+        workload="context_1m",
+        burst_width=1,
+    )
+    valid_off = {
+        "queue_observability": {
+            "stdout_counters": {},
+            "durable": {
+                "phase2_provider_requests": 1,
+                "context_snapshots": 0,
+                "terminal_context_snapshots": 0,
+                "context_analysis_dropped_events": 0,
+                "context_analysis_event_count": 0,
+            },
+        }
+    }
+    validate_analysis_lifecycle(
+        valid_off,
+        phase="off_a",
+        analysis_mode="off",
+        workload="small_json",
+        burst_width=1,
+    )
+
+    valid_drop = {
+        "queue_observability": {
+            "stdout_counters": {
+                "analysis_requests_seen": 1,
+                "analysis_requests_complete": 0,
+                "analysis_requests_partial": 0,
+                "analysis_requests_dropped": 1,
+            },
+            "durable": {
+                "phase2_provider_requests": 1,
+                "context_snapshots": 0,
+                "terminal_context_snapshots": 0,
+                "context_analysis_dropped_events": 1,
+                "context_analysis_event_count": 1,
+            },
+        }
+    }
+    validate_analysis_lifecycle(
+        valid_drop,
+        phase="on",
+        analysis_mode="shadow",
+        workload="small_json",
+        burst_width=1,
+    )
+    print("benchmark self-test: ok")
 
 
 def bootstrap_median_delta(
@@ -1082,6 +1296,11 @@ def parse_args() -> argparse.Namespace:
         help="comma-separated workload names to run (default: all workloads)",
     )
     parser.add_argument("--json-output", type=Path)
+    parser.add_argument(
+        "--self-test",
+        action="store_true",
+        help="exercise lifecycle acceptance checks without building or running the benchmark",
+    )
     args = parser.parse_args()
     if args.samples < 1 or args.warmup < 0 or args.sample_gap_ms < 0:
         parser.error("samples must be positive, warmup non-negative, and sample gap non-negative")
@@ -1104,6 +1323,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.self_test:
+        run_self_test()
+        return 0
     repo = args.repo_root.resolve()
     baseline_commit = git_output(repo, "rev-parse", f"{args.baseline_tag}^{{commit}}")
     if not baseline_commit.startswith(EXPECTED_BASELINE_COMMIT):
@@ -1207,6 +1429,14 @@ def main() -> int:
                         if measured["errors"] != 0:
                             raise BenchmarkError(
                                 f"{phase}/{workload} reported {measured['errors']} request errors"
+                            )
+                        if phase in {"off_a", "off_b", "on"}:
+                            validate_analysis_lifecycle(
+                                measured,
+                                phase=phase,
+                                analysis_mode=analysis_mode,
+                                workload=workload,
+                                burst_width=int(specs[workload].get("burst_width", 1)),
                             )
                         # Keep raw timing samples transiently for bootstrap comparison, never in
                         # output. The timing summaries above remain the public report values.

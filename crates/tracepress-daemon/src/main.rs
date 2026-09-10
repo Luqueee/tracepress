@@ -13,8 +13,9 @@ use tracepress_core::{
     MaxIpcFrameBytes, MaxIpcQueueItems, MaxRequestBodyBytes, MaxResponseBodyBytes, SessionState,
 };
 use tracepress_daemon::{
-    ContextAnalysisBegin, ContextBlockBatch, ControlRequest, ControlResponse, DaemonService,
-    RecordContextAnalysisDropped, RecordCorrelationDegradation, RecordProviderObservation,
+    ContextAnalysisAbort, ContextAnalysisBegin, ContextBlockBatch, ControlRequest, ControlResponse,
+    DaemonService, RecordContextAnalysisDropped, RecordCorrelationDegradation,
+    RecordProviderObservation,
 };
 use tracepress_ipc::{
     Credential, IpcLimits, IpcResponse, IpcTransport, ResponseOutcome, SocketOwner, UnixBinding,
@@ -71,6 +72,7 @@ async fn handle_request(
                                     attempt_id: None,
                                     inference_operation_id: None,
                                     context_snapshot_id: None,
+                                    context_append_receipt: None,
                                 },
                                 false,
                             ),
@@ -123,6 +125,7 @@ async fn handle_request(
                         attempt_id: None,
                         inference_operation_id: None,
                         context_snapshot_id: None,
+                        context_append_receipt: None,
                     },
                     false,
                 ),
@@ -156,6 +159,7 @@ async fn handle_request(
                         attempt_id: Some(recorded.receipt.attempt_id),
                         inference_operation_id: Some(recorded.operation_id),
                         context_snapshot_id: None,
+                        context_append_receipt: None,
                     },
                     false,
                 ),
@@ -192,6 +196,7 @@ async fn handle_request(
                     attempt_id: None,
                     inference_operation_id: None,
                     context_snapshot_id: Some(snapshot_id),
+                    context_append_receipt: None,
                 },
                 false,
             ),
@@ -208,6 +213,38 @@ async fn handle_request(
             blocks,
         } => match daemon
             .append_context_blocks(ContextBlockBatch::new(snapshot_id, sequence, blocks))
+            .await
+        {
+            Ok(receipt) => (
+                ControlResponse::Ok {
+                    state: "running".to_owned(),
+                    session: None,
+                    operation_id: None,
+                    provider_request_id: None,
+                    attempt_id: None,
+                    inference_operation_id: None,
+                    context_snapshot_id: None,
+                    context_append_receipt: Some(receipt),
+                },
+                false,
+            ),
+            Err(error) => (
+                ControlResponse::Error {
+                    message: error.to_string(),
+                },
+                false,
+            ),
+        },
+        ControlRequest::AbortContextAnalysis {
+            snapshot_id,
+            reason,
+            completed_at_us,
+        } => match daemon
+            .abort_context_analysis(ContextAnalysisAbort::new(
+                snapshot_id,
+                reason,
+                completed_at_us,
+            ))
             .await
         {
             Ok(()) => (ControlResponse::ok("running"), false),
@@ -298,6 +335,21 @@ async fn handle_request(
                 false,
             ),
         },
+        ControlRequest::ContextStatus {
+            request_id,
+            snapshot_id,
+        } => match daemon
+            .context_snapshot_status(request_id, snapshot_id)
+            .await
+        {
+            Ok(snapshot_status) => (ControlResponse::ContextStatus { snapshot_status }, false),
+            Err(error) => (
+                ControlResponse::Error {
+                    message: error.to_string(),
+                },
+                false,
+            ),
+        },
         ControlRequest::FinishSession {
             session_id,
             ended_at,
@@ -315,6 +367,7 @@ async fn handle_request(
                         attempt_id: None,
                         inference_operation_id: None,
                         context_snapshot_id: None,
+                        context_append_receipt: None,
                     },
                     false,
                 ),

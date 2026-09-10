@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use tracepress_core::ContextSnapshotId;
 
-use crate::{ContextAnalysisLimits, ContextDigest, SemanticFingerprint};
+use crate::{ContextAnalysisLimits, ContextAnalysisStatus, ContextDigest, SemanticFingerprint};
 
 /// Fingerprint and estimate fields needed to compare one ordered block.
 #[allow(
@@ -37,6 +37,16 @@ pub struct ContextDeltaRequest<'blocks> {
     pub previous: &'blocks [ContextBlockSummary],
     /// Current blocks in ordinal order.
     pub current: &'blocks [ContextBlockSummary],
+    /// Terminal analysis state of the earlier snapshot.
+    ///
+    /// A non-`Complete` state means the block list is only an observed prefix or otherwise cannot
+    /// support a complete delta, even when its length is exactly `max_blocks`.
+    pub previous_analysis_status: ContextAnalysisStatus,
+    /// Terminal analysis state of the current snapshot.
+    ///
+    /// A non-`Complete` state means the block list is only an observed prefix or otherwise cannot
+    /// support a complete delta, even when its length is exactly `max_blocks`.
+    pub current_analysis_status: ContextAnalysisStatus,
     /// Bounds applied independently to both snapshots.
     pub limits: ContextAnalysisLimits,
 }
@@ -48,10 +58,10 @@ pub struct ContextDeltaRequest<'blocks> {
 pub enum ContextDeltaStatus {
     /// Both snapshots were compared in full.
     Complete,
-    /// At least one snapshot exceeded `max_blocks`; counts cover only the admitted prefixes.
+    /// At least one snapshot was incomplete or exceeded `max_blocks`; counts cover only the
+    /// admitted prefixes.
     ResourceLimit,
 }
-
 /// Bounded repetition delta between two snapshots in the same session.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[non_exhaustive]
@@ -91,8 +101,10 @@ pub struct ContextDelta {
 #[must_use]
 pub fn compute_context_delta(request: ContextDeltaRequest<'_>) -> ContextDelta {
     let maximum = request.limits.max_blocks.get();
-    let previous_was_limited = request.previous.len() > maximum;
-    let current_was_limited = request.current.len() > maximum;
+    let previous_was_limited = request.previous_analysis_status != ContextAnalysisStatus::Complete
+        || request.previous.len() > maximum;
+    let current_was_limited = request.current_analysis_status != ContextAnalysisStatus::Complete
+        || request.current.len() > maximum;
     let previous = request
         .previous
         .get(..request.previous.len().min(maximum))
@@ -178,7 +190,7 @@ fn compute_bounded_delta(request: BoundedDeltaRequest<'_>) -> ContextDelta {
     let (common_prefix_blocks, common_prefix_estimated_tokens) = exact_prefix(
         previous,
         current,
-        previous_was_limited && current_was_limited,
+        previous_was_limited || current_was_limited,
     );
 
     ContextDelta {

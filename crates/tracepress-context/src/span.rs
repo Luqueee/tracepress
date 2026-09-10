@@ -325,6 +325,12 @@ impl<'index> Iterator for SpanNodeChildren<'index> {
     }
 }
 
+struct ScanConfig<'clock, ClockType> {
+    limits: ContextAnalysisLimits,
+    clock: &'clock ClockType,
+    block_capacity: usize,
+}
+
 /// A structural index of every JSON value the indexer visited in one request.
 ///
 /// The index retains no request bytes: every value is a position, so reading content always needs
@@ -360,6 +366,44 @@ impl RawSpanIndex {
     where
         ClockType: AnalysisClock,
     {
+        Self::build_with_clock_and_block_capacity(
+            request,
+            &ScanConfig {
+                limits,
+                clock,
+                block_capacity: limits.max_blocks.get(),
+            },
+        )
+    }
+
+    /// Indexes a context-analysis request with bounded structural headroom for its root and model
+    /// values. The extractor still emits at most `limits.max_blocks` context blocks; the extra
+    /// slots only prevent those structural owners from consuming the entire block budget.
+    #[must_use]
+    pub(crate) fn build_for_context_analysis(
+        request: &[u8],
+        limits: ContextAnalysisLimits,
+    ) -> Self {
+        Self::build_with_clock_and_block_capacity(
+            request,
+            &ScanConfig {
+                limits,
+                clock: &MonotonicClock::started_now(),
+                block_capacity: limits.max_blocks.get().saturating_add(2),
+            },
+        )
+    }
+
+    fn build_with_clock_and_block_capacity<ClockType>(
+        request: &[u8],
+        config: &ScanConfig<'_, ClockType>,
+    ) -> Self
+    where
+        ClockType: AnalysisClock,
+    {
+        let limits = config.limits;
+        let clock = config.clock;
+        let block_capacity = config.block_capacity;
         let request_bytes = as_u64(request.len());
         let bound = limits.max_analyzed_bytes.get();
         let truncated = request.len() > bound;
@@ -372,7 +416,14 @@ impl RawSpanIndex {
             request
         };
 
-        let mut scanner = Scanner::new(window, limits, clock);
+        let mut scanner = Scanner::new(
+            window,
+            &ScanConfig {
+                limits,
+                clock,
+                block_capacity,
+            },
+        );
         let stop = scanner.run().err();
         scanner.finish(ScanOutcome {
             request_bytes,
@@ -823,13 +874,16 @@ impl<'run, ClockType> Scanner<'run, ClockType>
 where
     ClockType: AnalysisClock,
 {
-    fn new(window: &'run [u8], limits: ContextAnalysisLimits, clock: &'run ClockType) -> Self {
+    fn new(window: &'run [u8], config: &ScanConfig<'run, ClockType>) -> Self {
+        let limits = config.limits;
+        let clock = config.clock;
+        let block_capacity = config.block_capacity;
         let max_depth = u32::try_from(limits.max_json_depth.get()).unwrap_or(u32::MAX);
         Self {
             window,
             clock,
             cursor: 0,
-            max_blocks: limits.max_blocks.get(),
+            max_blocks: block_capacity,
             max_depth,
             budget: limits.processing_budget(),
             charged_ms: 0,
@@ -841,7 +895,7 @@ where
             utf8: Utf8Validator::default(),
             nodes: Vec::new(),
             frames: Vec::with_capacity(usize::try_from(max_depth.min(64)).unwrap_or(16)),
-            names: HashMap::with_capacity(limits.max_blocks.get()),
+            names: HashMap::with_capacity(block_capacity),
             path: PathState::new(),
             path_checkpoints: Vec::with_capacity(usize::try_from(max_depth.min(64)).unwrap_or(16)),
             duplicate_key_detected: false,

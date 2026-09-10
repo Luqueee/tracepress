@@ -172,6 +172,27 @@ async fn migration_from_empty_and_reopen() -> TestResult {
     Ok(())
 }
 
+#[test]
+fn context_snapshot_recovery_marker_is_nullable_and_has_no_default() -> TestResult {
+    // Given: a fully migrated database.
+    let directory = TempDir::new()?;
+    let database = directory.path().join("context-recovery-schema.sqlite3");
+    let (connection, _settings) = schema::open_database(&database, Durability::Balanced)?;
+
+    // When: the v3 context snapshot schema is inspected.
+    let marker: (String, i64, Option<String>) = connection.query_row(
+        "SELECT type, \"notnull\", dflt_value \
+         FROM pragma_table_info('context_snapshots') \
+         WHERE name = 'recovered_at_us'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+
+    // Then: a Begin starts with an unknown recovery state, represented by SQL NULL.
+    assert_eq!(marker, ("INTEGER".to_owned(), 0, None));
+    Ok(())
+}
+
 #[tokio::test]
 async fn unsupported_schema_version_above_v3_is_rejected_on_open() -> TestResult {
     // Given: a real database whose schema metadata records a future version.

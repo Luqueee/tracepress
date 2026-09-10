@@ -7,6 +7,7 @@ CREATE TABLE context_snapshots (
     status TEXT NOT NULL,
     started_at_us INTEGER NOT NULL CHECK(started_at_us >= 0),
     completed_at_us INTEGER CHECK(completed_at_us >= 0),
+    recovered_at_us INTEGER CHECK(recovered_at_us >= 0),
     request_content_hash BLOB CHECK(length(request_content_hash) = 32),
     explicit_block_count INTEGER CHECK(explicit_block_count >= 0),
     analyzed_bytes INTEGER CHECK(analyzed_bytes >= 0),

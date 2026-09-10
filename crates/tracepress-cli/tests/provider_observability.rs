@@ -918,7 +918,7 @@ fn serve_plain_response(listener: &TcpListener) -> std::io::Result<()> {
 fn answer_plain(stream: &mut TcpStream) -> std::io::Result<()> {
     write!(
         stream,
-        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {}\r\n\r\n{PLAIN_RESPONSE_BODY}",
+        "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nConnection: close\r\nContent-Length: {}\r\n\r\n{PLAIN_RESPONSE_BODY}",
         PLAIN_RESPONSE_BODY.len()
     )?;
     stream.flush()
@@ -1509,12 +1509,17 @@ fn context_queue_backpressure_drops_only_analysis_after_all_provider_receipts_co
         "context queue must saturate deterministically; snapshots={snapshots} stdout={stdout}"
     );
     let payload: Vec<u8> = database.query_row(
-        "SELECT payload FROM events WHERE event_type = 'context.analysis.dropped'",
+        r#"SELECT payload FROM events
+           WHERE event_type = 'context.analysis.dropped'
+             AND CAST(payload AS TEXT) LIKE '%"status":"observer_backpressure"%'
+           ORDER BY seq
+           LIMIT 1"#,
         [],
         |row| row.get(0),
     )?;
     let payload = String::from_utf8(payload)?;
     assert!(payload.contains(r#""status":"observer_backpressure""#));
+    assert!(payload.contains(r#""reason":"observer_backpressure""#));
     assert!(payload.contains(r#""dropped_count":"#));
     assert_no_canaries_in_storage(root)?;
     Ok(())

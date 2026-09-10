@@ -20,7 +20,7 @@ use axum::response::Response;
 use axum::routing::post;
 use futures_util::{StreamExt as _, stream};
 use thiserror::Error;
-use tokio::sync::{Notify, Semaphore};
+use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 pub use tracepress_context::ContextAnalysisDropReason;
 use tracepress_context::{
     ContextAnalysisLimits, ContextAnalysisLimitsError, ContextAnalysisResult, analyze_responses,
@@ -646,12 +646,21 @@ async fn forward_inner(
             return Err(error);
         }
     };
-    // Phase 2 request parsing may begin as soon as the body is available. Phase 3 context analysis
-    // is admitted only in shadow mode and after the upstream dispatch returns. This keeps the
-    // provider header path free of analysis CPU while preserving the request-side correlation
-    // boundary.
+    // Phase 2 request parsing may begin as soon as the body is available. A Phase 3 reservation
+    // is acquired before its trigger can retain a request body or any detached analysis task.
+    // When no reservation exists the compact drop is carried by the request observation instead
+    // of retaining another body copy or queuing a task.
+    let context_permit =
+        context_enabled.then(|| try_context_analysis_permit(&proxy.context_analysis_permits));
     let observation = observed
-        .then(|| queue_request_observation(proxy, forward, bytes.clone()))
+        .then(|| {
+            queue_request_observation(RequestObservationRequest {
+                proxy,
+                forward,
+                bytes: bytes.clone(),
+                analysis_permit: context_permit,
+            })
+        })
         .flatten();
     let upstream = match proxy
         .client
@@ -665,9 +674,11 @@ async fn forward_inner(
         Err(error) => {
             if context_enabled {
                 if let Some(observation) = observation {
-                    queue_context_analysis(proxy, forward, observation)
-                        .trigger
-                        .start();
+                    if let Some(trigger) =
+                        queue_context_analysis(proxy, forward, observation).trigger
+                    {
+                        trigger.start();
+                    }
                 }
             }
             if observed {
@@ -679,7 +690,7 @@ async fn forward_inner(
     let (stream_hint, context_trigger) = if context_enabled {
         observation.map_or((None, None), |observation| {
             let queued = queue_context_analysis(proxy, forward, observation);
-            (Some(queued.stream_hint), Some(queued.trigger))
+            (Some(queued.stream_hint), queued.trigger)
         })
     } else {
         (None, None)
@@ -880,18 +891,36 @@ fn response_mode(
 struct QueuedRequestObservation {
     stream_hint: tokio::sync::oneshot::Receiver<Option<bool>>,
     observation: tokio::sync::oneshot::Receiver<RequestObservation>,
-    bytes: Bytes,
+    /// Present only after a Phase 3 reservation was acquired before this object was built.
+    bytes: Option<Bytes>,
+    permit: Option<OwnedSemaphorePermit>,
 }
-fn queue_request_observation(
-    proxy: &TransparentProxy,
+struct RequestObservationRequest<'a> {
+    proxy: &'a TransparentProxy,
     forward: ForwardId,
     bytes: Bytes,
+    analysis_permit: Option<Result<OwnedSemaphorePermit, ContextAnalysisDropReason>>,
+}
+
+fn queue_request_observation(
+    request: RequestObservationRequest<'_>,
 ) -> Option<QueuedRequestObservation> {
+    let RequestObservationRequest {
+        proxy,
+        forward,
+        bytes,
+        analysis_permit,
+    } = request;
     let limits = observation_limits(proxy.config.max_request_body_bytes.get())?;
     let sink = Arc::clone(&proxy.observations);
     let (hint, stream_hint) = tokio::sync::oneshot::channel();
     let (sender, observation) = tokio::sync::oneshot::channel();
     let parse_bytes = bytes.clone();
+    let (analysis_bytes, permit, context) = match analysis_permit {
+        Some(Ok(permit)) => (Some(bytes), Some(permit), None),
+        Some(Err(reason)) => (None, None, Some(ContextAnalysisOutcome::Dropped(reason))),
+        None => (None, None, None),
+    };
     let task_guard = proxy.background.guard();
     drop(tokio::task::spawn_blocking(move || {
         let _task_guard = task_guard;
@@ -903,7 +932,7 @@ fn queue_request_observation(
         let _accepted = sink.try_record_request_context(RequestContextObservation {
             forward,
             observation: parsed.clone(),
-            context: None,
+            context,
         });
         let _delivered = hint.send(parsed.stream);
         let _sent = sender.send(parsed);
@@ -911,14 +940,15 @@ fn queue_request_observation(
     Some(QueuedRequestObservation {
         stream_hint,
         observation,
-        bytes,
+        bytes: analysis_bytes,
+        permit,
     })
 }
 
 /// Defers Phase 3 analysis until the response body has settled.
 struct QueuedContextAnalysis {
     stream_hint: tokio::sync::oneshot::Receiver<Option<bool>>,
-    trigger: ContextAnalysisTrigger,
+    trigger: Option<ContextAnalysisTrigger>,
 }
 
 struct ContextAnalysisTrigger {
@@ -926,7 +956,7 @@ struct ContextAnalysisTrigger {
     observation: tokio::sync::oneshot::Receiver<RequestObservation>,
     bytes: Bytes,
     context_limits: ContextAnalysisLimits,
-    permits: Arc<Semaphore>,
+    permit: OwnedSemaphorePermit,
     sink: Arc<dyn ProviderObservationSink>,
     active_forwards: Arc<AtomicU64>,
     background: BackgroundTracker,
@@ -934,7 +964,7 @@ struct ContextAnalysisTrigger {
 
 fn try_context_analysis_permit(
     permits: &Arc<Semaphore>,
-) -> Result<tokio::sync::OwnedSemaphorePermit, ContextAnalysisDropReason> {
+) -> Result<OwnedSemaphorePermit, ContextAnalysisDropReason> {
     Arc::clone(permits)
         .try_acquire_owned()
         .map_err(|_error| ContextAnalysisDropReason::ObserverBackpressure)
@@ -947,7 +977,7 @@ impl ContextAnalysisTrigger {
             observation,
             bytes,
             context_limits,
-            permits,
+            permit,
             sink,
             active_forwards,
             background,
@@ -956,6 +986,7 @@ impl ContextAnalysisTrigger {
         drop(tokio::spawn(async move {
             let _task_guard = task_guard;
             let Ok(_observation) = observation.await else {
+                drop(permit);
                 return;
             };
             tokio::time::sleep(CONTEXT_ANALYSIS_QUIESCENCE_WINDOW).await;
@@ -963,17 +994,7 @@ impl ContextAnalysisTrigger {
             let blocking_guard = blocking_background.guard();
             let _ = tokio::task::spawn_blocking(move || {
                 let _task_guard = blocking_guard;
-                let permit = match try_context_analysis_permit(&permits) {
-                    Ok(permit) => permit,
-                    Err(reason) => {
-                        let _accepted =
-                            sink.try_record_context_analysis(ContextAnalysisObservation {
-                                forward,
-                                outcome: ContextAnalysisOutcome::Dropped(reason),
-                            });
-                        return;
-                    }
-                };
+                let _permit = permit;
                 if active_forwards.load(Ordering::Acquire) != 0 {
                     let _accepted = sink.try_record_context_analysis(ContextAnalysisObservation {
                         forward,
@@ -988,7 +1009,6 @@ impl ContextAnalysisTrigger {
                     forward,
                     outcome: ContextAnalysisOutcome::Analyzed(analysis),
                 });
-                drop(permit);
             })
             .await;
         }));
@@ -1006,19 +1026,23 @@ fn queue_context_analysis(
         stream_hint,
         observation,
         bytes,
+        permit,
     } = queued;
-    QueuedContextAnalysis {
-        stream_hint,
-        trigger: ContextAnalysisTrigger {
+    let trigger = bytes
+        .zip(permit)
+        .map(|(bytes, permit)| ContextAnalysisTrigger {
             forward,
             observation,
             bytes,
             context_limits: proxy.config.context_analysis_limits,
-            permits: Arc::clone(&proxy.context_analysis_permits),
+            permit,
             sink: Arc::clone(&proxy.observations),
             active_forwards: Arc::clone(&proxy.active_forwards),
             background: proxy.background.clone(),
-        },
+        });
+    QueuedContextAnalysis {
+        stream_hint,
+        trigger,
     }
 }
 
@@ -1649,7 +1673,9 @@ mod tests {
             observation,
             bytes,
             context_limits,
-            permits: Arc::new(Semaphore::new(2)),
+            permit: Arc::new(Semaphore::new(2))
+                .try_acquire_owned()
+                .expect("test analysis permit"),
             sink,
             active_forwards,
             background: BackgroundTracker::new(),

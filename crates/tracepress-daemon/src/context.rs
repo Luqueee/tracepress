@@ -10,8 +10,9 @@ use std::collections::HashMap;
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use tracepress_context::{
-    BoundedMetadataText, ContextAnalysisLimits, ContextAnalysisStatus as AnalyzerAnalysisStatus,
-    ContextBlockDraft, ContextBlockKind as AnalyzerBlockKind, ContextDelta, ContextDigest,
+    BoundedMetadataText, ContextAnalysisDropReason, ContextAnalysisLimits,
+    ContextAnalysisStatus as AnalyzerAnalysisStatus, ContextBlockDraft,
+    ContextBlockKind as AnalyzerBlockKind, ContextDelta, ContextDigest,
     ContextOrigin as AnalyzerOrigin, ContextRole as AnalyzerRole, ContextVisibility,
     DetectedContentKind as AnalyzerDetectedKind, DetectionConfidence,
     EstimateConfidence as AnalyzerEstimateConfidence, FeatureRatio, LogicalContextStatus,
@@ -28,7 +29,10 @@ use tracepress_storage::{
     EstimatedTokensByRole, OpportunitySignal, ReconciliationStatus, WriteBatch, WriteCommand,
 };
 
-use crate::{ActiveContextAnalysis, DaemonError, DaemonService};
+use crate::{
+    ActiveContextAnalysis, DaemonError, DaemonService, context_analysis_abort_batch,
+    map_analysis_status,
+};
 use tracepress_core::SessionState;
 
 const MAX_ACTIVE_CONTEXT_ANALYSES: usize = 64;
@@ -340,6 +344,31 @@ impl ContextAnalysisFinalizeBuilder {
     }
 }
 
+/// Explicitly aborts one active context analysis with a typed drop reason.
+#[derive(Clone, Copy, Debug)]
+#[non_exhaustive]
+pub struct ContextAnalysisAbort {
+    pub snapshot_id: ContextSnapshotId,
+    pub reason: ContextAnalysisDropReason,
+    pub completed_at_us: u64,
+}
+
+impl ContextAnalysisAbort {
+    /// Creates an abort request for one active snapshot.
+    #[must_use]
+    pub const fn new(
+        snapshot_id: ContextSnapshotId,
+        reason: ContextAnalysisDropReason,
+        completed_at_us: u64,
+    ) -> Self {
+        Self {
+            snapshot_id,
+            reason,
+            completed_at_us,
+        }
+    }
+}
+
 /// Correlation state recorded with a context snapshot.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -371,6 +400,42 @@ impl ContextBlockBatch {
             blocks,
         }
     }
+}
+/// Capacity state after one context-block append commits.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ContextAppendCapacity {
+    /// Both block and batch dimensions still accept another append.
+    Available,
+    /// The block bound was exactly reached; another block is rejected.
+    BlocksExhausted,
+    /// The batch bound was exactly reached; another batch is rejected.
+    BatchesExhausted,
+    /// Both block and batch bounds were exactly reached.
+    BothExhausted,
+}
+
+impl ContextAppendCapacity {
+    /// Returns whether another append would exceed a bounded dimension.
+    #[must_use]
+    pub const fn is_exhausted(self) -> bool {
+        !matches!(self, Self::Available)
+    }
+}
+
+/// Receipt for one durably appended context-block batch.
+#[derive(Clone, Copy, Debug, Deserialize, Serialize)]
+#[non_exhaustive]
+pub struct ContextAppendReceipt {
+    /// Cumulative number of blocks accepted for the snapshot.
+    pub accepted_block_count: u64,
+    /// Sequence expected by the next append.
+    pub next_sequence: u32,
+    /// Capacity state after the append.
+    pub capacity: ContextAppendCapacity,
+    /// Current bounded analysis status after the append.
+    pub status: AnalyzerAnalysisStatus,
 }
 
 impl DaemonService {
@@ -409,9 +474,8 @@ impl DaemonService {
 
         let mut analyses = self.context_analyses.lock().await;
         if analyses.len() >= MAX_ACTIVE_CONTEXT_ANALYSES {
-            return Err(DaemonError::ContextLimit {
-                snapshot_id: ContextSnapshotId::generate(&UuidV7Generator::new()),
-                dimension: "active analyses",
+            return Err(DaemonError::ContextAnalysisCapacity {
+                limit: MAX_ACTIVE_CONTEXT_ANALYSES,
             });
         }
         let ids = self.ids.lock().await;
@@ -431,8 +495,10 @@ impl DaemonService {
             snapshot_id,
             ActiveContextAnalysis {
                 session_id,
+                provider_request_id,
                 inference_operation_id,
                 analysis_version,
+                started_at_us,
                 next_sequence: 0,
                 next_ordinal: 0,
                 occurrences: HashMap::new(),
@@ -449,7 +515,10 @@ impl DaemonService {
     /// # Errors
     /// Returns a sequence, context-limit, block-validation, unknown-snapshot, or storage error
     /// when the append cannot be admitted and durably recorded.
-    pub async fn append_context_blocks(&self, batch: ContextBlockBatch) -> Result<(), DaemonError> {
+    pub async fn append_context_blocks(
+        &self,
+        batch: ContextBlockBatch,
+    ) -> Result<ContextAppendReceipt, DaemonError> {
         let mut analyses = self.context_analyses.lock().await;
         let active =
             analyses
@@ -467,6 +536,39 @@ impl DaemonService {
         }
         active.next_ordinal = final_ordinal;
         active.next_sequence = active.next_sequence.saturating_add(1);
+        let receipt = ContextAppendReceipt {
+            accepted_block_count: u64::from(active.next_ordinal),
+            next_sequence: active.next_sequence,
+            capacity: append_capacity(active),
+            status: AnalyzerAnalysisStatus::Partial,
+        };
+        drop(analyses);
+        Ok(receipt)
+    }
+    /// Aborts one active context analysis and durably records its typed drop reason.
+    ///
+    /// The active entry is removed only after the snapshot outcome and dropped lifecycle event
+    /// commit in one writer batch. A storage failure therefore leaves the analysis retryable.
+    ///
+    /// # Errors
+    /// Returns an unknown-snapshot error for an already terminal analysis or a storage error when
+    /// the abort batch cannot commit.
+    pub async fn abort_context_analysis(
+        &self,
+        request: ContextAnalysisAbort,
+    ) -> Result<(), DaemonError> {
+        let mut analyses = self.context_analyses.lock().await;
+        let active =
+            analyses
+                .get(&request.snapshot_id)
+                .ok_or(DaemonError::UnknownContextSnapshot {
+                    snapshot_id: request.snapshot_id,
+                })?;
+        let ids = self.ids.lock().await;
+        let write_batch = context_analysis_abort_batch(active, &request, &ids);
+        drop(ids);
+        let _receipt = self.writer.submit_batch(write_batch).await?;
+        let _removed = analyses.remove(&request.snapshot_id);
         drop(analyses);
         Ok(())
     }
@@ -592,6 +694,18 @@ fn validate_append_batch(
         });
     }
     Ok(final_ordinal)
+}
+
+fn append_capacity(active: &ActiveContextAnalysis) -> ContextAppendCapacity {
+    let blocks_exhausted = u64::from(active.next_ordinal) >= ContextAnalysisLimits::MAX_BLOCKS;
+    let batches_exhausted = active.next_sequence
+        >= u32::try_from(ContextAnalysisLimits::MAX_BATCHES).unwrap_or(u32::MAX);
+    match (blocks_exhausted, batches_exhausted) {
+        (false, false) => ContextAppendCapacity::Available,
+        (true, false) => ContextAppendCapacity::BlocksExhausted,
+        (false, true) => ContextAppendCapacity::BatchesExhausted,
+        (true, true) => ContextAppendCapacity::BothExhausted,
+    }
 }
 
 fn context_block_batch_commands(
@@ -1305,29 +1419,6 @@ const fn reconciliation_status_text(status: AnalyzerReconciliationStatus) -> &'s
         AnalyzerReconciliationStatus::MissingProviderUsage => "missing_provider_usage",
         AnalyzerReconciliationStatus::MissingLocalEstimate => "missing_local_estimate",
         _ => "unknown",
-    }
-}
-
-const fn map_analysis_status(
-    value: AnalyzerAnalysisStatus,
-) -> tracepress_storage::ContextAnalysisStatus {
-    match value {
-        AnalyzerAnalysisStatus::Complete => tracepress_storage::ContextAnalysisStatus::Complete,
-        AnalyzerAnalysisStatus::ResourceLimit => {
-            tracepress_storage::ContextAnalysisStatus::ResourceLimit
-        }
-        AnalyzerAnalysisStatus::Malformed => tracepress_storage::ContextAnalysisStatus::Malformed,
-        AnalyzerAnalysisStatus::ObserverBackpressure => {
-            tracepress_storage::ContextAnalysisStatus::ObserverBackpressure
-        }
-        AnalyzerAnalysisStatus::CorrelationDegraded => {
-            tracepress_storage::ContextAnalysisStatus::CorrelationDegraded
-        }
-        AnalyzerAnalysisStatus::Unsupported => {
-            tracepress_storage::ContextAnalysisStatus::Unsupported
-        }
-        AnalyzerAnalysisStatus::Cancelled => tracepress_storage::ContextAnalysisStatus::Cancelled,
-        _ => tracepress_storage::ContextAnalysisStatus::Partial,
     }
 }
 

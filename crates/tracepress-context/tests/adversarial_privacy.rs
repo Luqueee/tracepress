@@ -11,8 +11,8 @@ use serde_json::to_string;
 use tracepress_context::{
     ContextAnalysisLimitReason, ContextAnalysisLimitValues, ContextAnalysisLimits,
     ContextAnalysisReason, ContextAnalysisStatus, ContextBlockKind, ContextDigest, ContextOrigin,
-    ContextVisibility, LogicalContextStatus, OpportunitySignal, analyze_responses,
-    analyze_with_lookup,
+    ContextVisibility, LogicalContextStatus, MeasurementApplicability, OpportunitySignal,
+    analyze_responses, analyze_with_lookup,
 };
 
 fn limits() -> ContextAnalysisLimits {
@@ -129,6 +129,31 @@ fn five_thousand_explicit_blocks_remain_bounded_and_ordered() {
 }
 
 #[test]
+fn block_limit_preserves_maximum_prefix_after_structural_owner_slots() {
+    let mut request = String::from(r#"{"model":"gpt-4o","#);
+    for index in 0..8_193 {
+        if index != 0 {
+            request.push(',');
+        }
+        write!(request, r#""input":"block-{index}""#).expect("request fixture writes");
+    }
+    request.push('}');
+
+    let analysis = analyze_responses(request.as_bytes(), limits());
+
+    assert_eq!(analysis.status, ContextAnalysisStatus::ResourceLimit);
+    assert_eq!(
+        analysis.reason,
+        Some(ContextAnalysisReason::ResourceLimit {
+            limit: ContextAnalysisLimitReason::Blocks,
+        })
+    );
+    assert_eq!(analysis.blocks.len(), 8_192);
+    assert_eq!(analysis.blocks[0].ordinal, 0);
+    assert_eq!(analysis.blocks[8_191].ordinal, 8_191);
+}
+
+#[test]
 fn duplicate_keys_preserve_occurrences_and_spans() {
     let request = br#"{"input":[{"type":"input_text","text":"first"}],"input":[{"type":"input_text","text":"second"}]}"#;
     let analysis = analyze_responses(request, limits());
@@ -239,11 +264,25 @@ fn string_inspection_bound_keeps_unknown_measurements_unknown() {
     let value = format!("{}{}", canary, "x".repeat(2_000));
     let request = format!(r#"{{"input":"{value}"}}"#);
     let analysis = analyze_responses(request.as_bytes(), limits_with(4_096, 64, 32));
-
-    assert_eq!(analysis.status, ContextAnalysisStatus::Complete);
+    assert_eq!(analysis.status, ContextAnalysisStatus::ResourceLimit);
+    assert!(!analysis.visibility.explicit_request_complete);
+    assert_eq!(
+        analysis.reason,
+        Some(ContextAnalysisReason::ResourceLimit {
+            limit: ContextAnalysisLimitReason::StringBytesInspected,
+        })
+    );
     assert_eq!(analysis.blocks.len(), 1);
     let block = &analysis.blocks[0];
     assert_eq!(block.kind, ContextBlockKind::Text);
+    assert_eq!(
+        block.detection_applicability,
+        MeasurementApplicability::Eligible
+    );
+    assert_eq!(
+        block.token_estimation_applicability,
+        MeasurementApplicability::Eligible
+    );
     assert!(block.semantic_fingerprint.is_none());
     assert!(block.token_estimate.is_none());
     assert!(block.detection_result.is_none());
@@ -253,6 +292,41 @@ fn string_inspection_bound_keeps_unknown_measurements_unknown() {
     let wire = to_string(&analysis).expect("analysis serializes");
     assert!(!debug.contains(canary));
     assert!(!wire.contains(canary));
+}
+
+#[test]
+fn extraction_budget_keeps_completed_drafts_before_wide_measurement_exhaustion() {
+    let wide = "x".repeat(20_000);
+    let request =
+        format!(r#"{{"input":"tiny","input":"{wide}","input":"{wide}","input":"{wide}"}}"#);
+    let limits = ContextAnalysisLimits::new(ContextAnalysisLimitValues {
+        max_analyzed_bytes: ContextAnalysisLimits::ANALYZED_BYTES_CEILING,
+        max_blocks: ContextAnalysisLimits::MAX_BLOCKS,
+        max_json_depth: ContextAnalysisLimits::MAX_JSON_DEPTH,
+        max_string_bytes_inspected: ContextAnalysisLimits::MAX_STRING_BYTES_INSPECTED,
+        max_analysis_work_units: 40,
+        max_analysis_wall_time_ms: ContextAnalysisLimits::MAX_ANALYSIS_WALL_TIME_MS,
+        max_batches: ContextAnalysisLimits::MAX_BATCHES,
+    })
+    .expect("bounded extraction test limits");
+
+    let analysis = analyze_responses(request.as_bytes(), limits);
+    assert_eq!(analysis.blocks.len(), 3);
+    assert!(analysis.blocks[0].token_estimate.is_some());
+    assert!(analysis.blocks[1].token_estimate.is_some());
+    assert_eq!(
+        analysis.blocks[2].detection_applicability,
+        MeasurementApplicability::Eligible
+    );
+    assert_eq!(
+        analysis.blocks[2].token_estimation_applicability,
+        MeasurementApplicability::Eligible
+    );
+    assert!(analysis.blocks[2].semantic_fingerprint.is_none());
+    assert!(analysis.blocks[2].token_estimate.is_none());
+    assert!(analysis.blocks[2].detection_result.is_none());
+    assert!(analysis.blocks[2].features.is_none());
+    assert!(analysis.blocks[2].opportunity_signals.is_empty());
 }
 
 #[test]
@@ -312,7 +386,9 @@ fn provider_and_external_references_never_claim_explicit_only_or_fetch_content()
                 )
             })
             .all(|block| {
-                block.semantic_fingerprint.is_none()
+                block.detection_applicability == MeasurementApplicability::Ineligible
+                    && block.token_estimation_applicability == MeasurementApplicability::Ineligible
+                    && block.semantic_fingerprint.is_none()
                     && block.features.is_none()
                     && block.detection_result.is_none()
                     && block.token_estimate.is_none()

@@ -11,11 +11,14 @@
     reason = "Responses extraction keeps independent visibility flags and passes the bounded request/index context explicitly"
 )]
 
-use std::{collections::HashMap, fmt};
-
 use serde::{Deserialize, Serialize};
+use std::{collections::HashMap, fmt};
+use tracepress_core::{
+    ProcessingBudget, ProcessingBudgetAxis, ProcessingBudgetDecision, ProcessingCharge,
+};
 
-use crate::span::{JsonValueKind, SpanNode, SpanNodeId};
+use crate::semantic_fingerprint_from_decoded;
+use crate::span::{AnalysisClock, JsonValueKind, SpanNode, SpanNodeId};
 use crate::visibility_analysis::{
     ContextVisibilityFacts, NoObservedResponseIds, ObservedResponseIdLookup, VisibilityObservation,
     derive_visibility,
@@ -23,12 +26,11 @@ use crate::visibility_analysis::{
 use crate::{
     BlockContentMetadata, BlockFeatureInput, BlockFeatures, BlockLocator, BoundedMetadataText,
     ContextAnalysisLimitField, ContextAnalysisLimits, ContextAnalysisStatus, ContextBlockKind,
-    ContextDigest, ContextOrigin, ContextRole, DetectionResult, EstimationRequest,
-    OpportunitySignalInput, OpportunitySignalSet, RawSpanIndex, SemanticFingerprint,
+    ContextDigest, ContextOrigin, ContextRole, DetectionResult, EstimationRequest, MonotonicClock,
+    OpportunitySignalInput, OpportunitySignalSet, RawSpan, RawSpanIndex, SemanticFingerprint,
     SemanticFingerprintInput, ShadowContentDetector, StructuralContentDetector,
     StructuralHeuristicEstimator, TokenEstimate, TokenEstimation, TokenEstimator,
     decode_json_string, derive_opportunity_signals, exact_fingerprint, extract_block_features,
-    semantic_fingerprint,
 };
 
 /// Versioned reason an analysis stopped or was degraded.
@@ -86,6 +88,24 @@ pub enum ContextAnalysisReason {
     UnknownContextItem,
 }
 
+/// Whether a bounded measurement path applies to one extracted block.
+///
+/// `Eligible` is structural applicability, not successful classification: a later work or string
+/// budget may leave the corresponding observation absent. `Unavailable` is reserved for an
+/// inspectable block whose content view was malformed or unreadable; references and opaque kinds
+/// are `Ineligible`.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum MeasurementApplicability {
+    /// The structural kind is not inspected by this measurement.
+    Ineligible,
+    /// A valid bounded content view exists, even if a later budget stops the measurement.
+    Eligible,
+    /// The structural kind is inspectable, but its content view was invalid or unreadable.
+    Unavailable,
+}
+
 /// A context block before daemon identity allocation.
 ///
 /// The locator and raw byte count describe the exact original JSON value. All other fields are
@@ -112,6 +132,10 @@ pub struct ContextBlockDraft {
     pub exact_fingerprint: ContextDigest,
     /// Versioned semantic digest where equivalence is unambiguous.
     pub semantic_fingerprint: Option<SemanticFingerprint>,
+    /// Whether semantic detection applies independently of whether it ran.
+    pub detection_applicability: MeasurementApplicability,
+    /// Whether token estimation applies independently of whether it ran.
+    pub token_estimation_applicability: MeasurementApplicability,
     /// Bounded local token estimate, when applicable.
     pub token_estimate: Option<TokenEstimate>,
     /// Structural detector result, when a safe content span was inspected.
@@ -139,6 +163,11 @@ impl fmt::Debug for ContextBlockDraft {
             .field("raw_bytes", &self.raw_bytes)
             .field("exact_fingerprint", &self.exact_fingerprint)
             .field("semantic_fingerprint", &self.semantic_fingerprint)
+            .field("detection_applicability", &self.detection_applicability)
+            .field(
+                "token_estimation_applicability",
+                &self.token_estimation_applicability,
+            )
             .field("token_estimate", &self.token_estimate)
             .field("detection_result", &self.detection_result)
             .field("features", &self.features)
@@ -248,7 +277,7 @@ pub fn analyze_responses_with_lookup<Lookup>(
 where
     Lookup: ObservedResponseIdLookup + ?Sized,
 {
-    let index = RawSpanIndex::build(request, limits);
+    let index = RawSpanIndex::build_for_context_analysis(request, limits);
     extract_indexed(request, limits, &index, lookup)
 }
 
@@ -289,9 +318,95 @@ impl ExtractionState {
         }
     }
 
+    const fn mark_resource_limit(&mut self, limit: ContextAnalysisLimitReason) {
+        self.partial = true;
+        if !matches!(
+            self.reason,
+            Some(ContextAnalysisReason::ResourceLimit { .. })
+        ) {
+            self.reason = Some(ContextAnalysisReason::ResourceLimit { limit });
+        }
+    }
+
     fn add(&mut self, candidate: Candidate) {
         self.candidates.push(candidate);
     }
+}
+/// One charged measurement budget layered after the structural span scan.
+///
+/// Candidate spans may overlap, so each operation charges the bytes it is about to hash, decode,
+/// or inspect before the operation starts. The cumulative byte total is converted to the same
+/// coarse work units as the structural scanner, and every operation also samples wall time.
+struct ExtractionBudget {
+    budget: ProcessingBudget,
+    clock: MonotonicClock,
+    charged_ms: u64,
+    charged_bytes: u64,
+    exhausted: Option<ContextAnalysisLimitReason>,
+}
+
+impl ExtractionBudget {
+    const BYTES_PER_WORK_UNIT: u64 = 4_096;
+
+    fn new(limits: ContextAnalysisLimits) -> Self {
+        Self {
+            budget: limits.processing_budget(),
+            clock: MonotonicClock::started_now(),
+            charged_ms: 0,
+            charged_bytes: 0,
+            exhausted: None,
+        }
+    }
+
+    fn charge_bytes(&mut self, bytes: u64) -> bool {
+        if self.exhausted.is_some() {
+            return false;
+        }
+        let next_bytes = self.charged_bytes.saturating_add(bytes);
+        let previous_units = work_units(self.charged_bytes, Self::BYTES_PER_WORK_UNIT);
+        let next_units = work_units(next_bytes, Self::BYTES_PER_WORK_UNIT);
+        let additional_units = next_units.saturating_sub(previous_units);
+        let observed_ms = self.clock.elapsed_ms();
+        let elapsed_ms = observed_ms.saturating_sub(self.charged_ms);
+        match self
+            .budget
+            .charge(ProcessingCharge::new(elapsed_ms, additional_units))
+        {
+            ProcessingBudgetDecision::Continue { .. } => {
+                self.charged_ms = observed_ms;
+                self.charged_bytes = next_bytes;
+                true
+            }
+            ProcessingBudgetDecision::Exhausted { axis, .. } => {
+                self.exhausted = Some(match axis {
+                    ProcessingBudgetAxis::Time => ContextAnalysisLimitReason::AnalysisWallTimeMs,
+                    ProcessingBudgetAxis::CpuWork => ContextAnalysisLimitReason::AnalysisWorkUnits,
+                });
+                false
+            }
+        }
+    }
+
+    const fn reason(&self) -> Option<ContextAnalysisLimitReason> {
+        self.exhausted
+    }
+
+    fn is_exhausted(&mut self) -> bool {
+        if self.exhausted.is_some() {
+            return true;
+        }
+        !self.charge_bytes(0)
+    }
+}
+
+fn work_units(value: u64, per_unit: u64) -> u64 {
+    if value == 0 {
+        return 0;
+    }
+    value
+        .saturating_add(per_unit.saturating_sub(1))
+        .checked_div(per_unit)
+        .unwrap_or(u64::MAX)
 }
 
 fn extract_indexed<Lookup>(
@@ -323,7 +438,7 @@ where
         }
     }
 
-    let mut candidates = state.candidates;
+    let mut candidates = std::mem::take(&mut state.candidates);
     candidates.sort_by_key(|candidate| {
         index
             .node(candidate.source)
@@ -334,12 +449,20 @@ where
 
     let mut blocks = Vec::new();
     let mut ordinal_by_source = HashMap::new();
+    let mut exact_fingerprints = HashMap::<RawSpan, ContextDigest>::new();
+    let mut extraction_budget = ExtractionBudget::new(limits);
     let mut extraction_reason = state.reason;
     for candidate in candidates {
         if blocks.len() >= limits.max_blocks.get() {
-            let _ = extraction_reason.get_or_insert(ContextAnalysisReason::ResourceLimit {
-                limit: ContextAnalysisLimitReason::Blocks,
-            });
+            state.mark_resource_limit(ContextAnalysisLimitReason::Blocks);
+            extraction_reason = state.reason;
+            break;
+        }
+        if extraction_budget.is_exhausted() {
+            if let Some(limit) = extraction_budget.reason() {
+                state.mark_resource_limit(limit);
+            }
+            extraction_reason = state.reason;
             break;
         }
         let Some(source) = index.node(candidate.source) else {
@@ -348,19 +471,54 @@ where
         if !source.is_complete() {
             continue;
         }
-        if source.span().slice(request).is_none() {
+        let source_span = source.span();
+        if source_span.slice(request).is_none() {
             continue;
         }
-        let Some(exact_fingerprint) = exact_fingerprint(request, source.span()) else {
-            continue;
+        let exact_fingerprint = if let Some(cached) = exact_fingerprints.get(&source_span) {
+            *cached
+        } else {
+            if !extraction_budget.charge_bytes(source_span.len_bytes()) {
+                if let Some(limit) = extraction_budget.reason() {
+                    state.mark_resource_limit(limit);
+                }
+                extraction_reason = state.reason;
+                break;
+            }
+            let Some(exact_fingerprint) = exact_fingerprint(request, source_span) else {
+                continue;
+            };
+            let _ = exact_fingerprints.insert(source_span, exact_fingerprint);
+            exact_fingerprint
         };
         let parent_ordinal = candidate
             .parent_source
             .and_then(|parent| ordinal_by_source.get(&parent).copied());
         let ordinal = u32::try_from(blocks.len()).unwrap_or(u32::MAX);
-        let metadata = metadata_for_candidate(request, limits, index, &candidate);
-        let measurements =
-            measure_candidate(request, limits, index, &candidate, model.as_deref(), source);
+        let metadata =
+            metadata_for_candidate(request, limits, index, &candidate, &mut extraction_budget);
+        if let Some(limit) = metadata.limit {
+            state.mark_resource_limit(limit);
+        }
+        let measurements = if extraction_budget.is_exhausted() {
+            Measurements::for_applicability(candidate_measurement_applicability(
+                request, limits, index, &candidate,
+            ))
+        } else {
+            let outcome = measure_candidate(
+                request,
+                limits,
+                index,
+                &candidate,
+                model.as_deref(),
+                source,
+                &mut extraction_budget,
+            );
+            if let Some(limit) = outcome.limit {
+                state.mark_resource_limit(limit);
+            }
+            outcome.measurements
+        };
         let draft = ContextBlockDraft {
             ordinal,
             parent_ordinal,
@@ -371,15 +529,25 @@ where
             raw_bytes: source.raw_bytes(),
             exact_fingerprint,
             semantic_fingerprint: measurements.semantic_fingerprint,
+            detection_applicability: measurements.detection_applicability,
+            token_estimation_applicability: measurements.token_estimation_applicability,
             token_estimate: measurements.token_estimate,
             detection_result: measurements.detection_result,
             features: measurements.features,
             opportunity_signals: measurements.opportunity_signals,
-            tool_call_id: metadata.0,
-            tool_name: metadata.1,
+            tool_call_id: metadata.tool_call_id,
+            tool_name: metadata.tool_name,
         };
         let _ = ordinal_by_source.insert(candidate.source, ordinal);
         blocks.push(draft);
+        if extraction_budget.is_exhausted() {
+            if let Some(limit) = extraction_budget.reason() {
+                state.mark_resource_limit(limit);
+            }
+            extraction_reason = state.reason;
+            break;
+        }
+        extraction_reason = state.reason;
     }
 
     let mut status = match index.status() {
@@ -395,13 +563,17 @@ where
     if state.partial && status == ContextAnalysisStatus::Complete {
         status = ContextAnalysisStatus::Partial;
     }
-    if extraction_reason.is_some() && status == ContextAnalysisStatus::Complete {
+    if extraction_reason
+        .is_some_and(|reason| matches!(reason, ContextAnalysisReason::ResourceLimit { .. }))
+        && !matches!(status, ContextAnalysisStatus::Malformed)
+    {
+        status = ContextAnalysisStatus::ResourceLimit;
+    } else if extraction_reason.is_some() && status == ContextAnalysisStatus::Complete {
         status = ContextAnalysisStatus::Partial;
     }
     let explicit_request_complete = status == ContextAnalysisStatus::Complete
         && index.skipped_bytes() == 0
         && !index.duplicate_key_detected();
-
     let previous_response_id = state
         .previous_response_id
         .and_then(|id| index.node(id))
@@ -1105,12 +1277,19 @@ const fn simple_candidate(
     // (message -> content) establish a parent ordinal.
 }
 
+struct MetadataOutcome {
+    tool_call_id: Option<BoundedMetadataText>,
+    tool_name: Option<BoundedMetadataText>,
+    limit: Option<ContextAnalysisLimitReason>,
+}
+
 fn metadata_for_candidate(
     request: &[u8],
     limits: ContextAnalysisLimits,
     index: &RawSpanIndex,
     candidate: &Candidate,
-) -> (Option<BoundedMetadataText>, Option<BoundedMetadataText>) {
+    budget: &mut ExtractionBudget,
+) -> MetadataOutcome {
     let owner = index.node(candidate.metadata_owner);
     let call_id_node = candidate.tool_call_id.or_else(|| {
         owner
@@ -1122,15 +1301,42 @@ fn metadata_for_candidate(
             .and_then(|owner| first_named(index, request, owner.id(), "name"))
             .map(SpanNode::id)
     });
-    let call_id = call_id_node
-        .and_then(|id| index.node(id))
-        .and_then(|node| decode_json_string(request, node.span(), limits).ok())
-        .map(|value| BoundedMetadataText::tool_name(&value));
-    let name = name_node
-        .and_then(|id| index.node(id))
-        .and_then(|node| decode_json_string(request, node.span(), limits).ok())
-        .map(|value| BoundedMetadataText::tool_name(&value));
-    (call_id, name)
+    let (tool_call_id, call_id_limit) =
+        metadata_value(request, limits, index, call_id_node, budget);
+    let (tool_name, name_limit) = metadata_value(request, limits, index, name_node, budget);
+    MetadataOutcome {
+        tool_call_id,
+        tool_name,
+        limit: call_id_limit.or(name_limit),
+    }
+}
+
+fn metadata_value(
+    request: &[u8],
+    limits: ContextAnalysisLimits,
+    index: &RawSpanIndex,
+    node_id: Option<SpanNodeId>,
+    budget: &mut ExtractionBudget,
+) -> (
+    Option<BoundedMetadataText>,
+    Option<ContextAnalysisLimitReason>,
+) {
+    let Some(node) = node_id.and_then(|id| index.node(id)) else {
+        return (None, None);
+    };
+    let admitted_bytes = node
+        .raw_bytes()
+        .min(u64::try_from(limits.max_string_bytes_inspected.get()).unwrap_or(u64::MAX));
+    if !budget.charge_bytes(admitted_bytes) {
+        return (None, budget.reason());
+    }
+    match decode_json_string(request, node.span(), limits) {
+        Ok(value) => (Some(BoundedMetadataText::tool_name(&value)), None),
+        Err(crate::JsonStringDecodeError::AboveInspectionBound { .. }) => {
+            (None, Some(ContextAnalysisLimitReason::StringBytesInspected))
+        }
+        Err(_) => (None, None),
+    }
 }
 
 struct Measurements {
@@ -1139,25 +1345,61 @@ struct Measurements {
     detection_result: Option<DetectionResult>,
     features: Option<BlockFeatures>,
     opportunity_signals: OpportunitySignalSet,
+    detection_applicability: MeasurementApplicability,
+    token_estimation_applicability: MeasurementApplicability,
 }
 
-fn measure_candidate(
-    request: &[u8],
-    limits: ContextAnalysisLimits,
-    index: &RawSpanIndex,
-    candidate: &Candidate,
-    model: Option<&str>,
-    source: &SpanNode,
-) -> Measurements {
-    let Some(payload) = index.node(candidate.payload) else {
-        return Measurements {
+impl Measurements {
+    const fn ineligible() -> Self {
+        Self {
             semantic_fingerprint: None,
             token_estimate: None,
             detection_result: None,
             features: None,
             opportunity_signals: OpportunitySignalSet::EMPTY,
-        };
-    };
+            detection_applicability: MeasurementApplicability::Ineligible,
+            token_estimation_applicability: MeasurementApplicability::Ineligible,
+        }
+    }
+
+    const fn unavailable() -> Self {
+        Self {
+            semantic_fingerprint: None,
+            token_estimate: None,
+            detection_result: None,
+            features: None,
+            opportunity_signals: OpportunitySignalSet::EMPTY,
+            detection_applicability: MeasurementApplicability::Unavailable,
+            token_estimation_applicability: MeasurementApplicability::Unavailable,
+        }
+    }
+
+    const fn eligible_unobserved() -> Self {
+        Self {
+            semantic_fingerprint: None,
+            token_estimate: None,
+            detection_result: None,
+            features: None,
+            opportunity_signals: OpportunitySignalSet::EMPTY,
+            detection_applicability: MeasurementApplicability::Eligible,
+            token_estimation_applicability: MeasurementApplicability::Eligible,
+        }
+    }
+
+    const fn for_applicability(applicability: MeasurementApplicability) -> Self {
+        match applicability {
+            MeasurementApplicability::Ineligible => Self::ineligible(),
+            MeasurementApplicability::Eligible => Self::eligible_unobserved(),
+            MeasurementApplicability::Unavailable => Self::unavailable(),
+        }
+    }
+}
+fn candidate_measurement_applicability(
+    request: &[u8],
+    limits: ContextAnalysisLimits,
+    index: &RawSpanIndex,
+    candidate: &Candidate,
+) -> MeasurementApplicability {
     let inspectable = matches!(
         candidate.kind,
         ContextBlockKind::Instructions
@@ -1167,16 +1409,80 @@ fn measure_candidate(
             | ContextBlockKind::ToolDefinition
     );
     if !inspectable {
-        return Measurements {
-            semantic_fingerprint: None,
-            token_estimate: None,
-            detection_result: None,
-            features: None,
-            opportunity_signals: OpportunitySignalSet::EMPTY,
+        return MeasurementApplicability::Ineligible;
+    }
+    let Some(payload) = index.node(candidate.payload) else {
+        return MeasurementApplicability::Unavailable;
+    };
+    if payload.kind() == JsonValueKind::String {
+        if payload.raw_bytes()
+            > u64::try_from(limits.max_string_bytes_inspected.get()).unwrap_or(u64::MAX)
+        {
+            return MeasurementApplicability::Eligible;
+        }
+        match decode_json_string(request, payload.span(), limits) {
+            Ok(_) | Err(crate::JsonStringDecodeError::AboveInspectionBound { .. }) => {
+                MeasurementApplicability::Eligible
+            }
+            Err(_) => MeasurementApplicability::Unavailable,
+        }
+    } else if payload.span().slice(request).is_some() {
+        MeasurementApplicability::Eligible
+    } else {
+        MeasurementApplicability::Unavailable
+    }
+}
+
+struct MeasurementOutcome {
+    measurements: Measurements,
+    limit: Option<ContextAnalysisLimitReason>,
+}
+fn measure_candidate(
+    request: &[u8],
+    limits: ContextAnalysisLimits,
+    index: &RawSpanIndex,
+    candidate: &Candidate,
+    model: Option<&str>,
+    source: &SpanNode,
+    budget: &mut ExtractionBudget,
+) -> MeasurementOutcome {
+    let unavailable = || MeasurementOutcome {
+        measurements: Measurements::unavailable(),
+        limit: None,
+    };
+    let limited = |limit| MeasurementOutcome {
+        measurements: Measurements::eligible_unobserved(),
+        limit: Some(limit),
+    };
+    let Some(payload) = index.node(candidate.payload) else {
+        return unavailable();
+    };
+    let content_applicability =
+        candidate_measurement_applicability(request, limits, index, candidate);
+    if content_applicability != MeasurementApplicability::Eligible {
+        return MeasurementOutcome {
+            measurements: Measurements::for_applicability(content_applicability),
+            limit: None,
         };
     }
     let decoded = if payload.kind() == JsonValueKind::String {
-        decode_json_string(request, payload.span(), limits).ok()
+        let admitted_bytes = payload
+            .raw_bytes()
+            .min(u64::try_from(limits.max_string_bytes_inspected.get()).unwrap_or(u64::MAX));
+        if !budget.charge_bytes(admitted_bytes) {
+            return limited(
+                budget
+                    .reason()
+                    .unwrap_or(ContextAnalysisLimitReason::AnalysisWorkUnits),
+            );
+        }
+        match decode_json_string(request, payload.span(), limits) {
+            Ok(value) => Some(value),
+            Err(crate::JsonStringDecodeError::AboveInspectionBound { .. }) => {
+                return limited(ContextAnalysisLimitReason::StringBytesInspected);
+            }
+            Err(_) => None,
+        }
     } else {
         None
     };
@@ -1186,20 +1492,45 @@ fn measure_candidate(
         payload.span().slice(request)
     };
     let Some(content) = content else {
-        return Measurements {
-            semantic_fingerprint: None,
-            token_estimate: None,
-            detection_result: None,
-            features: None,
-            opportunity_signals: OpportunitySignalSet::EMPTY,
-        };
+        return unavailable();
     };
 
+    let detector_bytes = u64::try_from(content.len().min(limits.max_string_bytes_inspected.get()))
+        .unwrap_or(u64::MAX);
+    if !budget.charge_bytes(detector_bytes) {
+        return limited(
+            budget
+                .reason()
+                .unwrap_or(ContextAnalysisLimitReason::AnalysisWorkUnits),
+        );
+    }
     let detector = StructuralContentDetector::new(&limits);
     let detection_result = Some(detector.detect(
         content,
         BlockContentMetadata::new(candidate.kind).with_content_bytes(payload.raw_bytes()),
     ));
+
+    let estimator_bytes = u64::try_from(content.len())
+        .unwrap_or(u64::MAX)
+        .min(u64::try_from(limits.max_analyzed_bytes.get()).unwrap_or(u64::MAX));
+    if !budget.charge_bytes(estimator_bytes) {
+        return MeasurementOutcome {
+            measurements: Measurements {
+                semantic_fingerprint: None,
+                token_estimate: None,
+                detection_result,
+                features: None,
+                opportunity_signals: OpportunitySignalSet::EMPTY,
+                detection_applicability: MeasurementApplicability::Eligible,
+                token_estimation_applicability: MeasurementApplicability::Eligible,
+            },
+            limit: Some(
+                budget
+                    .reason()
+                    .unwrap_or(ContextAnalysisLimitReason::AnalysisWorkUnits),
+            ),
+        };
+    }
     let estimator = StructuralHeuristicEstimator::new();
     let token_estimate = match estimator.estimate(&EstimationRequest {
         model,
@@ -1211,6 +1542,24 @@ fn measure_candidate(
         }
         TokenEstimation::Unavailable(_) => None,
     };
+    if !budget.charge_bytes(detector_bytes) {
+        return MeasurementOutcome {
+            measurements: Measurements {
+                semantic_fingerprint: None,
+                token_estimate,
+                detection_result,
+                features: None,
+                opportunity_signals: OpportunitySignalSet::EMPTY,
+                detection_applicability: MeasurementApplicability::Eligible,
+                token_estimation_applicability: MeasurementApplicability::Eligible,
+            },
+            limit: Some(
+                budget
+                    .reason()
+                    .unwrap_or(ContextAnalysisLimitReason::AnalysisWorkUnits),
+            ),
+        };
+    }
     let features = Some(extract_block_features(&BlockFeatureInput {
         raw_bytes: source.raw_bytes(),
         content,
@@ -1227,30 +1576,71 @@ fn measure_candidate(
             repeated_in_session: false,
         })
     });
+
     let semantic_fingerprint = if matches!(
         candidate.kind,
         ContextBlockKind::Text | ContextBlockKind::ToolResult
     ) && payload.kind() == JsonValueKind::String
     {
-        semantic_fingerprint(SemanticFingerprintInput {
-            request,
-            block_kind: candidate.kind,
-            role: candidate.role.unwrap_or(ContextRole::Unknown),
-            value_span: payload.span(),
-            value_kind: payload.kind(),
-            duplicate_key_in_subtree: source.duplicate_key_detected(),
-            fingerprint_version: crate::SEMANTIC_FINGERPRINT_VERSION,
-            limits,
-        })
+        let Some(decoded) = decoded.as_deref() else {
+            return MeasurementOutcome {
+                measurements: Measurements {
+                    semantic_fingerprint: None,
+                    token_estimate,
+                    detection_result,
+                    features,
+                    opportunity_signals,
+                    detection_applicability: MeasurementApplicability::Eligible,
+                    token_estimation_applicability: MeasurementApplicability::Eligible,
+                },
+                limit: None,
+            };
+        };
+        if !budget.charge_bytes(u64::try_from(decoded.len()).unwrap_or(u64::MAX)) {
+            return MeasurementOutcome {
+                measurements: Measurements {
+                    semantic_fingerprint: None,
+                    token_estimate,
+                    detection_result,
+                    features,
+                    opportunity_signals,
+                    detection_applicability: MeasurementApplicability::Eligible,
+                    token_estimation_applicability: MeasurementApplicability::Eligible,
+                },
+                limit: Some(
+                    budget
+                        .reason()
+                        .unwrap_or(ContextAnalysisLimitReason::AnalysisWorkUnits),
+                ),
+            };
+        }
+        semantic_fingerprint_from_decoded(
+            SemanticFingerprintInput {
+                request,
+                block_kind: candidate.kind,
+                role: candidate.role.unwrap_or(ContextRole::Unknown),
+                value_span: payload.span(),
+                value_kind: payload.kind(),
+                duplicate_key_in_subtree: source.duplicate_key_detected(),
+                fingerprint_version: crate::SEMANTIC_FINGERPRINT_VERSION,
+                limits,
+            },
+            decoded,
+        )
     } else {
         None
     };
-    Measurements {
-        semantic_fingerprint,
-        token_estimate,
-        detection_result,
-        features,
-        opportunity_signals,
+    MeasurementOutcome {
+        measurements: Measurements {
+            semantic_fingerprint,
+            token_estimate,
+            detection_result,
+            features,
+            opportunity_signals,
+            detection_applicability: MeasurementApplicability::Eligible,
+            token_estimation_applicability: MeasurementApplicability::Eligible,
+        },
+        limit: None,
     }
 }
 

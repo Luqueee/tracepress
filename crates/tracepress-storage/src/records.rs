@@ -3,11 +3,13 @@
     reason = "the writer sibling module consumes these transaction functions"
 )]
 
+use std::time::{SystemTime, UNIX_EPOCH};
+
 use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 
 use crate::{
-    ContextAnalysisStatus, ContextBlockKind, ContextOrigin, ContextRole, StorageError, WriteBatch,
-    WriteCommand, WriteReceipt,
+    ContextAnalysisStatus, ContextBlockKind, ContextOrigin, ContextRole, RecoveryReceipt,
+    StorageError, WriteBatch, WriteCommand, WriteReceipt,
     encode::{
         causal_relationship, content_kind, content_role, context_analysis_status_text,
         context_block_kind_text, context_correlation_status_text, context_origin_text,
@@ -30,13 +32,12 @@ pub(crate) fn execute_single(
     sqlite(transaction.commit())?;
     Ok(receipt)
 }
-
 pub(crate) fn recover_stale_sessions(
     connection: &mut Connection,
     recovered_at: &str,
-) -> Result<WriteReceipt, StorageError> {
+) -> Result<RecoveryReceipt, StorageError> {
     let transaction = sqlite(connection.transaction_with_behavior(TransactionBehavior::Immediate))?;
-    let mut rows_changed = sqlite(transaction.execute(
+    let recovered_sessions = u64::try_from(sqlite(transaction.execute(
         "UPDATE sessions SET state = ?1, ended_at = COALESCE(ended_at, ?2) WHERE state IN (?3, ?4)",
         params![
             session_state(tracepress_core::SessionState::Stale),
@@ -44,15 +45,21 @@ pub(crate) fn recover_stale_sessions(
             session_state(tracepress_core::SessionState::Active),
             session_state(tracepress_core::SessionState::Closing)
         ],
-    ))?;
+    ))?)
+    .map_err(|_error| StorageError::IntegerOverflow {
+        field: "recovered_sessions",
+        value: u64::MAX,
+    })?;
 
     // A Begin has no terminal outcome yet, so `completed_at_us IS NULL` is the durable marker of
-    // an interrupted analysis. Finalized partial analyses have a completion timestamp and must
-    // not emit a second recovery event when startup recovery is retried.
+    // an interrupted analysis. A recovery marker makes this transition idempotent without
+    // inspecting event payloads: finalized partial analyses have a completion timestamp, while a
+    // recovered snapshot keeps `completed_at_us` NULL and is excluded from later recoveries.
     let snapshots = {
         let mut statement = sqlite(transaction.prepare(
             "SELECT snapshot_id, session_id, inference_operation_id \
-             FROM context_snapshots WHERE completed_at_us IS NULL",
+             FROM context_snapshots \
+             WHERE completed_at_us IS NULL AND recovered_at_us IS NULL",
         ))?;
         let result = statement.query_map([], |row| {
             Ok((
@@ -68,25 +75,35 @@ pub(crate) fn recover_stale_sessions(
         }
         snapshots
     };
+    let recovered_at_us = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default();
+    let recovered_at_us = recovered_at_us
+        .as_secs()
+        .saturating_mul(1_000_000)
+        .saturating_add(u64::from(recovered_at_us.subsec_micros()));
+    let recovered_at_us = sqlite_u64(recovered_at_us, "recovered_at_us")?;
     let generator = UuidV7Generator::new();
+    let mut recovered_context_snapshots = 0_u64;
     for (snapshot_id, session_id, operation_id) in snapshots {
         let changed = sqlite(transaction.execute(
-            "UPDATE context_snapshots SET status = ?2 \
-             WHERE snapshot_id = ?1 AND completed_at_us IS NULL",
+            "UPDATE context_snapshots SET status = ?2, recovered_at_us = ?3 \
+             WHERE snapshot_id = ?1 AND completed_at_us IS NULL AND recovered_at_us IS NULL",
             params![
                 snapshot_id,
                 context_analysis_status_text(ContextAnalysisStatus::Partial),
+                recovered_at_us,
             ],
         ))?;
         if changed == 0 {
             continue;
         }
-        rows_changed = rows_changed.saturating_add(changed);
+        recovered_context_snapshots = recovered_context_snapshots.saturating_add(1);
         let event_id = EventId::generate(&generator);
         let payload = format!(r#"{{"reason":"startup_recovery","snapshot_id":"{snapshot_id}"}}"#)
             .into_bytes()
             .into_boxed_slice();
-        let event_rows = sqlite(transaction.execute(
+        let _event_rows = sqlite(transaction.execute(
             "INSERT INTO events(event_id, session_id, operation_id, timestamp, event_type, payload, schema_version) \
              VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
             params![
@@ -99,10 +116,12 @@ pub(crate) fn recover_stale_sessions(
                 "1",
             ],
         ))?;
-        rows_changed = rows_changed.saturating_add(event_rows);
     }
     sqlite(transaction.commit())?;
-    committed(rows_changed)
+    Ok(RecoveryReceipt {
+        recovered_sessions,
+        recovered_context_snapshots,
+    })
 }
 
 pub(crate) fn execute_batch(

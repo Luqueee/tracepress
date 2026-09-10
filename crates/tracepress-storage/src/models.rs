@@ -116,6 +116,47 @@ pub enum ContextAnalysisStatus {
     Cancelled,
 }
 
+/// Bounded lifecycle status for one persisted context snapshot.
+///
+/// This projection intentionally excludes block and aggregate data. The daemon uses it while
+/// reconciling an interrupted observer, where the only durable truth needed is whether the
+/// snapshot committed a terminal outcome.
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[non_exhaustive]
+pub struct ContextSnapshotStatus {
+    /// Durable snapshot identity.
+    pub snapshot_id: ContextSnapshotId,
+    /// Provider request identity associated with the snapshot.
+    pub provider_request_id: RequestId,
+    /// Stable storage status name.
+    pub status: String,
+    /// Commit timestamp for a terminal outcome, when one was written.
+    pub completed_at_us: Option<u64>,
+}
+impl ContextSnapshotStatus {
+    /// Constructs one durable context snapshot lifecycle status without a commit timestamp.
+    #[must_use]
+    pub const fn new(
+        snapshot_id: ContextSnapshotId,
+        provider_request_id: RequestId,
+        status: String,
+    ) -> Self {
+        Self {
+            snapshot_id,
+            provider_request_id,
+            status,
+            completed_at_us: None,
+        }
+    }
+
+    /// Adds the durable commit timestamp to this lifecycle status.
+    #[must_use]
+    pub const fn with_completed_at(mut self, completed_at_us: Option<u64>) -> Self {
+        self.completed_at_us = completed_at_us;
+        self
+    }
+}
+
 /// How completely Tracepress can account for the logical context of one request.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -1000,6 +1041,19 @@ impl WriteBatch {
         self.commands.push(command);
         self
     }
+}
+
+/// Counts the durable state transitions performed during startup recovery.
+///
+/// Session transitions and unfinished context snapshots are reported separately because snapshot
+/// and event rows are auxiliary effects of recovering a session, not additional sessions.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct RecoveryReceipt {
+    /// Number of active or closing sessions marked stale.
+    pub recovered_sessions: u64,
+    /// Number of unfinished context snapshots marked partial.
+    pub recovered_context_snapshots: u64,
 }
 
 /// Durable result returned only after the corresponding transaction commits.

@@ -4,10 +4,10 @@ mod common;
 
 use libfuzzer_sys::fuzz_target;
 use tracepress_context::{
-    ContextAnalysisLimitValues, ContextAnalysisLimits, ContextBlockKind, ContextBlockSummary,
-    ContextDeltaRequest, ContextDeltaStatus, ContextDigest, ContextRole, JsonValueKind, RawSpan,
-    SEMANTIC_FINGERPRINT_VERSION, SemanticFingerprintInput, compute_context_delta,
-    semantic_fingerprint,
+    ContextAnalysisLimitValues, ContextAnalysisLimits, ContextAnalysisStatus, ContextBlockKind,
+    ContextBlockSummary, ContextDeltaRequest, ContextDeltaStatus, ContextDigest, ContextRole,
+    JsonValueKind, RawSpan, SEMANTIC_FINGERPRINT_VERSION, SemanticFingerprintInput,
+    compute_context_delta, semantic_fingerprint,
 };
 use tracepress_core::{ContextSnapshotId, UuidV7Generator};
 
@@ -63,25 +63,40 @@ fuzz_target!(|data: &[u8]| {
     let generator = UuidV7Generator::new();
     let previous_snapshot_id = ContextSnapshotId::generate(&generator);
     let current_snapshot_id = ContextSnapshotId::generate(&generator);
+    let previous_analysis_status = if previous.len() >= limits.max_blocks.get() as usize {
+        ContextAnalysisStatus::ResourceLimit
+    } else {
+        ContextAnalysisStatus::Complete
+    };
+    let current_analysis_status = if current.len() >= limits.max_blocks.get() as usize {
+        ContextAnalysisStatus::ResourceLimit
+    } else {
+        ContextAnalysisStatus::Complete
+    };
     let request = ContextDeltaRequest {
         previous_snapshot_id,
         current_snapshot_id,
         previous: &previous,
         current: &current,
+        previous_analysis_status,
+        current_analysis_status,
         limits,
     };
 
     let first = compute_context_delta(request);
     let second = compute_context_delta(request);
     assert_eq!(first, second);
-    assert!(first.compared_previous_blocks <= limits.max_blocks.get() as u64);
-    assert!(first.compared_current_blocks <= limits.max_blocks.get() as u64);
+    assert!(first.compared_previous_blocks <= common::as_u64(limits.max_blocks.get()));
+    assert!(first.compared_current_blocks <= common::as_u64(limits.max_blocks.get()));
     assert_eq!(
         first.repeated_blocks + first.new_blocks + first.changed_blocks,
         first.compared_current_blocks
     );
     assert!(first.removed_blocks <= first.compared_previous_blocks);
-    let was_limited = previous.len() > limits.max_blocks.get() || current.len() > limits.max_blocks.get();
+    let was_limited = previous_analysis_status != ContextAnalysisStatus::Complete
+        || current_analysis_status != ContextAnalysisStatus::Complete
+        || previous.len() > limits.max_blocks.get() as usize
+        || current.len() > limits.max_blocks.get() as usize;
     assert_eq!(first.status, if was_limited {
         ContextDeltaStatus::ResourceLimit
     } else {

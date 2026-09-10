@@ -31,10 +31,43 @@ mod span;
 mod visibility;
 mod visibility_analysis;
 
+fn semantic_fingerprint_from_decoded(
+    input: SemanticFingerprintInput<'_>,
+    decoded: &str,
+) -> Option<SemanticFingerprint> {
+    if input.duplicate_key_in_subtree
+        || input.value_kind != JsonValueKind::String
+        || !matches!(
+            input.block_kind,
+            ContextBlockKind::Text | ContextBlockKind::Message | ContextBlockKind::ToolResult
+        )
+    {
+        return None;
+    }
+
+    let kind = input.block_kind.as_wire_str().as_bytes();
+    let role = input.role.as_wire_str().as_bytes();
+    let mut material = Vec::with_capacity(
+        std::mem::size_of::<u32>()
+            .saturating_add(kind.len())
+            .saturating_add(role.len())
+            .saturating_add(decoded.len()),
+    );
+    material.extend_from_slice(&input.fingerprint_version.to_be_bytes());
+    material.extend_from_slice(kind);
+    material.extend_from_slice(role);
+    material.extend_from_slice(decoded.as_bytes());
+
+    Some(SemanticFingerprint {
+        fingerprint_version: input.fingerprint_version,
+        digest: ContextDigest::from_bytes(&material),
+    })
+}
+
 pub use extractor::{
     ContextAnalysis, ContextAnalysisLimitReason, ContextAnalysisReason, ContextAnalysisResult,
-    ContextBlockDraft, analyze, analyze_responses, analyze_responses_with_lookup,
-    analyze_with_lookup,
+    ContextBlockDraft, MeasurementApplicability, analyze, analyze_responses,
+    analyze_responses_with_lookup, analyze_with_lookup,
 };
 pub use visibility_analysis::{
     ContextVisibilityFacts, NoObservedResponseIds, ObservedResponseIdLookup,

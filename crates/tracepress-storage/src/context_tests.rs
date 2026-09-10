@@ -11,8 +11,8 @@ use crate::{
     CONTEXT_INSPECTION_MAX_BLOCKS, ContextAnalysisStatus, ContextBlockKind,
     ContextCorrelationStatus, ContextOrigin, ContextRole, Durability, EstimatedTokenComposition,
     EstimatedTokensByKind, EstimatedTokensByOrigin, EstimatedTokensByRole, LogicalContextStatus,
-    ReconciliationStatus, StorageConfig, StorageError, StorageWriter, WriteBatch, WriteCommand,
-    WriteReceipt,
+    ReconciliationStatus, RecoveryReceipt, StorageConfig, StorageError, StorageWriter, WriteBatch,
+    WriteCommand, WriteReceipt,
 };
 
 const ALL_KINDS: [ContextBlockKind; 15] = [
@@ -490,10 +490,10 @@ async fn a_snapshot_only_becomes_complete_when_its_outcome_commits() -> TestResu
     let (fixture, batch) = ancestry(&generator);
     let _setup = writer.submit_batch(batch).await?;
     let connection = Connection::open(&database)?;
-    let before: (String, Option<i64>) = connection.query_row(
-        "SELECT status, completed_at_us FROM context_snapshots WHERE snapshot_id = ?1",
+    let before: (String, Option<i64>, Option<i64>) = connection.query_row(
+        "SELECT status, completed_at_us, recovered_at_us FROM context_snapshots WHERE snapshot_id = ?1",
         [fixture.snapshot.to_string()],
-        |row| Ok((row.get(0)?, row.get(1)?)),
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
     )?;
 
     // When: the analysis finalizes with its terminal status and visibility.
@@ -523,22 +523,113 @@ async fn a_snapshot_only_becomes_complete_when_its_outcome_commits() -> TestResu
     writer.shutdown().await?;
 
     // Then: the snapshot was not complete before finalization and is complete after it.
-    assert_eq!(before, ("partial".to_owned(), None));
-    let after: (String, Option<i64>, Option<i64>, String, Option<i64>) = connection.query_row(
-        "SELECT status, completed_at_us, explicit_block_count, logical_context_status, reference_resolved_locally FROM context_snapshots WHERE snapshot_id = ?1",
-        [fixture.snapshot.to_string()],
-        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
-    )?;
+    assert_eq!(before, ("partial".to_owned(), None, None));
+    let after: (String, Option<i64>, Option<i64>, Option<i64>, String, Option<i64>) =
+        connection.query_row(
+            "SELECT status, completed_at_us, recovered_at_us, explicit_block_count, logical_context_status, reference_resolved_locally FROM context_snapshots WHERE snapshot_id = ?1",
+            [fixture.snapshot.to_string()],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                ))
+            },
+        )?;
     assert_eq!(
         after,
         (
             "complete".to_owned(),
             Some(1_757_412_000_250_000),
+            None,
             Some(3),
             "explicit_only".to_owned(),
             None
         )
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn startup_recovery_marks_incomplete_snapshots_once() -> TestResult {
+    // Given: a normal Begin committed with an unknown recovery marker.
+    let directory = TempDir::new()?;
+    let database = directory
+        .path()
+        .join("context-recovery-idempotence.sqlite3");
+    let generator = UuidV7Generator::new();
+    let writer = open_writer(&database).await?;
+    let (fixture, batch) = ancestry(&generator);
+    let _setup = writer.submit_batch(batch).await?;
+    let connection = Connection::open(&database)?;
+    let begun: (String, Option<i64>, Option<i64>) = connection.query_row(
+        "SELECT status, completed_at_us, recovered_at_us FROM context_snapshots WHERE snapshot_id = ?1",
+        [fixture.snapshot.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_eq!(begun, ("partial".to_owned(), None, None));
+    let second_snapshot = ContextSnapshotId::generate(&generator);
+    let inserted = connection.execute(
+        "INSERT INTO context_snapshots (
+             snapshot_id, session_id, provider_request_id, inference_operation_id,
+             analysis_version, status, started_at_us
+         ) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7)",
+        rusqlite::params![
+            second_snapshot.to_string(),
+            fixture.session.to_string(),
+            fixture.request.to_string(),
+            fixture.operation.to_string(),
+            2_i64,
+            "partial",
+            1_757_412_000_000_001_i64,
+        ],
+    )?;
+    assert_eq!(
+        inserted, 1,
+        "recovery fixture INSERT must change exactly one row"
+    );
+
+    // When: startup recovery runs twice against the same database.
+    let first = writer
+        .recover_stale_sessions("2026-09-10T00:00:00Z")
+        .await?;
+    let second = writer
+        .recover_stale_sessions("2026-09-10T00:00:01Z")
+        .await?;
+    writer.shutdown().await?;
+
+    // Then: only the first run marks both rows and appends their partial events.
+    assert_eq!(
+        first,
+        RecoveryReceipt {
+            recovered_sessions: 1,
+            recovered_context_snapshots: 2,
+        }
+    );
+    assert_eq!(
+        second,
+        RecoveryReceipt {
+            recovered_sessions: 0,
+            recovered_context_snapshots: 0,
+        }
+    );
+    let recovered: (String, Option<i64>, Option<i64>) = connection.query_row(
+        "SELECT status, completed_at_us, recovered_at_us FROM context_snapshots WHERE snapshot_id = ?1",
+        [fixture.snapshot.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_eq!(recovered.0, "partial");
+    assert_eq!(recovered.1, None);
+    assert!(recovered.2.is_some());
+    let partial_events: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM events WHERE event_type = 'context.analysis.partial'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(partial_events, 2);
     Ok(())
 }
 

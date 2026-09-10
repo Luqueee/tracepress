@@ -7,15 +7,17 @@
 
 use std::collections::HashMap;
 
-mod context;
+pub(crate) mod context;
 
 pub use context::{
-    ContextAnalysisBegin, ContextAnalysisFinalize, ContextAnalysisMetrics, ContextBlockBatch,
-    ContextCorrelationStatusWire,
+    ContextAnalysisAbort, ContextAnalysisBegin, ContextAnalysisFinalize, ContextAnalysisMetrics,
+    ContextAppendCapacity, ContextAppendReceipt, ContextBlockBatch, ContextCorrelationStatusWire,
 };
 use thiserror::Error;
 use tokio::sync::Mutex;
-use tracepress_context::ContextAnalysisDropReason;
+use tracepress_context::{
+    ContextAnalysisDropReason, ContextAnalysisStatus as AnalyzerAnalysisStatus,
+};
 use tracepress_core::{
     AttemptId, CausalEdge, CausalEdgeError, CausalRelationship, ContextBlockOccurrenceId,
     ContextSnapshotId, EventId, HttpStatusCode, InferenceStatus, OperationId, OperationKind,
@@ -29,7 +31,7 @@ use tracepress_provider::{
     UsageStatus as ProviderUsageStatus,
 };
 use tracepress_storage::{
-    ContextInspection, ObservationStatus, ProviderKind, ProviderProtocol,
+    ContextInspection, ContextSnapshotStatus, ObservationStatus, ProviderKind, ProviderProtocol,
     ProviderResponseState as StorageResponseState, StorageError, StorageWriter, WriteBatch,
     WriteCommand, WriteReceipt,
 };
@@ -85,6 +87,9 @@ pub enum DaemonError {
         expected: u32,
         actual: u32,
     },
+    /// The bounded active-analysis table is full; no snapshot was admitted.
+    #[error("context analysis capacity exhausted (limit {limit})")]
+    ContextAnalysisCapacity { limit: usize },
     /// A context append exceeded one of the bounded analysis dimensions.
     #[error("context snapshot {snapshot_id} exceeded {dimension}")]
     ContextLimit {
@@ -508,11 +513,255 @@ pub struct RecordedProviderObservation {
 #[derive(Debug)]
 struct ActiveContextAnalysis {
     session_id: SessionId,
+    provider_request_id: RequestId,
     inference_operation_id: OperationId,
     analysis_version: u32,
+    started_at_us: u64,
     next_sequence: u32,
     next_ordinal: u32,
     occurrences: HashMap<u32, ContextBlockOccurrenceId>,
+}
+
+#[derive(Clone, Copy)]
+struct ContextSnapshotOutcomeInput {
+    snapshot_id: ContextSnapshotId,
+    status: AnalyzerAnalysisStatus,
+    completed_at_us: u64,
+    explicit_block_count: Option<u64>,
+}
+
+const fn context_snapshot_outcome(input: ContextSnapshotOutcomeInput) -> WriteCommand {
+    let ContextSnapshotOutcomeInput {
+        snapshot_id,
+        status,
+        completed_at_us,
+        explicit_block_count,
+    } = input;
+    WriteCommand::ContextSnapshotOutcome {
+        snapshot_id,
+        status: map_analysis_status(status),
+        completed_at_us: Some(completed_at_us),
+        request_content_hash: None,
+        explicit_block_count,
+        analyzed_bytes: None,
+        skipped_bytes: None,
+        explicit_request_complete: None,
+        uses_previous_response: None,
+        uses_conversation_state: None,
+        uses_item_references: None,
+        uses_prompt_reference: None,
+        uses_external_files: None,
+        uses_external_images: None,
+        contains_opaque_items: None,
+        logical_context_status: None,
+        duplicate_key_detected: None,
+        reference_resolved_locally: None,
+        correlation_status: None,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ContextAnalysisDropPayloadInput {
+    session_id: SessionId,
+    reason: ContextAnalysisDropReason,
+    dropped_count: u64,
+    snapshot: Option<(ContextSnapshotId, u32, u32)>,
+}
+
+fn render_context_analysis_drop_payload(input: ContextAnalysisDropPayloadInput) -> Box<[u8]> {
+    let ContextAnalysisDropPayloadInput {
+        session_id,
+        reason,
+        dropped_count,
+        snapshot,
+    } = input;
+    let status = reason.as_wire_str();
+    let snapshot_fields = snapshot.map_or_else(String::new, |(
+        snapshot_id,
+        analysis_version,
+        explicit_block_count,
+    )| {
+        format!(
+            r#","snapshot_id":"{snapshot_id}","analysis_version":{analysis_version},"explicit_block_count":{explicit_block_count}"#
+        )
+    });
+    format!(
+        r#"{{"session_id":"{session_id}","status":"{status}","reason":"{status}","dropped_count":{dropped_count}{snapshot_fields}}}"#
+    )
+    .into_bytes()
+    .into_boxed_slice()
+}
+
+fn context_analysis_drop_payload(
+    session_id: SessionId,
+    reason: ContextAnalysisDropReason,
+    dropped_count: u64,
+) -> Box<[u8]> {
+    render_context_analysis_drop_payload(ContextAnalysisDropPayloadInput {
+        session_id,
+        reason,
+        dropped_count,
+        snapshot: None,
+    })
+}
+
+fn context_analysis_dropped_event(
+    active: &ActiveContextAnalysis,
+    request: &ContextAnalysisAbort,
+    ids: &UuidV7Generator,
+) -> WriteCommand {
+    let payload = render_context_analysis_drop_payload(ContextAnalysisDropPayloadInput {
+        session_id: active.session_id,
+        reason: request.reason,
+        dropped_count: 1,
+        snapshot: Some((
+            request.snapshot_id,
+            active.analysis_version,
+            active.next_ordinal,
+        )),
+    });
+    WriteCommand::Event {
+        event_id: EventId::generate(ids),
+        session_id: Some(active.session_id),
+        operation_id: Some(active.inference_operation_id),
+        timestamp: request.completed_at_us.to_string(),
+        event_type: "context.analysis.dropped".to_owned(),
+        payload,
+        schema_version: "1".to_owned(),
+    }
+}
+
+const fn map_analysis_status(
+    value: AnalyzerAnalysisStatus,
+) -> tracepress_storage::ContextAnalysisStatus {
+    match value {
+        AnalyzerAnalysisStatus::Complete => tracepress_storage::ContextAnalysisStatus::Complete,
+        AnalyzerAnalysisStatus::ResourceLimit => {
+            tracepress_storage::ContextAnalysisStatus::ResourceLimit
+        }
+        AnalyzerAnalysisStatus::Malformed => tracepress_storage::ContextAnalysisStatus::Malformed,
+        AnalyzerAnalysisStatus::ObserverBackpressure => {
+            tracepress_storage::ContextAnalysisStatus::ObserverBackpressure
+        }
+        AnalyzerAnalysisStatus::CorrelationDegraded => {
+            tracepress_storage::ContextAnalysisStatus::CorrelationDegraded
+        }
+        AnalyzerAnalysisStatus::Unsupported => {
+            tracepress_storage::ContextAnalysisStatus::Unsupported
+        }
+        AnalyzerAnalysisStatus::Cancelled => tracepress_storage::ContextAnalysisStatus::Cancelled,
+        _ => tracepress_storage::ContextAnalysisStatus::Partial,
+    }
+}
+
+const fn drop_analysis_status(reason: ContextAnalysisDropReason) -> AnalyzerAnalysisStatus {
+    match reason {
+        ContextAnalysisDropReason::ObserverBackpressure => {
+            AnalyzerAnalysisStatus::ObserverBackpressure
+        }
+        ContextAnalysisDropReason::ResourceLimit => AnalyzerAnalysisStatus::ResourceLimit,
+        ContextAnalysisDropReason::Malformed => AnalyzerAnalysisStatus::Malformed,
+        ContextAnalysisDropReason::CorrelationDegraded => {
+            AnalyzerAnalysisStatus::CorrelationDegraded
+        }
+        ContextAnalysisDropReason::Unsupported => AnalyzerAnalysisStatus::Unsupported,
+        ContextAnalysisDropReason::Cancelled => AnalyzerAnalysisStatus::Cancelled,
+        _ => AnalyzerAnalysisStatus::Partial,
+    }
+}
+
+fn context_analysis_abort_batch(
+    active: &ActiveContextAnalysis,
+    request: &ContextAnalysisAbort,
+    ids: &UuidV7Generator,
+) -> WriteBatch {
+    WriteBatch::new(context_snapshot_outcome(ContextSnapshotOutcomeInput {
+        snapshot_id: request.snapshot_id,
+        status: drop_analysis_status(request.reason),
+        completed_at_us: request.completed_at_us,
+        explicit_block_count: Some(u64::from(active.next_ordinal)),
+    }))
+    .and(context_analysis_dropped_event(active, request, ids))
+}
+
+#[derive(Clone, Copy)]
+struct ContextAnalysisFinishInput<'analyses> {
+    analyses: &'analyses HashMap<ContextSnapshotId, ActiveContextAnalysis>,
+    session_id: SessionId,
+    completed_at_us: u64,
+    ids: &'analyses UuidV7Generator,
+}
+
+#[derive(Clone, Copy)]
+struct ContextAnalysisPartialEventInput<'active, 'ids> {
+    active: &'active ActiveContextAnalysis,
+    snapshot_id: ContextSnapshotId,
+    completed_at_us: u64,
+    ids: &'ids UuidV7Generator,
+}
+
+fn context_analysis_finish_batch(
+    input: ContextAnalysisFinishInput<'_>,
+) -> (Option<WriteBatch>, Vec<ContextSnapshotId>) {
+    let ContextAnalysisFinishInput {
+        analyses,
+        session_id,
+        completed_at_us,
+        ids,
+    } = input;
+    let mut commands: Option<WriteBatch> = None;
+    let mut snapshots = Vec::new();
+    for (&snapshot_id, active) in analyses {
+        if active.session_id != session_id {
+            continue;
+        }
+        let outcome = context_snapshot_outcome(ContextSnapshotOutcomeInput {
+            snapshot_id,
+            status: AnalyzerAnalysisStatus::Partial,
+            completed_at_us,
+            explicit_block_count: Some(u64::from(active.next_ordinal)),
+        });
+        let event =
+            context_analysis_partial_event_with_snapshot(ContextAnalysisPartialEventInput {
+                active,
+                snapshot_id,
+                completed_at_us,
+                ids,
+            });
+        commands = Some(match commands {
+            Some(batch) => batch.and(outcome).and(event),
+            None => WriteBatch::new(outcome).and(event),
+        });
+        snapshots.push(snapshot_id);
+    }
+    (commands, snapshots)
+}
+
+fn context_analysis_partial_event_with_snapshot(
+    input: ContextAnalysisPartialEventInput<'_, '_>,
+) -> WriteCommand {
+    let ContextAnalysisPartialEventInput {
+        active,
+        snapshot_id,
+        completed_at_us,
+        ids,
+    } = input;
+    let payload = format!(
+        r#"{{"snapshot_id":"{snapshot_id}","status":"partial","analysis_version":{},"explicit_block_count":{}}}"#,
+        active.analysis_version,
+        active.next_ordinal
+    )
+    .into_bytes()
+    .into_boxed_slice();
+    WriteCommand::Event {
+        event_id: EventId::generate(ids),
+        session_id: Some(active.session_id),
+        operation_id: Some(active.inference_operation_id),
+        timestamp: completed_at_us.to_string(),
+        event_type: "context.analysis.partial".to_owned(),
+        payload,
+        schema_version: "1".to_owned(),
+    }
 }
 
 /// Sole daemon owner of lifecycle memory and durable writes.
@@ -531,11 +780,8 @@ impl DaemonService {
     /// # Errors
     /// Returns a storage error when startup recovery cannot commit.
     pub async fn open(writer: StorageWriter, recovered_at: &str) -> Result<Self, DaemonError> {
-        let recovered_stale_sessions = match writer.recover_stale_sessions(recovered_at).await? {
-            WriteReceipt::Committed { rows_changed }
-            | WriteReceipt::BatchCommitted { rows_changed } => rows_changed,
-            WriteReceipt::EventAppended { sequence: _ } => 0,
-        };
+        let recovered = writer.recover_stale_sessions(recovered_at).await?;
+        let recovered_stale_sessions = recovered.recovered_sessions;
         let service = Self {
             writer,
             ids: Mutex::new(UuidV7Generator::new()),
@@ -818,26 +1064,60 @@ impl DaemonService {
         ended_at: &str,
     ) -> Result<SessionSnapshot, DaemonError> {
         let mut sessions = self.sessions.lock().await;
+        {
+            let record = sessions
+                .get(&session_id)
+                .ok_or(DaemonError::UnknownSession { session_id })?;
+            if record.state != SessionState::Active && record.state != SessionState::Closing {
+                return Err(DaemonError::SessionNotActive {
+                    session_id,
+                    state: record.state,
+                });
+            }
+        }
+
+        let mut analyses = self.context_analyses.lock().await;
+        let ids = self.ids.lock().await;
+        let minimum_completed_at_us = analyses
+            .values()
+            .filter(|active| active.session_id == session_id)
+            .map(|active| active.started_at_us)
+            .max()
+            .unwrap_or(0);
+        let completed_at_us = ended_at
+            .parse::<u64>()
+            .unwrap_or(minimum_completed_at_us)
+            .max(minimum_completed_at_us);
+        let (context_batch, snapshots_to_remove) =
+            context_analysis_finish_batch(ContextAnalysisFinishInput {
+                analyses: &analyses,
+                session_id,
+                completed_at_us,
+                ids: &ids,
+            });
+        let session_command = WriteCommand::SessionState {
+            session_id,
+            ended_at: Some(ended_at.to_owned()),
+            state,
+        };
+        let write_batch = match context_batch {
+            Some(batch) => batch.and(session_command),
+            None => WriteBatch::new(session_command),
+        };
+        drop(ids);
+        let _receipt = self.writer.submit_batch(write_batch).await?;
+        for snapshot_id in snapshots_to_remove {
+            let _removed = analyses.remove(&snapshot_id);
+        }
         let record = sessions
             .get_mut(&session_id)
             .ok_or(DaemonError::UnknownSession { session_id })?;
-        if record.state != SessionState::Active && record.state != SessionState::Closing {
-            return Err(DaemonError::SessionNotActive {
-                session_id,
-                state: record.state,
-            });
-        }
-        let _receipt = self
-            .writer
-            .submit(WriteCommand::SessionState {
-                session_id,
-                ended_at: Some(ended_at.to_owned()),
-                state,
-            })
-            .await?;
         record.state = state;
         tracing::info!(%session_id, ?state, "session finished");
-        Ok(snapshot(session_id, record))
+        let result = snapshot(session_id, record);
+        drop(analyses);
+        drop(sessions);
+        Ok(result)
     }
 
     /// Records one correlation degradation that left no forward record to carry it.
@@ -922,18 +1202,14 @@ impl DaemonService {
             });
         }
         let generator = self.ids.lock().await;
-        let payload = serde_json::json!({
-            "session_id": session_id.to_string(),
-            "status": reason.as_wire_str(),
-            "dropped_count": dropped,
-        });
+        let payload = context_analysis_drop_payload(session_id, reason, dropped);
         let event = WriteCommand::Event {
             event_id: EventId::generate(&generator),
             session_id: Some(session_id),
             operation_id: None,
             timestamp: observed_at_us.to_string(),
             event_type: "context.analysis.dropped".to_owned(),
-            payload: payload.to_string().into_bytes().into(),
+            payload,
             schema_version: CONTEXT_EVENT_SCHEMA_VERSION.to_owned(),
         };
         drop(generator);
@@ -958,6 +1234,57 @@ impl DaemonService {
             }
             Err(error) => Err(DaemonError::Storage(error)),
         }
+    }
+
+    /// Returns one compact durable-or-active context snapshot lifecycle status.
+    ///
+    /// Durable storage wins when the snapshot has committed a terminal outcome. An active
+    /// snapshot is returned as nonterminal only when its begin row is not visible yet.
+    ///
+    /// # Errors
+    /// Returns a storage error for the read boundary.
+    pub async fn context_snapshot_status(
+        &self,
+        request_id: Option<RequestId>,
+        snapshot_id: Option<ContextSnapshotId>,
+    ) -> Result<Option<ContextSnapshotStatus>, DaemonError> {
+        let durable = match snapshot_id {
+            Some(snapshot_id) => {
+                self.writer
+                    .context_snapshot_status_by_snapshot(snapshot_id)
+                    .await?
+            }
+            None => match request_id {
+                Some(request_id) => {
+                    self.writer
+                        .context_snapshot_status_by_request(request_id)
+                        .await?
+                }
+                None => None,
+            },
+        };
+        if durable.is_some() {
+            return Ok(durable);
+        }
+
+        let analyses = self.context_analyses.lock().await;
+        let active = snapshot_id
+            .and_then(|id| analyses.get(&id).map(|analysis| (id, analysis)))
+            .or_else(|| {
+                request_id.and_then(|request| {
+                    analyses
+                        .iter()
+                        .find(|(_, analysis)| analysis.provider_request_id == request)
+                        .map(|(id, analysis)| (*id, analysis))
+                })
+            });
+        Ok(active.map(|(snapshot_id, analysis)| {
+            ContextSnapshotStatus::new(
+                snapshot_id,
+                analysis.provider_request_id,
+                "partial".to_owned(),
+            )
+        }))
     }
 
     /// Returns the current in-memory state for one session.
@@ -1579,6 +1906,12 @@ pub enum ControlRequest {
         dropped: u64,
         observed_at_us: u64,
     },
+    /// Atomically aborts one active context analysis and records its typed drop reason.
+    AbortContextAnalysis {
+        snapshot_id: ContextSnapshotId,
+        reason: ContextAnalysisDropReason,
+        completed_at_us: u64,
+    },
     /// Finishes a previously started session.
     FinishSession {
         session_id: SessionId,
@@ -1586,6 +1919,11 @@ pub enum ControlRequest {
     },
     /// Reads one bounded metadata-only context inspection by provider request identity.
     Context { request_id: RequestId },
+    /// Reads one compact context snapshot lifecycle status by request or snapshot identity.
+    ContextStatus {
+        request_id: Option<RequestId>,
+        snapshot_id: Option<ContextSnapshotId>,
+    },
     /// Begins a bounded shadow context analysis for an already recorded provider request.
     BeginContextAnalysis {
         session_id: SessionId,
@@ -1631,6 +1969,8 @@ pub enum ControlResponse {
         inference_operation_id: Option<OperationId>,
         /// Context snapshot identity returned by `BeginContextAnalysis`.
         context_snapshot_id: Option<ContextSnapshotId>,
+        /// Cumulative receipt returned by `AppendContextBlocks`.
+        context_append_receipt: Option<ContextAppendReceipt>,
     },
     /// Bounded metadata-only context inspection.
     Context {
@@ -1639,6 +1979,10 @@ pub enum ControlResponse {
     },
     /// Request failed inside the daemon.
     Error { message: String },
+    ContextStatus {
+        /// Durable or active lifecycle payload, when the snapshot is known.
+        snapshot_status: Option<ContextSnapshotStatus>,
+    },
 }
 
 impl ControlResponse {
@@ -1653,6 +1997,7 @@ impl ControlResponse {
             attempt_id: None,
             inference_operation_id: None,
             context_snapshot_id: None,
+            context_append_receipt: None,
         }
     }
 }

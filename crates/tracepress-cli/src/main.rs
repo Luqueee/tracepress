@@ -8,6 +8,7 @@
     clippy::map_unwrap_or,
     clippy::print_stdout,
     clippy::unused_async,
+    clippy::significant_drop_tightening,
     reason = "CLI boundary formats user-facing output and validates bounded fixed-size state"
 )]
 //! Tracepress command-line boundary.
@@ -15,6 +16,7 @@
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap},
+    future::Future,
     path::PathBuf,
     process::Stdio,
     sync::{
@@ -28,11 +30,12 @@ use axum::serve;
 use clap::{Parser, Subcommand};
 use tokio::net::TcpListener;
 use tokio::process::Command;
+use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracepress_context::{
     ContextAnalysisLimits, ContextAnalysisResult, ContextAnalysisStatus, ContextBlockKind,
-    ContextBlockSummary, ContextDeltaRequest, ContextOrigin, ContextRole, TokenEstimateAggregate,
-    TokenReconciliation, compute_context_delta,
+    ContextBlockSummary, ContextDeltaRequest, ContextOrigin, ContextRole, MeasurementApplicability,
+    TokenEstimateAggregate, TokenReconciliation, compute_context_delta,
 };
 use tracepress_core::{
     AttemptId, ContextSnapshotId, HttpStatusCode, MaxIpcFrameBytes, MaxRequestBodyBytes,
@@ -40,9 +43,9 @@ use tracepress_core::{
     UuidV7Generator,
 };
 use tracepress_daemon::{
-    ContextAnalysisFinalize, ContextAnalysisMetrics, ContextCorrelationStatusWire, ControlRequest,
-    ControlResponse, CorrelationDegradation, CorrelationStatus,
-    ProviderObservation as ObservationRecord, ProviderObservationOutcome,
+    ContextAnalysisFinalize, ContextAnalysisMetrics, ContextAppendReceipt,
+    ContextCorrelationStatusWire, ControlRequest, ControlResponse, CorrelationDegradation,
+    CorrelationStatus, ProviderObservation as ObservationRecord, ProviderObservationOutcome,
 };
 use tracepress_ipc::{
     Credential, Endpoint, IpcClient, IpcLimits, IpcRequest, ResponseOutcome, UnixEndpoint,
@@ -51,13 +54,14 @@ use tracepress_provider::{
     ProviderEndpoint, ProviderResponseState, RequestObservation, ResponseObservation,
 };
 use tracepress_proxy::{
-    BackgroundTaskSpawner, ContextAnalysisDropReason, ContextAnalysisMode,
-    ContextAnalysisObservation, ContextAnalysisOutcome, ForwardId, ForwardMetadata, InboundRoute,
-    MetadataSink, MetadataSinkError, ObservationSinkError, ProviderObservationSink, ProxyConfig,
+    ContextAnalysisDropReason, ContextAnalysisMode, ContextAnalysisObservation,
+    ContextAnalysisOutcome, ForwardId, ForwardMetadata, InboundRoute, MetadataSink,
+    MetadataSinkError, ObservationSinkError, ProviderObservationSink, ProxyConfig,
     RequestContextObservation, TransparentProxy, TransportFailure,
 };
 use tracepress_storage::{
     ContextInspection, ContextInspectionBlock, ContextInspectionNamedEstimate,
+    ContextSnapshotStatus,
 };
 
 const FRAME_BYTES: u64 = 65_536;
@@ -69,12 +73,17 @@ const RECORDER_QUEUE_ITEMS: usize = 128;
 /// this queue is intentionally much smaller than the IPC item-count queue.
 const CONTEXT_INGESTION_QUEUE_HARD_CAP: usize = 4;
 
+/// Bounds heavy analyzed result payloads retained by the recorder and ingestion worker together.
+const CONTEXT_HEAVY_OUTCOME_CAP: usize = CONTEXT_INGESTION_QUEUE_HARD_CAP;
+
 fn context_ingestion_queue_capacity(configured: usize) -> usize {
     configured.clamp(1, CONTEXT_INGESTION_QUEUE_HARD_CAP)
 }
 
 /// Bound on forwards whose transport and semantic halves are still being correlated.
 const IN_FLIGHT_FORWARDS: usize = 64;
+/// Transport admission and dispatch share the existing 64-forward correlation bound.
+const TRANSPORT_DISPATCH_QUEUE_ITEMS: usize = IN_FLIGHT_FORWARDS;
 
 /// Bound on retired identities kept one by one above the retirement watermark.
 ///
@@ -83,6 +92,8 @@ const IN_FLIGHT_FORWARDS: usize = 64;
 /// newest retirement. Beyond it the oldest retirement is forgotten, which is the one least
 /// likely to still have a half in flight.
 const RETIRED_IDENTITIES: usize = 256;
+/// Bounded tombstones prevent a late duplicate event from re-opening a terminal analysis.
+const TERMINAL_ANALYSIS_IDENTITIES: usize = 256;
 
 /// Maximum total wait, after the agent and proxy have stopped, for provider observers, the
 /// recorder, and context ingestion to finish.
@@ -142,9 +153,15 @@ enum RunEvent {
     Transport(ForwardMetadata),
     RequestContext(Box<RequestContextObservation>),
     /// The detached Phase 3 outcome for a previously parsed request.
-    ContextAnalysis(ForwardId, ContextAnalysisOutcome),
-    /// The interpreted response of one forward.
-    Response(ForwardId, Box<ResponseObservation>),
+    ContextAnalysis(
+        ForwardId,
+        ContextAnalysisOutcome,
+        Option<OwnedSemaphorePermit>,
+    ),
+    /// The interpreted response of one forward, with its correlation status.
+    Response(ForwardId, Box<ResponseObservation>, CorrelationStatus),
+    /// Transport admission failed before a metadata record could be queued.
+    TransportAdmissionFailed(ForwardId, CorrelationDegradation),
     /// The classified transport failure of a forward that obtained no upstream response.
     TransportFailure(ForwardId, TransportFailure),
 }
@@ -155,10 +172,12 @@ enum RunEvent {
 /// admitted. The context worker therefore never needs to re-open, or infer, provider state.
 #[derive(Debug)]
 struct ContextIngestionJob {
+    forward: ForwardId,
     provider_request_id: RequestId,
     attempt_id: AttemptId,
     inference_operation_id: OperationId,
     analysis: ContextAnalysisResult,
+    analysis_permit: Option<OwnedSemaphorePermit>,
     provider_input_tokens: Option<u64>,
     provider_usage_comparable: bool,
     correlation: CorrelationStatus,
@@ -167,6 +186,7 @@ struct ContextIngestionJob {
 /// Compact provider receipt retained while the detached context outcome is still in flight.
 #[derive(Debug)]
 struct ContextReceipt {
+    forward: ForwardId,
     provider_request_id: RequestId,
     attempt_id: AttemptId,
     inference_operation_id: OperationId,
@@ -180,6 +200,57 @@ struct ContextAppendInput<'analysis> {
     analysis: &'analysis ContextAnalysisResult,
     status: ContextAnalysisStatus,
 }
+#[derive(Clone, Copy)]
+struct ContextCoverage {
+    token_estimation_eligible: u64,
+    token_estimation_observed: u64,
+    semantic_detection_eligible: u64,
+    semantic_detection_observed: u64,
+    correlation_eligible: u64,
+    correlation_correlated: u64,
+}
+
+struct ContextAnalysisInput {
+    forward: ForwardId,
+    outcome: ContextAnalysisOutcome,
+    analysis_permit: Option<OwnedSemaphorePermit>,
+}
+struct ContextFailureInput<'context> {
+    forward: ForwardId,
+    context: Option<&'context ContextAnalysisOutcome>,
+    analysis_permit: Option<OwnedSemaphorePermit>,
+}
+
+struct EnqueueContextInput<'receipt> {
+    receipt: &'receipt ContextReceipt,
+    outcome: ContextAnalysisOutcome,
+    analysis_permit: Option<OwnedSemaphorePermit>,
+}
+
+struct ContextAppendBatchInput {
+    snapshot_id: ContextSnapshotId,
+    sequence: u32,
+    blocks: Vec<tracepress_context::ContextBlockDraft>,
+}
+struct ContextFinalizationInput<'analysis> {
+    forward: ForwardId,
+    snapshot_id: ContextSnapshotId,
+    started_at_us: u64,
+    attempt_id: AttemptId,
+    analysis: &'analysis ContextAnalysisResult,
+    analysis_permit: Option<OwnedSemaphorePermit>,
+    provider_input_tokens: Option<u64>,
+    provider_usage_comparable: bool,
+    correlation: CorrelationStatus,
+    status: ContextAnalysisStatus,
+    accepted_block_count: u64,
+}
+#[derive(Debug)]
+struct RecordObservationInput {
+    forward: ForwardId,
+    semantic: SemanticRecord,
+    correlation: CorrelationStatus,
+}
 
 /// Accounting for context analyses rejected before context persistence.
 #[derive(Debug, Default)]
@@ -190,6 +261,59 @@ struct ContextCounters {
     correlation_degraded: AtomicU64,
     unsupported: AtomicU64,
     cancelled: AtomicU64,
+    pre_persistence_drop_backpressure: AtomicU64,
+    pre_persistence_drop_resource_limit: AtomicU64,
+    pre_persistence_drop_malformed: AtomicU64,
+    pre_persistence_drop_correlation: AtomicU64,
+    pre_persistence_drop_unsupported: AtomicU64,
+    pre_persistence_drop_cancelled: AtomicU64,
+    pending_drop_backpressure: AtomicU64,
+    pending_drop_resource_limit: AtomicU64,
+    pending_drop_malformed: AtomicU64,
+    pending_drop_correlation: AtomicU64,
+    pending_drop_unsupported: AtomicU64,
+    pending_drop_cancelled: AtomicU64,
+    analysis_requests_seen: AtomicU64,
+    analysis_requests_complete: AtomicU64,
+    analysis_requests_partial: AtomicU64,
+    analysis_requests_dropped: AtomicU64,
+    token_estimation_eligible: AtomicU64,
+    token_estimation_observed: AtomicU64,
+    semantic_detection_eligible: AtomicU64,
+    semantic_detection_observed: AtomicU64,
+    correlation_eligible: AtomicU64,
+    correlation_correlated: AtomicU64,
+    lifecycle: Mutex<ContextLifecycle>,
+}
+
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct AnalysisSequence(u64);
+
+impl From<ForwardId> for AnalysisSequence {
+    fn from(forward: ForwardId) -> Self {
+        Self(forward.get())
+    }
+}
+
+#[derive(Clone, Copy, Debug)]
+struct PendingAnalysisEvidence {
+    sequence: AnalysisSequence,
+    provider_request_id: RequestId,
+    snapshot_id: Option<ContextSnapshotId>,
+}
+
+#[derive(Debug, Default)]
+struct ContextLifecycle {
+    /// Analyses admitted by a sink but not yet terminally classified. Correlation admission
+    /// bounds this set to the in-flight identity cap.
+    pending: BTreeSet<AnalysisSequence>,
+    /// Durable provider/snapshot identities retained while an analysis is pending. This is
+    /// bounded alongside `pending` and is used to reconcile a response lost after commit.
+    evidence: BTreeMap<AnalysisSequence, PendingAnalysisEvidence>,
+    /// Terminal identities above the contiguous watermark, retained to reject reordered
+    /// duplicates until the watermark catches up.
+    terminal_holes: BTreeSet<AnalysisSequence>,
+    terminal_through: Option<AnalysisSequence>,
 }
 
 impl ContextCounters {
@@ -204,35 +328,346 @@ impl ContextCounters {
         }
     }
 
-    fn dropped(&self, reason: ContextAnalysisDropReason) {
-        let _counted = self.counter(reason).fetch_add(1, Ordering::Relaxed);
+    const fn pre_persistence_counter(&self, reason: ContextAnalysisDropReason) -> &AtomicU64 {
+        match reason {
+            ContextAnalysisDropReason::ObserverBackpressure => {
+                &self.pre_persistence_drop_backpressure
+            }
+            ContextAnalysisDropReason::ResourceLimit => &self.pre_persistence_drop_resource_limit,
+            ContextAnalysisDropReason::Malformed => &self.pre_persistence_drop_malformed,
+            ContextAnalysisDropReason::CorrelationDegraded => {
+                &self.pre_persistence_drop_correlation
+            }
+            ContextAnalysisDropReason::Cancelled => &self.pre_persistence_drop_cancelled,
+            _ => &self.pre_persistence_drop_unsupported,
+        }
     }
 
-    fn count(&self, reason: ContextAnalysisDropReason) -> u64 {
-        self.counter(reason).load(Ordering::Relaxed)
+    const fn pending_drop_counter(&self, reason: ContextAnalysisDropReason) -> &AtomicU64 {
+        match reason {
+            ContextAnalysisDropReason::ObserverBackpressure => &self.pending_drop_backpressure,
+            ContextAnalysisDropReason::ResourceLimit => &self.pending_drop_resource_limit,
+            ContextAnalysisDropReason::Malformed => &self.pending_drop_malformed,
+            ContextAnalysisDropReason::CorrelationDegraded => &self.pending_drop_correlation,
+            ContextAnalysisDropReason::Cancelled => &self.pending_drop_cancelled,
+            _ => &self.pending_drop_unsupported,
+        }
+    }
+    /// Admits one eligible Phase 3 request exactly once.
+    fn ensure_seen(&self, forward: ForwardId) {
+        self.ensure_seen_sequence(AnalysisSequence::from(forward));
+    }
+
+    fn ensure_seen_sequence(&self, sequence: AnalysisSequence) {
+        let inserted = {
+            let mut lifecycle = self
+                .lifecycle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let terminal_through = lifecycle
+                .terminal_through
+                .is_some_and(|terminal_through| sequence <= terminal_through);
+            if lifecycle.pending.contains(&sequence)
+                || terminal_through
+                || lifecycle.terminal_holes.contains(&sequence)
+            {
+                false
+            } else {
+                lifecycle.pending.insert(sequence)
+            }
+        };
+        if inserted {
+            let _counted = self.analysis_requests_seen.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Remembers the durable provider identity needed to reconcile a lost context response.
+    fn remember_provider_request(&self, forward: ForwardId, provider_request_id: RequestId) {
+        let sequence = AnalysisSequence::from(forward);
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if lifecycle.pending.contains(&sequence)
+            && (lifecycle.evidence.contains_key(&sequence)
+                || lifecycle.evidence.len() < IN_FLIGHT_FORWARDS)
+        {
+            let _ = lifecycle
+                .evidence
+                .entry(sequence)
+                .and_modify(|evidence| evidence.provider_request_id = provider_request_id)
+                .or_insert(PendingAnalysisEvidence {
+                    sequence,
+                    provider_request_id,
+                    snapshot_id: None,
+                });
+        }
+    }
+
+    /// Associates the daemon snapshot allocated by `BeginContextAnalysis` with its provider row.
+    fn remember_snapshot(&self, forward: ForwardId, snapshot_id: ContextSnapshotId) {
+        let sequence = AnalysisSequence::from(forward);
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if let Some(evidence) = lifecycle.evidence.get_mut(&sequence) {
+            evidence.snapshot_id = Some(snapshot_id);
+        }
+    }
+
+    fn pending_evidence(&self) -> Vec<PendingAnalysisEvidence> {
+        let lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        lifecycle.evidence.values().copied().collect()
+    }
+
+    fn mark_terminal(&self, forward: ForwardId) -> bool {
+        self.mark_terminal_sequence(AnalysisSequence::from(forward))
+    }
+
+    fn mark_terminal_sequence(&self, sequence: AnalysisSequence) -> bool {
+        let mut lifecycle = self
+            .lifecycle
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let terminal = if lifecycle.pending.remove(&sequence) {
+            let _ = lifecycle.evidence.remove(&sequence);
+            Self::record_terminal_locked(&mut lifecycle, sequence);
+            true
+        } else {
+            false
+        };
+        drop(lifecycle);
+        terminal
+    }
+
+    fn record_terminal_locked(lifecycle: &mut ContextLifecycle, sequence: AnalysisSequence) {
+        let _ = lifecycle.evidence.remove(&sequence);
+        if lifecycle
+            .terminal_through
+            .is_some_and(|terminal_through| sequence <= terminal_through)
+        {
+            return;
+        }
+        let _inserted = lifecycle.terminal_holes.insert(sequence);
+        loop {
+            let next = lifecycle
+                .terminal_through
+                .map_or(0, |terminal_through| terminal_through.0.saturating_add(1));
+            let Some(smallest) = lifecycle.terminal_holes.first().copied() else {
+                break;
+            };
+            if smallest.0 != next {
+                break;
+            }
+            let _folded = lifecycle.terminal_holes.pop_first();
+            lifecycle.terminal_through = Some(smallest);
+        }
+        while lifecycle.terminal_holes.len() > TERMINAL_ANALYSIS_IDENTITIES {
+            let _forgotten = lifecycle.terminal_holes.pop_first();
+        }
+    }
+
+    fn complete(&self, forward: ForwardId) {
+        self.complete_sequence(AnalysisSequence::from(forward));
+    }
+
+    fn complete_sequence(&self, sequence: AnalysisSequence) {
+        if self.mark_terminal_sequence(sequence) {
+            let _counted = self
+                .analysis_requests_complete
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn partial(&self, forward: ForwardId) {
+        self.partial_sequence(AnalysisSequence::from(forward));
+    }
+
+    fn partial_sequence(&self, sequence: AnalysisSequence) {
+        if self.mark_terminal_sequence(sequence) {
+            let _counted = self
+                .analysis_requests_partial
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn partial_with_drop_reason(&self, forward: ForwardId, reason: ContextAnalysisDropReason) {
+        if self.mark_terminal(forward) {
+            let _counted = self
+                .analysis_requests_partial
+                .fetch_add(1, Ordering::Relaxed);
+            let _counted = self.counter(reason).fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    fn dropped(&self, forward: ForwardId, reason: ContextAnalysisDropReason) {
+        if self.mark_terminal(forward) {
+            let _counted = self.counter(reason).fetch_add(1, Ordering::Relaxed);
+            let _counted = self
+                .pre_persistence_counter(reason)
+                .fetch_add(1, Ordering::Relaxed);
+            let _counted = self
+                .pending_drop_counter(reason)
+                .fetch_add(1, Ordering::Relaxed);
+            let _counted = self
+                .analysis_requests_dropped
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    /// Atomically terminal-accounts every admitted request that has not reached a durable
+    /// terminal snapshot. This is used before worker cancellation on a forced drain timeout.
+    fn drop_pending(&self, reason: ContextAnalysisDropReason) {
+        let count = {
+            let mut lifecycle = self
+                .lifecycle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let pending = std::mem::take(&mut lifecycle.pending);
+            let count = u64::try_from(pending.len()).unwrap_or(u64::MAX);
+            for sequence in pending {
+                Self::record_terminal_locked(&mut lifecycle, sequence);
+            }
+            drop(lifecycle);
+            count
+        };
+        if count == 0 {
+            return;
+        }
+        let _counted = self.counter(reason).fetch_add(count, Ordering::Relaxed);
+        let _counted = self
+            .pre_persistence_counter(reason)
+            .fetch_add(count, Ordering::Relaxed);
+        let _counted = self
+            .pending_drop_counter(reason)
+            .fetch_add(count, Ordering::Relaxed);
+        let _counted = self
+            .analysis_requests_dropped
+            .fetch_add(count, Ordering::Relaxed);
+    }
+
+    fn observe_coverage(&self, coverage: ContextCoverage) {
+        let ContextCoverage {
+            token_estimation_eligible,
+            token_estimation_observed,
+            semantic_detection_eligible,
+            semantic_detection_observed,
+            correlation_eligible,
+            correlation_correlated,
+        } = coverage;
+        let _counted = self
+            .token_estimation_eligible
+            .fetch_add(token_estimation_eligible, Ordering::Relaxed);
+        let _counted = self
+            .token_estimation_observed
+            .fetch_add(token_estimation_observed, Ordering::Relaxed);
+        let _counted = self
+            .semantic_detection_eligible
+            .fetch_add(semantic_detection_eligible, Ordering::Relaxed);
+        let _counted = self
+            .semantic_detection_observed
+            .fetch_add(semantic_detection_observed, Ordering::Relaxed);
+        let _counted = self
+            .correlation_eligible
+            .fetch_add(correlation_eligible, Ordering::Relaxed);
+        let _counted = self
+            .correlation_correlated
+            .fetch_add(correlation_correlated, Ordering::Relaxed);
+    }
+
+    fn take_pending_drop_count(&self, reason: ContextAnalysisDropReason) -> u64 {
+        self.pending_drop_counter(reason).swap(0, Ordering::Relaxed)
     }
 
     fn report(&self) -> String {
+        let seen = self.analysis_requests_seen.load(Ordering::Relaxed);
+        let complete = self.analysis_requests_complete.load(Ordering::Relaxed);
+        let partial = self.analysis_requests_partial.load(Ordering::Relaxed);
+        let dropped = self.analysis_requests_dropped.load(Ordering::Relaxed);
+        let coverage = |observed: u64, eligible: u64| {
+            if eligible == 0 {
+                "unknown".to_owned()
+            } else {
+                format!("{observed}/{eligible}")
+            }
+        };
+        let complete_coverage = coverage(complete, seen);
+        let partial_coverage = coverage(partial, seen);
+        let dropped_coverage = coverage(dropped, seen);
+        let analysis_coverage = coverage(complete, seen);
+        let token_coverage = coverage(
+            self.token_estimation_observed.load(Ordering::Relaxed),
+            self.token_estimation_eligible.load(Ordering::Relaxed),
+        );
+        let semantic_coverage = coverage(
+            self.semantic_detection_observed.load(Ordering::Relaxed),
+            self.semantic_detection_eligible.load(Ordering::Relaxed),
+        );
+        let correlation_eligible = self.correlation_eligible.load(Ordering::Relaxed);
+        let correlation_correlated = self.correlation_correlated.load(Ordering::Relaxed);
+        let correlation_coverage = coverage(correlation_correlated, correlation_eligible);
         format!(
-            "context_observer_backpressure_total={}\ncontext_resource_limit_total={}\ncontext_malformed_total={}\ncontext_correlation_degraded_total={}\ncontext_unsupported_total={}\ncontext_cancelled_total={}",
+            "context_observer_backpressure_total={}\ncontext_resource_limit_total={}\ncontext_malformed_total={}\ncontext_correlation_degraded_total={}\ncontext_unsupported_total={}\ncontext_cancelled_total={}\nanalysis_requests_seen={seen}\nanalysis_requests_complete={complete}\nanalysis_requests_partial={partial}\nanalysis_requests_dropped={dropped}\nanalysis_drop_backpressure={}\nanalysis_drop_resource_limit={}\nanalysis_drop_malformed={}\nanalysis_drop_correlation={}\nanalysis_drop_unsupported={}\nanalysis_drop_cancelled={}\ncorrelation_eligible={correlation_eligible}\ncorrelation_correlated={correlation_correlated}\nanalysis_coverage={analysis_coverage}\ncorrelation_coverage={correlation_coverage}\nanalysis_coverage_complete={complete_coverage}\nanalysis_coverage_partial={partial_coverage}\nanalysis_coverage_dropped={dropped_coverage}\ntoken_estimation_coverage={token_coverage}\nsemantic_detection_coverage={semantic_coverage}",
             self.observer_backpressure.load(Ordering::Relaxed),
             self.resource_limit.load(Ordering::Relaxed),
             self.malformed.load(Ordering::Relaxed),
             self.correlation_degraded.load(Ordering::Relaxed),
             self.unsupported.load(Ordering::Relaxed),
             self.cancelled.load(Ordering::Relaxed),
+            self.pre_persistence_drop_backpressure
+                .load(Ordering::Relaxed),
+            self.pre_persistence_drop_resource_limit
+                .load(Ordering::Relaxed),
+            self.pre_persistence_drop_malformed.load(Ordering::Relaxed),
+            self.pre_persistence_drop_correlation
+                .load(Ordering::Relaxed),
+            self.pre_persistence_drop_unsupported
+                .load(Ordering::Relaxed),
+            self.pre_persistence_drop_cancelled.load(Ordering::Relaxed),
         )
     }
 }
+#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+struct TransportSequence(u64);
 
-/// Coordinates the detached transport handoff with its terminal provider observation.
+/// A bounded handoff from the synchronous metadata sink to the transport dispatcher.
+#[derive(Debug)]
+enum TransportDispatchJob {
+    Metadata {
+        metadata: ForwardMetadata,
+        latch: Arc<TransportLatch>,
+    },
+    Response {
+        forward: ForwardId,
+        observation: Box<ResponseObservation>,
+        predecessor: Arc<TransportLatch>,
+    },
+    #[cfg(test)]
+    Placeholder {
+        sequence: TransportSequence,
+        latch: Arc<TransportLatch>,
+    },
+}
+
+#[derive(Debug)]
+struct TransportResponseAdmissionFailure {
+    observation: Box<ResponseObservation>,
+    count: bool,
+}
+
+/// Coordinates bounded transport admission with its terminal provider observation.
 ///
-/// Each metadata event is submitted before the matching response observer can run. A response
-/// observer that races the metadata worker waits on this latch, preserving the queue's event order
-/// without making the forwarding task wait for recorder capacity.
-#[derive(Debug, Default)]
+/// Metadata is placed on the dispatcher queue before its latch becomes visible. A response that
+/// observes the latch is therefore queued behind the metadata on the same FIFO dispatcher, while
+/// an overflow response is explicitly degraded instead of waiting for an unbounded task.
+#[derive(Debug)]
 struct TransportOrdering {
-    pending: Mutex<BTreeMap<ForwardId, Arc<TransportLatch>>>,
+    sender: tokio::sync::mpsc::Sender<TransportDispatchJob>,
+    pending: Mutex<BTreeMap<TransportSequence, Arc<TransportLatch>>>,
 }
 
 #[derive(Debug, Default)]
@@ -240,38 +675,116 @@ struct TransportLatch {
     complete: Mutex<bool>,
     wake: Condvar,
 }
-
 impl TransportOrdering {
-    fn register(&self, forward: ForwardId) -> Arc<TransportLatch> {
+    const fn new(sender: tokio::sync::mpsc::Sender<TransportDispatchJob>) -> Self {
+        Self {
+            sender,
+            pending: Mutex::new(BTreeMap::new()),
+        }
+    }
+
+    /// Tries to reserve both the bounded correlation slot and its queue slot.
+    ///
+    /// The latch is allocated only after both bounds admit the forward. The metadata job is sent
+    /// before the latch is inserted, so a response cannot overtake it on the FIFO dispatcher.
+    fn try_enqueue_transport(&self, metadata: ForwardMetadata) -> bool {
+        let sequence = TransportSequence(metadata.forward.get());
         let mut pending = self
             .pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner);
-        Arc::clone(
-            pending
-                .entry(forward)
-                .or_insert_with(|| Arc::new(TransportLatch::default())),
-        )
+        if pending.contains_key(&sequence) || pending.len() >= IN_FLIGHT_FORWARDS {
+            return false;
+        }
+        let Ok(permit) = self.sender.try_reserve() else {
+            return false;
+        };
+        let latch = Arc::new(TransportLatch::default());
+        permit.send(TransportDispatchJob::Metadata {
+            metadata,
+            latch: Arc::clone(&latch),
+        });
+        let _previous = pending.insert(sequence, latch);
+        true
     }
 
-    fn take(&self, forward: ForwardId) -> Option<Arc<TransportLatch>> {
+    #[cfg(test)]
+    fn try_enqueue_placeholder(&self, sequence: TransportSequence) -> bool {
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        if pending.contains_key(&sequence) || pending.len() >= IN_FLIGHT_FORWARDS {
+            return false;
+        }
+        let Ok(permit) = self.sender.try_reserve() else {
+            return false;
+        };
+        let latch = Arc::new(TransportLatch::default());
+        permit.send(TransportDispatchJob::Placeholder {
+            sequence,
+            latch: Arc::clone(&latch),
+        });
+        let _previous = pending.insert(sequence, latch);
+        true
+    }
+
+    /// Queues a response behind accepted metadata, or returns it for degraded direct recording.
+    ///
+    /// Removing the ticket only happens after the dispatcher slot is reserved. If the queue is
+    /// saturated, the metadata ticket is removed and the caller records the response as degraded
+    /// without waiting.
+    fn try_enqueue_response(
+        &self,
+        forward: ForwardId,
+        observation: Box<ResponseObservation>,
+    ) -> Result<(), TransportResponseAdmissionFailure> {
+        let sequence = TransportSequence(forward.get());
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(predecessor) = pending.get(&sequence).cloned() else {
+            drop(pending);
+            return Err(TransportResponseAdmissionFailure {
+                observation,
+                count: false,
+            });
+        };
+        let Ok(permit) = self.sender.try_reserve() else {
+            let _removed = pending.remove(&sequence);
+            drop(pending);
+            return Err(TransportResponseAdmissionFailure {
+                observation,
+                count: true,
+            });
+        };
+        let _removed = pending.remove(&sequence);
+        drop(pending);
+        permit.send(TransportDispatchJob::Response {
+            forward,
+            observation,
+            predecessor,
+        });
+        Ok(())
+    }
+
+    fn release_transport(&self, forward: ForwardId) {
+        let sequence = TransportSequence(forward.get());
+        let mut pending = self
+            .pending
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _removed = pending.remove(&sequence);
+    }
+
+    /// Returns the number of accepted transport tickets not yet paired with a response.
+    #[cfg(test)]
+    fn pending_len(&self) -> usize {
         self.pending
             .lock()
             .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .remove(&forward)
-    }
-
-    fn remove(&self, forward: ForwardId, latch: &Arc<TransportLatch>) {
-        let mut pending = self
-            .pending
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner);
-        let remove = pending
-            .get(&forward)
-            .is_some_and(|current| Arc::ptr_eq(current, latch));
-        if remove {
-            let _ = pending.remove(&forward);
-        }
+            .len()
     }
 }
 
@@ -301,15 +814,60 @@ impl TransportLatch {
     }
 }
 
-/// Synchronous, non-blocking bridge from the proxy sinks to the run recorder.
+/// Runs the sole fixed transport dispatcher worker.
+async fn run_transport_dispatcher(
+    mut jobs: tokio::sync::mpsc::Receiver<TransportDispatchJob>,
+    sender: tokio::sync::mpsc::Sender<RunEvent>,
+) {
+    let mut recorder_open = true;
+    while let Some(job) = jobs.recv().await {
+        match job {
+            TransportDispatchJob::Metadata { metadata, latch } => {
+                if recorder_open && sender.send(RunEvent::Transport(metadata)).await.is_err() {
+                    recorder_open = false;
+                }
+                // Release any waiter even while the recorder is shutting down.
+                latch.complete();
+            }
+            TransportDispatchJob::Response {
+                forward,
+                observation,
+                predecessor,
+            } => {
+                predecessor.wait();
+                if recorder_open
+                    && sender
+                        .send(RunEvent::Response(
+                            forward,
+                            observation,
+                            CorrelationStatus::Correlated,
+                        ))
+                        .await
+                        .is_err()
+                {
+                    recorder_open = false;
+                }
+            }
+            #[cfg(test)]
+            TransportDispatchJob::Placeholder { sequence: _, latch } => {
+                latch.complete();
+            }
+        }
+    }
+}
+
+/// Synchronous, bounded bridge from the proxy sinks to the run recorder.
 ///
-/// Both halves of a forward share one queue, so the transport status of a forward always
-/// reaches the recorder before that forward's terminal semantic record.
+/// Transport metadata uses one bounded FIFO and one fixed worker. Both halves of a forward share
+/// that FIFO, so accepted transport status always reaches the recorder before its response.
 #[derive(Debug)]
 struct RecorderSink {
     sender: tokio::sync::mpsc::Sender<RunEvent>,
-    background: BackgroundTaskSpawner,
     ordering: Arc<TransportOrdering>,
+    counters: Arc<CorrelationCounters>,
+    context_counters: Arc<ContextCounters>,
+    analysis_slots: Arc<Semaphore>,
+    analysis_enabled: bool,
 }
 
 impl RecorderSink {
@@ -319,44 +877,49 @@ impl RecorderSink {
             .map_err(|_error| MetadataSinkError::rejected())
     }
 
-    /// Enqueues one transport event from a tracked blocking task so the forwarding task never
-    /// waits for recorder capacity.
+    /// Admits transport metadata without allocating a per-forward task.
     fn offer_transport(&self, metadata: ForwardMetadata) -> Result<(), MetadataSinkError> {
         let forward = metadata.forward;
-        let latch = self.ordering.register(forward);
-        let task_latch = Arc::clone(&latch);
-        let ordering = Arc::clone(&self.ordering);
-        let sender = self.sender.clone();
-        if !self.background.spawn_blocking(move || {
-            let _ = sender.blocking_send(RunEvent::Transport(metadata));
-            task_latch.complete();
-            ordering.remove(forward, &task_latch);
-        }) {
-            latch.complete();
-            self.ordering.remove(forward, &latch);
-            return Err(MetadataSinkError::rejected());
+        if self.ordering.try_enqueue_transport(metadata) {
+            return Ok(());
         }
-        Ok(())
+        let reason = CorrelationDegradation::InFlightLimit;
+        self.counters.degraded(reason);
+        // Preserve a content-free degradation marker for routes without a semantic response.
+        let _ = self
+            .sender
+            .try_send(RunEvent::TransportAdmissionFailed(forward, reason));
+        Err(MetadataSinkError::rejected())
     }
 
-    /// Preserves transport-before-response ordering without making the forwarding or observer
-    /// runtime task wait. The one-shot wait and durable send are both covered by the shutdown
-    /// tracker.
-    fn offer_ordered(&self, forward: ForwardId, event: RunEvent) -> Result<(), MetadataSinkError> {
-        let Some(latch) = self.ordering.take(forward) else {
-            return self.offer_durable(event);
-        };
-        let task_latch = Arc::clone(&latch);
-        let sender = self.sender.clone();
-        if !self.background.spawn_blocking(move || {
-            task_latch.wait();
-            let _ = sender.blocking_send(event);
-        }) {
-            latch.complete();
-            self.ordering.remove(forward, &latch);
-            return Err(MetadataSinkError::rejected());
+    /// Queues an accepted response behind transport, or immediately records it as degraded.
+    fn offer_ordered(
+        &self,
+        forward: ForwardId,
+        observation: ResponseObservation,
+    ) -> Result<(), MetadataSinkError> {
+        match self
+            .ordering
+            .try_enqueue_response(forward, Box::new(observation))
+        {
+            Ok(()) => Ok(()),
+            Err(failure) => {
+                let reason = CorrelationDegradation::InFlightLimit;
+                if failure.count {
+                    self.counters.degraded(reason);
+                }
+                let _ = self
+                    .sender
+                    .try_send(RunEvent::TransportAdmissionFailed(forward, reason));
+                self.sender
+                    .try_send(RunEvent::Response(
+                        forward,
+                        failure.observation,
+                        CorrelationStatus::Degraded(reason),
+                    ))
+                    .map_err(|_error| MetadataSinkError::rejected())
+            }
         }
-        Ok(())
     }
 
     /// Provider observations are produced by detached observer tasks, so a full recorder queue
@@ -374,21 +937,72 @@ impl MetadataSink for RecorderSink {
         self.offer_transport(metadata)
     }
 }
+
 impl ProviderObservationSink for RecorderSink {
     fn try_record_request_context(
         &self,
         observation: RequestContextObservation,
     ) -> Result<(), ObservationSinkError> {
-        self.offer_durable(RunEvent::RequestContext(Box::new(observation)))
+        let forward = observation.forward;
+        let fallback_reason = observation.context.as_ref().map_or(
+            ContextAnalysisDropReason::CorrelationDegraded,
+            |outcome| match outcome {
+                ContextAnalysisOutcome::Analyzed(_) => {
+                    ContextAnalysisDropReason::CorrelationDegraded
+                }
+                ContextAnalysisOutcome::Dropped(reason) => *reason,
+                _ => ContextAnalysisDropReason::Unsupported,
+            },
+        );
+        match self.offer_durable(RunEvent::RequestContext(Box::new(observation))) {
+            Ok(()) => Ok(()),
+            Err(_error) => {
+                if self.analysis_enabled {
+                    self.context_counters.ensure_seen(forward);
+                    self.context_counters.dropped(forward, fallback_reason);
+                }
+                Err(ObservationSinkError::rejected())
+            }
+        }
     }
+
     fn try_record_context_analysis(
         &self,
         observation: ContextAnalysisObservation,
     ) -> Result<(), ObservationSinkError> {
-        self.offer(RunEvent::ContextAnalysis(
+        let forward = observation.forward;
+        if self.analysis_enabled {
+            self.context_counters.ensure_seen(forward);
+        }
+        let permit = match &observation.outcome {
+            ContextAnalysisOutcome::Analyzed(_) => {
+                match Arc::clone(&self.analysis_slots).try_acquire_owned() {
+                    Ok(permit) => Some(permit),
+                    Err(_error) => {
+                        if self.analysis_enabled {
+                            self.context_counters
+                                .dropped(forward, ContextAnalysisDropReason::ObserverBackpressure);
+                        }
+                        return Err(ObservationSinkError::rejected());
+                    }
+                }
+            }
+            _ => None,
+        };
+        match self.offer(RunEvent::ContextAnalysis(
             observation.forward,
             observation.outcome,
-        ))
+            permit,
+        )) {
+            Ok(()) => Ok(()),
+            Err(_error) => {
+                if self.analysis_enabled {
+                    self.context_counters
+                        .dropped(forward, ContextAnalysisDropReason::ObserverBackpressure);
+                }
+                Err(ObservationSinkError::rejected())
+            }
+        }
     }
 
     fn try_record_response(
@@ -396,7 +1010,7 @@ impl ProviderObservationSink for RecorderSink {
         forward: ForwardId,
         observation: ResponseObservation,
     ) -> Result<(), ObservationSinkError> {
-        self.offer_ordered(forward, RunEvent::Response(forward, Box::new(observation)))
+        self.offer_ordered(forward, observation)
             .map_err(|_error| ObservationSinkError::rejected())
     }
 
@@ -405,11 +1019,11 @@ impl ProviderObservationSink for RecorderSink {
         forward: ForwardId,
         failure: TransportFailure,
     ) -> Result<(), ObservationSinkError> {
+        self.ordering.release_transport(forward);
         self.offer_durable(RunEvent::TransportFailure(forward, failure))
             .map_err(|_error| ObservationSinkError::rejected())
     }
 }
-
 /// One semantic request observation awaiting its terminal response evidence.
 #[derive(Debug)]
 struct PendingObservation {
@@ -423,10 +1037,13 @@ struct ForwardState {
     request: Option<PendingObservation>,
     response: Option<ResponseObservation>,
     context: Option<ContextAnalysisOutcome>,
+    analysis_permit: Option<OwnedSemaphorePermit>,
     /// A Phase 2 request event arrived before its detached Phase 3 outcome.
     context_pending: bool,
     status_code: Option<u16>,
     transport_failure: Option<TransportFailure>,
+    /// Transport admission failed before status could be joined to this forward.
+    transport_admission_failure: Option<CorrelationDegradation>,
     transport: bool,
     settled: bool,
 }
@@ -441,6 +1058,7 @@ impl ForwardState {
         let status_code = self.status_code;
         let response = self.response.take();
         let context = self.context.take();
+        let analysis_permit = self.analysis_permit.take();
         let transport_failure = self.transport_failure.take();
         let orphaned_semantic =
             self.request.is_none() && (response.is_some() || transport_failure.is_some());
@@ -450,11 +1068,13 @@ impl ForwardState {
                 pending,
                 response,
                 context,
+                analysis_permit,
                 status_code,
                 transport_failure,
             }),
             orphaned_semantic,
             transport: self.transport,
+            transport_admission_failure: self.transport_admission_failure,
         }
     }
 }
@@ -465,6 +1085,7 @@ struct ForwardEvidence {
     semantic: Option<SemanticRecord>,
     orphaned_semantic: bool,
     transport: bool,
+    transport_admission_failure: Option<CorrelationDegradation>,
 }
 
 /// Semantic evidence of one forward, with the transport evidence its forwarding half observed.
@@ -473,13 +1094,9 @@ struct SemanticRecord {
     pending: PendingObservation,
     response: Option<ResponseObservation>,
     context: Option<ContextAnalysisOutcome>,
+    analysis_permit: Option<OwnedSemaphorePermit>,
     status_code: Option<u16>,
     transport_failure: Option<TransportFailure>,
-}
-struct RecordObservationInput {
-    forward: ForwardId,
-    semantic: SemanticRecord,
-    correlation: CorrelationStatus,
 }
 
 /// Joins the transport and semantic records of every forward by correlation identity.
@@ -499,6 +1116,7 @@ struct RunRecorder {
     context_sender: tokio::sync::mpsc::Sender<ContextIngestionJob>,
     context_counters: Arc<ContextCounters>,
     forwards: BTreeMap<ForwardId, ForwardState>,
+    analysis_enabled: bool,
     /// Terminal response halves retained briefly when a request parser finishes after eviction.
     retired_orphans: BTreeMap<ForwardId, ForwardState>,
     /// Bounded receipts waiting for a detached context outcome.
@@ -522,17 +1140,30 @@ impl RunRecorder {
         mut self,
         mut events: tokio::sync::mpsc::Receiver<RunEvent>,
     ) -> Result<(), String> {
+        let mut first_error = None;
         while let Some(event) = events.recv().await {
             match event {
-                RunEvent::Transport(metadata) => self.transport(metadata).await?,
+                RunEvent::Transport(metadata) => {
+                    if let Err(error) = self.transport(metadata).await {
+                        let _first = first_error.get_or_insert(error);
+                    }
+                }
                 RunEvent::RequestContext(observation) => {
                     self.request_context(*observation).await;
                 }
-                RunEvent::ContextAnalysis(forward, outcome) => {
-                    self.context_analysis(forward, outcome).await;
+                RunEvent::ContextAnalysis(forward, outcome, analysis_permit) => {
+                    self.context_analysis(ContextAnalysisInput {
+                        forward,
+                        outcome,
+                        analysis_permit,
+                    })
+                    .await;
                 }
-                RunEvent::Response(forward, observation) => {
-                    self.response(forward, *observation).await;
+                RunEvent::Response(forward, observation, correlation) => {
+                    self.response(forward, *observation, correlation).await;
+                }
+                RunEvent::TransportAdmissionFailed(forward, reason) => {
+                    self.transport_admission_failed(forward, reason).await;
                 }
                 RunEvent::TransportFailure(forward, failure) => {
                     self.transport_failure(forward, failure).await;
@@ -546,13 +1177,24 @@ impl RunRecorder {
                 continue;
             }
             if state.request.is_none() {
-                self.drop_unpaired_context(&mut state);
+                self.drop_unpaired_context(forward, &mut state);
             }
-            let evidence = state.evidence(forward);
             // The run ending is not a bound degradation: the forward keeps the evidence it has.
-            self.record(evidence, CorrelationStatus::Correlated).await;
+            {
+                let record = self.record(state.evidence(forward), CorrelationStatus::Correlated);
+                record.await;
+            }
         }
-        Ok(())
+        // Receipts with no detached outcome have reached a terminal provider record but can no
+        // longer be attributed. Account every one explicitly instead of silently dropping the map.
+        while let Some((forward, _receipt)) = self.pending_context.pop_first() {
+            self.context_counters
+                .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
+        }
+        while let Some((forward, mut state)) = self.retired_orphans.pop_first() {
+            self.drop_unpaired_context(forward, &mut state);
+        }
+        first_error.map_or(Ok(()), Err)
     }
 
     /// Records an unobserved route's forward, or joins the status onto a Responses forward.
@@ -562,12 +1204,12 @@ impl RunRecorder {
             return match self.record_forward().await? {
                 ControlResponse::Ok { .. } => Ok(()),
                 ControlResponse::Error { message } => Err(message),
-                ControlResponse::Context { .. } => {
+                ControlResponse::Context { .. } | ControlResponse::ContextStatus { .. } => {
                     Err("daemon returned an unexpected context response".to_owned())
                 }
             };
         }
-        let evidence = {
+        let mut evidence = Some({
             self.admit(metadata.forward).await;
             let Some(state) = self.forwards.get_mut(&metadata.forward) else {
                 return Ok(());
@@ -585,20 +1227,35 @@ impl RunRecorder {
             // transport status are present so successful attempts keep their status code.
             state.settled = true;
             state.evidence(metadata.forward)
-        };
-        self.record(evidence, CorrelationStatus::Correlated).await;
+        });
+        if let Some(evidence) = evidence.take() {
+            let record = self.record(evidence, CorrelationStatus::Correlated);
+            record.await;
+        }
         Ok(())
     }
 
     /// Buffers the Phase 2 request half before dispatch and waits for its detached Phase 3 outcome
     /// before checking terminal evidence.
     async fn request_context(&mut self, observation: RequestContextObservation) {
+        let analysis_enabled = self.analysis_enabled;
         let forward = observation.forward;
+        if analysis_enabled {
+            self.context_counters.ensure_seen(forward);
+        }
         let Ok(started_at) = current_timestamp() else {
+            if analysis_enabled {
+                self.context_counters
+                    .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
+            }
             return;
         };
         if let Some(mut state) = self.retired_orphans.remove(&forward) {
             if state.settled {
+                if analysis_enabled {
+                    self.context_counters
+                        .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
+                }
                 return;
             }
             state.request = Some(PendingObservation {
@@ -608,15 +1265,25 @@ impl RunRecorder {
             state.context = observation.context;
             state.context_pending = state.context.is_none();
             state.settled = true;
-            let evidence = state.evidence(forward);
-            self.record(evidence, CorrelationStatus::Correlated).await;
+            {
+                let record = self.record(state.evidence(forward), CorrelationStatus::Correlated);
+                record.await;
+            }
             return;
         }
         self.admit(forward).await;
         let Some(state) = self.forwards.get_mut(&forward) else {
+            if analysis_enabled {
+                self.context_counters
+                    .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
+            }
             return;
         };
         if state.settled {
+            if analysis_enabled {
+                self.context_counters
+                    .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
+            }
             return;
         }
         state.request = Some(PendingObservation {
@@ -629,28 +1296,70 @@ impl RunRecorder {
             return;
         }
         state.settled = true;
-        let evidence = state.evidence(forward);
-        self.record(evidence, CorrelationStatus::Correlated).await;
+        let mut evidence = Some(state.evidence(forward));
+        if let Some(evidence) = evidence.take() {
+            let record = self.record(evidence, CorrelationStatus::Correlated);
+            record.await;
+        }
     }
 
     /// Attaches the detached Phase 3 outcome after the forwarding task has crossed dispatch.
-    async fn context_analysis(&mut self, forward: ForwardId, outcome: ContextAnalysisOutcome) {
+    async fn context_analysis(&mut self, input: ContextAnalysisInput) {
+        let ContextAnalysisInput {
+            forward,
+            outcome,
+            analysis_permit,
+        } = input;
+        if self.analysis_enabled {
+            self.context_counters.ensure_seen(forward);
+        }
         if let Some(receipt) = self.pending_context.remove(&forward) {
-            self.enqueue_context(&receipt, outcome);
+            self.enqueue_context(EnqueueContextInput {
+                receipt: &receipt,
+                outcome,
+                analysis_permit,
+            });
             return;
         }
         let Some(state) = self.forwards.get_mut(&forward) else {
             self.context_counters
-                .dropped(ContextAnalysisDropReason::CorrelationDegraded);
+                .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
             return;
         };
         if state.settled {
             self.context_counters
-                .dropped(ContextAnalysisDropReason::CorrelationDegraded);
+                .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
             return;
         }
         state.context = Some(outcome);
+        state.analysis_permit = analysis_permit;
         state.context_pending = false;
+        if state.request.is_none() || state.response.is_none() && state.transport_failure.is_none()
+        {
+            return;
+        }
+        state.settled = true;
+        let mut evidence = Some(state.evidence(forward));
+        if let Some(evidence) = evidence.take() {
+            let record = self.record(evidence, CorrelationStatus::Correlated);
+            record.await;
+        }
+    }
+
+    /// Marks a forward whose transport half was refused by bounded admission.
+    async fn transport_admission_failed(
+        &mut self,
+        forward: ForwardId,
+        reason: CorrelationDegradation,
+    ) {
+        self.admit(forward).await;
+        let Some(state) = self.forwards.get_mut(&forward) else {
+            return;
+        };
+        if state.settled {
+            return;
+        }
+        state.transport_admission_failure = Some(reason);
         if state.request.is_none() || state.response.is_none() && state.transport_failure.is_none()
         {
             return;
@@ -662,9 +1371,18 @@ impl RunRecorder {
 
     /// Buffers the terminal semantic response half, settling the forward once paired.
     ///
-    /// The forwarding half reports transport metadata from a detached task, so it may still be
-    /// in flight here; successful responses wait for that status before they are persisted.
-    async fn response(&mut self, forward: ForwardId, observation: ResponseObservation) {
+    /// The forwarding half reports transport metadata from a detached dispatcher, so it may
+    /// still be in flight here; successful responses wait for that status before persistence.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "response event fields are kept explicit at the recorder boundary"
+    )]
+    async fn response(
+        &mut self,
+        forward: ForwardId,
+        observation: ResponseObservation,
+        correlation: CorrelationStatus,
+    ) {
         self.admit(forward).await;
         let Some(state) = self.forwards.get_mut(&forward) else {
             return;
@@ -672,13 +1390,18 @@ impl RunRecorder {
         if state.settled {
             return;
         }
+        if let CorrelationStatus::Degraded(reason) = correlation {
+            state.transport_admission_failure = Some(reason);
+        }
         state.response = Some(observation);
-        if state.request.is_none() || !state.transport {
+        if state.request.is_none()
+            || (!state.transport && state.transport_admission_failure.is_none())
+        {
             return;
         }
         state.settled = true;
         let evidence = state.evidence(forward);
-        self.record(evidence, CorrelationStatus::Correlated).await;
+        self.record(evidence, correlation).await;
     }
 
     /// Settles a forward that obtained no upstream response with its transport evidence.
@@ -698,10 +1421,12 @@ impl RunRecorder {
             return;
         }
         state.settled = true;
-        let evidence = state.evidence(forward);
-        self.record(evidence, CorrelationStatus::Correlated).await;
+        let mut evidence = Some(state.evidence(forward));
+        if let Some(evidence) = evidence.take() {
+            let record = self.record(evidence, CorrelationStatus::Correlated);
+            record.await;
+        }
     }
-
     /// Reserves bounded correlation state for one forward identity.
     ///
     /// A settled identity is kept until eviction, and eviction retires it, so a half that
@@ -732,20 +1457,15 @@ impl RunRecorder {
                 continue;
             }
             if state.request.is_none() {
-                self.drop_unpaired_context(&mut state);
+                self.drop_unpaired_context(oldest, &mut state);
             }
             if state.request.is_none()
                 && (state.response.is_some() || state.transport_failure.is_some())
             {
                 // Terminal semantic evidence without a request cannot become a provider row.
-                // Persist its transport-only operation now, then retain a settled tombstone so
-                // the late parser half is consumed rather than re-admitting this identity.
-                let evidence = state.evidence(oldest);
-                self.record(
-                    evidence,
-                    CorrelationStatus::Degraded(CorrelationDegradation::InFlightLimit),
-                )
-                .await;
+                // Persist its transport-only operation, then retain a settled tombstone so the
+                // late parser half is consumed rather than re-admitting this identity.
+                let mut evidence = Some(state.evidence(oldest));
                 let _previous = self.retired_orphans.insert(
                     oldest,
                     ForwardState {
@@ -756,16 +1476,25 @@ impl RunRecorder {
                 while self.retired_orphans.len() > RETIRED_IDENTITIES {
                     let _forgotten = self.retired_orphans.pop_first();
                 }
+                if let Some(evidence) = evidence.take() {
+                    let record = self.record(
+                        evidence,
+                        CorrelationStatus::Degraded(CorrelationDegradation::InFlightLimit),
+                    );
+                    record.await;
+                }
                 continue;
             }
-            let evidence = state.evidence(oldest);
+            let mut evidence = Some(state.evidence(oldest));
             // The bound, not the exchange, ended this forward's correlation: it is recorded
             // with the evidence it has and marked degraded, never as a whole exchange.
-            self.record(
-                evidence,
-                CorrelationStatus::Degraded(CorrelationDegradation::InFlightLimit),
-            )
-            .await;
+            if let Some(evidence) = evidence.take() {
+                let record = self.record(
+                    evidence,
+                    CorrelationStatus::Degraded(CorrelationDegradation::InFlightLimit),
+                );
+                record.await;
+            }
         }
         let _admitted = self.forwards.insert(forward, ForwardState::default());
     }
@@ -806,15 +1535,27 @@ impl RunRecorder {
     /// Records the single inference operation one settled forward is entitled to.
     ///
     /// Semantic evidence owns that operation whenever the record reaches the daemon, including
-    async fn record(&mut self, evidence: ForwardEvidence, correlation: CorrelationStatus) {
+    async fn record(&mut self, evidence: ForwardEvidence, fallback: CorrelationStatus) {
         let ForwardEvidence {
             forward,
             semantic,
             orphaned_semantic,
             transport,
+            transport_admission_failure,
         } = evidence;
+        let correlation = if matches!(fallback, CorrelationStatus::Degraded(_)) {
+            fallback
+        } else {
+            transport_admission_failure.map_or(fallback, CorrelationStatus::Degraded)
+        };
+        let admission_was_counted = match (transport_admission_failure, correlation) {
+            (Some(admission), CorrelationStatus::Degraded(reason)) => admission == reason,
+            _ => false,
+        };
         if let CorrelationStatus::Degraded(reason) = correlation {
-            self.counters.degraded(reason);
+            if !admission_was_counted {
+                self.counters.degraded(reason);
+            }
         }
         // The record carries its own correlation status, so the daemon commits the degradation
         // event in the very transaction that persists the evidence.
@@ -873,17 +1614,31 @@ impl RunRecorder {
     }
 
     async fn record_observation(&mut self, input: RecordObservationInput) -> bool {
+        let analysis_enabled = self.analysis_enabled;
         let RecordObservationInput {
             forward,
             semantic,
             correlation,
         } = input;
         let Ok(ended_at) = current_timestamp() else {
+            if analysis_enabled {
+                self.context_counters
+                    .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
+            }
             return false;
         };
-        let Some((observation, context, provider_input, provider_usage_comparable)) =
-            observation_record(semantic, ended_at, correlation)
+        let Some((
+            observation,
+            context,
+            analysis_permit,
+            provider_input,
+            provider_usage_comparable,
+        )) = observation_record(semantic, ended_at, correlation)
         else {
+            if analysis_enabled {
+                self.context_counters
+                    .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
+            }
             return false;
         };
         let response = control(
@@ -902,9 +1657,19 @@ impl RunRecorder {
             ..
         }) = response
         else {
+            self.account_context_failure(ContextFailureInput {
+                forward,
+                context: context.as_ref(),
+                analysis_permit,
+            });
             return false;
         };
+        if analysis_enabled {
+            self.context_counters
+                .remember_provider_request(forward, provider_request_id);
+        }
         let receipt = ContextReceipt {
+            forward,
             provider_request_id,
             attempt_id,
             inference_operation_id,
@@ -913,45 +1678,99 @@ impl RunRecorder {
             correlation,
         };
         match context {
-            Some(outcome) => self.enqueue_context(&receipt, outcome),
-            None => {
+            Some(outcome) => self.enqueue_context(EnqueueContextInput {
+                receipt: &receipt,
+                outcome,
+                analysis_permit,
+            }),
+            None if self.analysis_enabled => {
                 if self.pending_context.len() >= IN_FLIGHT_FORWARDS {
-                    self.context_counters
-                        .dropped(ContextAnalysisDropReason::ObserverBackpressure);
-                } else {
-                    let _previous = self.pending_context.insert(forward, receipt);
+                    if let Some((evicted, _receipt)) = self.pending_context.pop_first() {
+                        self.context_counters
+                            .dropped(evicted, ContextAnalysisDropReason::CorrelationDegraded);
+                    }
                 }
+                if self.pending_context.insert(forward, receipt).is_some() {
+                    self.context_counters
+                        .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
+                }
+                drop(analysis_permit);
+            }
+            None => {
+                // Phase 2 remains durable when Phase 3 is disabled; without an analysis outcome
+                // there is nothing to retain or flush as a context drop.
+                drop(analysis_permit);
             }
         }
         true
     }
+    fn account_context_failure(&self, input: ContextFailureInput<'_>) {
+        let ContextFailureInput {
+            forward,
+            context,
+            analysis_permit,
+        } = input;
+        drop(analysis_permit);
+        if !self.analysis_enabled {
+            return;
+        }
+        match context {
+            Some(ContextAnalysisOutcome::Dropped(reason)) => {
+                self.context_counters.dropped(forward, *reason);
+            }
+            Some(ContextAnalysisOutcome::Analyzed(_)) | None => self
+                .context_counters
+                .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded),
+            _ => self
+                .context_counters
+                .dropped(forward, ContextAnalysisDropReason::Unsupported),
+        }
+    }
 
-    fn enqueue_context(&self, receipt: &ContextReceipt, outcome: ContextAnalysisOutcome) {
+    fn enqueue_context(&self, input: EnqueueContextInput<'_>) {
+        let EnqueueContextInput {
+            receipt,
+            outcome,
+            analysis_permit,
+        } = input;
         match outcome {
             ContextAnalysisOutcome::Analyzed(analysis) => {
                 let job = ContextIngestionJob {
+                    forward: receipt.forward,
                     provider_request_id: receipt.provider_request_id,
                     attempt_id: receipt.attempt_id,
                     inference_operation_id: receipt.inference_operation_id,
                     analysis,
+                    analysis_permit,
                     provider_input_tokens: receipt.provider_input_tokens,
                     provider_usage_comparable: receipt.provider_usage_comparable,
                     correlation: receipt.correlation,
                 };
                 if self.context_sender.try_send(job).is_err() {
-                    self.context_counters
-                        .dropped(ContextAnalysisDropReason::ObserverBackpressure);
+                    self.context_counters.dropped(
+                        receipt.forward,
+                        ContextAnalysisDropReason::ObserverBackpressure,
+                    );
                 }
             }
-            ContextAnalysisOutcome::Dropped(reason) => self.context_counters.dropped(reason),
-            _ => self
-                .context_counters
-                .dropped(ContextAnalysisDropReason::Unsupported),
+            ContextAnalysisOutcome::Dropped(reason) => {
+                drop(analysis_permit);
+                self.context_counters.dropped(receipt.forward, reason);
+            }
+            _ => {
+                drop(analysis_permit);
+                self.context_counters
+                    .dropped(receipt.forward, ContextAnalysisDropReason::Unsupported);
+            }
         }
     }
 
-    fn drop_unpaired_context(&self, state: &mut ForwardState) {
+    fn drop_unpaired_context(&self, forward: ForwardId, state: &mut ForwardState) {
+        let permit = state.analysis_permit.take();
         let Some(outcome) = state.context.take() else {
+            drop(permit);
+            self.context_counters
+                .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
             return;
         };
         let reason = match outcome {
@@ -961,7 +1780,8 @@ impl RunRecorder {
             ContextAnalysisOutcome::Dropped(reason) => reason,
             _ => ContextAnalysisDropReason::Unsupported,
         };
-        self.context_counters.dropped(reason);
+        drop(permit);
+        self.context_counters.dropped(forward, reason);
     }
 
     /// Records one transport-only inference operation beneath the agent root.
@@ -983,6 +1803,7 @@ impl RunRecorder {
 struct PreviousContextSnapshot {
     id: ContextSnapshotId,
     blocks: Vec<ContextBlockSummary>,
+    status: ContextAnalysisStatus,
 }
 
 /// Owns every potentially slow context IPC operation.
@@ -1011,41 +1832,16 @@ impl ContextIngestionWorker {
     }
 
     async fn flush_drops(&self) {
-        let reasons = [
-            ContextAnalysisDropReason::ObserverBackpressure,
-            ContextAnalysisDropReason::ResourceLimit,
-            ContextAnalysisDropReason::Malformed,
-            ContextAnalysisDropReason::CorrelationDegraded,
-            ContextAnalysisDropReason::Unsupported,
-            ContextAnalysisDropReason::Cancelled,
-        ];
-        let Ok(observed_at_us) = current_timestamp_us() else {
-            return;
-        };
-        for reason in reasons {
-            let dropped = self.counters.count(reason);
-            if dropped == 0 {
-                continue;
-            }
-            let _ = control(
-                &self.config,
-                ControlRequest::RecordContextAnalysisDropped {
-                    session_id: self.session_id,
-                    reason,
-                    dropped,
-                    observed_at_us,
-                },
-            )
-            .await;
-        }
+        flush_context_drops(&self.config, self.session_id, &self.counters).await;
     }
 
     async fn begin_context(
         &self,
         provider_request_id: RequestId,
         inference_operation_id: OperationId,
-    ) -> Option<(ContextSnapshotId, u64)> {
-        let started_at_us = current_timestamp_us().ok()?;
+    ) -> Result<(ContextSnapshotId, u64), ContextAnalysisDropReason> {
+        let started_at_us = current_timestamp_us()
+            .map_err(|_error| ContextAnalysisDropReason::CorrelationDegraded)?;
         let response = control(
             &self.config,
             ControlRequest::BeginContextAnalysis {
@@ -1057,19 +1853,73 @@ impl ContextIngestionWorker {
             },
         )
         .await
-        .ok()?;
+        .map_err(|_error| ContextAnalysisDropReason::CorrelationDegraded)?;
         match response {
             ControlResponse::Ok {
                 context_snapshot_id: Some(snapshot_id),
                 ..
-            } => Some((snapshot_id, started_at_us)),
-            _ => None,
+            } => Ok((snapshot_id, started_at_us)),
+            ControlResponse::Error { .. } | ControlResponse::Context { .. } => {
+                Err(ContextAnalysisDropReason::CorrelationDegraded)
+            }
+            _ => Err(ContextAnalysisDropReason::Unsupported),
         }
     }
+
+    async fn abort_context(
+        &self,
+        snapshot_id: ContextSnapshotId,
+        reason: ContextAnalysisDropReason,
+    ) {
+        let Ok(completed_at_us) = current_timestamp_us() else {
+            return;
+        };
+        let _ = control(
+            &self.config,
+            ControlRequest::AbortContextAnalysis {
+                snapshot_id,
+                reason,
+                completed_at_us,
+            },
+        )
+        .await;
+    }
+
+    async fn append_batch(
+        &self,
+        input: ContextAppendBatchInput,
+    ) -> Result<ContextAppendReceipt, ContextAnalysisDropReason> {
+        let ContextAppendBatchInput {
+            snapshot_id,
+            sequence,
+            blocks,
+        } = input;
+        let response = control(
+            &self.config,
+            ControlRequest::AppendContextBlocks {
+                snapshot_id,
+                sequence,
+                blocks,
+            },
+        )
+        .await
+        .map_err(|_error| ContextAnalysisDropReason::CorrelationDegraded)?;
+        match response {
+            ControlResponse::Ok {
+                context_append_receipt: Some(receipt),
+                ..
+            } => Ok(receipt),
+            ControlResponse::Error { .. } | ControlResponse::Context { .. } => {
+                Err(ContextAnalysisDropReason::CorrelationDegraded)
+            }
+            _ => Err(ContextAnalysisDropReason::Unsupported),
+        }
+    }
+
     async fn append_context_blocks(
         &self,
         input: ContextAppendInput<'_>,
-    ) -> (ContextAnalysisStatus, u64) {
+    ) -> Result<(ContextAnalysisStatus, u64), ContextAnalysisDropReason> {
         let ContextAppendInput {
             snapshot_id,
             analysis,
@@ -1078,12 +1928,16 @@ impl ContextIngestionWorker {
         let mut sequence = 0_u32;
         let max_batches =
             u32::try_from(self.context_analysis_limits.max_batches.get()).unwrap_or(u32::MAX);
-        let body_limit = usize::try_from(BODY_BYTES).unwrap_or(0);
+        // `IpcRequest` serializes its opaque body as a JSON byte array; four frame bytes per
+        // logical byte is the conservative bound that keeps the enclosing request under 64 KiB.
+        let body_limit = usize::try_from(BODY_BYTES / 4).unwrap_or(0);
+        let total_blocks = u64::try_from(analysis.blocks.len()).unwrap_or(u64::MAX);
         let mut batch = Vec::new();
         let mut accepted_block_count = 0_u64;
+        let mut capacity_exhausted = false;
+
         for block in analysis.blocks.iter().cloned() {
-            if sequence >= max_batches {
-                status = ContextAnalysisStatus::Partial;
+            if capacity_exhausted || sequence >= max_batches {
                 break;
             }
             let mut candidate = batch.clone();
@@ -1094,7 +1948,6 @@ impl ContextIngestionWorker {
                 blocks: candidate,
             };
             let Ok(encoded) = serde_json::to_vec(&request) else {
-                status = ContextAnalysisStatus::Partial;
                 break;
             };
             if encoded.len() <= body_limit {
@@ -1102,31 +1955,21 @@ impl ContextIngestionWorker {
                 continue;
             }
             if batch.is_empty() {
-                // A single block that cannot fit is dropped; it is never truncated into a
-                // superficially complete snapshot.
-                status = ContextAnalysisStatus::Partial;
+                // A singleton that cannot fit is an explicit resource-limited prefix.
                 break;
             }
             let outgoing = std::mem::take(&mut batch);
-            let outgoing_len = u64::try_from(outgoing.len()).unwrap_or(u64::MAX);
-            if control(
-                &self.config,
-                ControlRequest::AppendContextBlocks {
+            let receipt = self
+                .append_batch(ContextAppendBatchInput {
                     snapshot_id,
                     sequence,
                     blocks: outgoing,
-                },
-            )
-            .await
-            .is_err()
-            {
-                status = ContextAnalysisStatus::Partial;
-                break;
-            }
-            accepted_block_count = accepted_block_count.saturating_add(outgoing_len);
-            sequence = sequence.saturating_add(1);
-            if sequence >= max_batches {
-                status = ContextAnalysisStatus::Partial;
+                })
+                .await?;
+            accepted_block_count = receipt.accepted_block_count;
+            sequence = receipt.next_sequence;
+            capacity_exhausted = receipt.capacity.is_exhausted();
+            if capacity_exhausted {
                 break;
             }
             let singleton = vec![block.clone()];
@@ -1136,109 +1979,175 @@ impl ContextIngestionWorker {
                 blocks: singleton,
             };
             let Ok(singleton_encoded) = serde_json::to_vec(&singleton_request) else {
-                status = ContextAnalysisStatus::Partial;
                 break;
             };
             if singleton_encoded.len() > body_limit {
-                status = ContextAnalysisStatus::Partial;
                 break;
             }
             batch.push(block);
         }
-        if !batch.is_empty() {
-            if sequence >= max_batches {
-                status = ContextAnalysisStatus::Partial;
-            } else {
-                let outgoing_len = u64::try_from(batch.len()).unwrap_or(u64::MAX);
-                if control(
-                    &self.config,
-                    ControlRequest::AppendContextBlocks {
-                        snapshot_id,
-                        sequence,
-                        blocks: batch,
-                    },
-                )
-                .await
-                .is_err()
-                {
-                    status = ContextAnalysisStatus::Partial;
-                } else {
-                    accepted_block_count = accepted_block_count.saturating_add(outgoing_len);
-                }
-            }
+        if !batch.is_empty() && !capacity_exhausted && sequence < max_batches {
+            let receipt = self
+                .append_batch(ContextAppendBatchInput {
+                    snapshot_id,
+                    sequence,
+                    blocks: batch,
+                })
+                .await?;
+            accepted_block_count = receipt.accepted_block_count;
         }
-        (status, accepted_block_count)
+        if accepted_block_count < total_blocks {
+            status = ContextAnalysisStatus::ResourceLimit;
+        }
+        Ok((status, accepted_block_count))
     }
-
     async fn record_context(&mut self, job: ContextIngestionJob) {
         let ContextIngestionJob {
+            forward,
             provider_request_id,
             attempt_id,
             inference_operation_id,
             analysis,
+            analysis_permit,
             provider_input_tokens,
             provider_usage_comparable,
             correlation,
         } = job;
-        let Some((snapshot_id, started_at_us)) = self
+        let (snapshot_id, started_at_us) = match self
             .begin_context(provider_request_id, inference_operation_id)
             .await
-        else {
-            return;
+        {
+            Ok(value) => value,
+            Err(reason) => {
+                drop(analysis_permit);
+                self.counters.dropped(forward, reason);
+                return;
+            }
         };
+        self.counters.remember_snapshot(forward, snapshot_id);
+        let initial_status = if matches!(correlation, CorrelationStatus::Correlated) {
+            analysis.status
+        } else {
+            ContextAnalysisStatus::CorrelationDegraded
+        };
+        let (status, accepted_block_count) = match self
+            .append_context_blocks(ContextAppendInput {
+                snapshot_id,
+                analysis: &analysis,
+                status: initial_status,
+            })
+            .await
+        {
+            Ok(value) => value,
+            Err(reason) => {
+                self.abort_context(snapshot_id, reason).await;
+                drop(analysis_permit);
+                self.counters.dropped(forward, reason);
+                return;
+            }
+        };
+        self.finalize_context(ContextFinalizationInput {
+            forward,
+            snapshot_id,
+            started_at_us,
+            attempt_id,
+            analysis: &analysis,
+            analysis_permit,
+            provider_input_tokens,
+            provider_usage_comparable,
+            correlation,
+            status,
+            accepted_block_count,
+        })
+        .await;
+    }
 
-        let current_blocks = context_block_summaries(&analysis);
+    fn build_context_finalize(
+        &self,
+        input: &ContextFinalizationInput<'_>,
+    ) -> Option<(
+        Vec<ContextBlockSummary>,
+        ContextAnalysisFinalize,
+        ContextCoverage,
+    )> {
+        let analysis = input.analysis;
+        let accepted_len = usize::try_from(input.accepted_block_count)
+            .unwrap_or(analysis.blocks.len())
+            .min(analysis.blocks.len());
+        let accepted_blocks = &analysis.blocks[..accepted_len];
+        let current_blocks = context_block_summaries(accepted_blocks);
         let delta = self.previous_context.as_ref().map(|previous| {
             compute_context_delta(ContextDeltaRequest {
                 previous_snapshot_id: previous.id,
-                current_snapshot_id: snapshot_id,
+                current_snapshot_id: input.snapshot_id,
+                previous_analysis_status: previous.status,
+                current_analysis_status: input.status,
                 previous: &previous.blocks,
                 current: &current_blocks,
                 limits: self.context_analysis_limits,
             })
         });
         let (metrics, visible_estimated_tokens) = context_metrics(
-            &analysis,
+            accepted_blocks,
+            input.status,
             delta
                 .as_ref()
                 .and_then(|value| value.common_prefix_estimated_tokens),
         );
-
-        let mut status = analysis.status;
-        let correlation_status = if matches!(correlation, CorrelationStatus::Correlated) {
+        let token_eligible = accepted_blocks
+            .iter()
+            .filter(|block| {
+                block.token_estimation_applicability == MeasurementApplicability::Eligible
+            })
+            .count();
+        let token_observed = accepted_blocks
+            .iter()
+            .filter(|block| block.token_estimate.is_some())
+            .count();
+        let semantic_eligible = accepted_blocks
+            .iter()
+            .filter(|block| block.detection_applicability == MeasurementApplicability::Eligible)
+            .count();
+        let semantic_observed = accepted_blocks
+            .iter()
+            .filter(|block| block.detection_result.is_some())
+            .count();
+        let coverage = ContextCoverage {
+            token_estimation_eligible: u64::try_from(token_eligible).unwrap_or(u64::MAX),
+            token_estimation_observed: u64::try_from(token_observed).unwrap_or(u64::MAX),
+            semantic_detection_eligible: u64::try_from(semantic_eligible).unwrap_or(u64::MAX),
+            semantic_detection_observed: u64::try_from(semantic_observed).unwrap_or(u64::MAX),
+            correlation_eligible: 1,
+            correlation_correlated: u64::from(matches!(
+                input.correlation,
+                CorrelationStatus::Correlated
+            )),
+        };
+        let correlation_status = if matches!(input.correlation, CorrelationStatus::Correlated) {
             ContextCorrelationStatusWire::Correlated
         } else {
-            status = ContextAnalysisStatus::CorrelationDegraded;
             ContextCorrelationStatusWire::Degraded
         };
-        let (status, accepted_block_count) = self
-            .append_context_blocks(ContextAppendInput {
-                snapshot_id,
-                analysis: &analysis,
-                status,
-            })
-            .await;
-
         let reconciliation = TokenReconciliation::reconcile(
-            snapshot_id,
+            input.snapshot_id,
             analysis.visibility,
             visible_estimated_tokens,
-            provider_input_tokens,
-            provider_usage_comparable
+            input.provider_input_tokens,
+            input.provider_usage_comparable
                 && matches!(
-                    status,
+                    input.status,
                     ContextAnalysisStatus::Complete
                         | ContextAnalysisStatus::Partial
                         | ContextAnalysisStatus::ResourceLimit
                 ),
         );
-        let Ok(finalize) = ContextAnalysisFinalize::builder(
-            snapshot_id,
-            status,
-            current_timestamp_us().unwrap_or(started_at_us),
+        let finalize = ContextAnalysisFinalize::builder(
+            input.snapshot_id,
+            input.status,
+            current_timestamp_us().unwrap_or(input.started_at_us),
         )
         .request_content_hash(Some(analysis.request_content_hash))
-        .explicit_block_count(Some(accepted_block_count))
+        .explicit_block_count(Some(input.accepted_block_count))
         .analyzed_bytes(Some(analysis.analyzed_bytes))
         .skipped_bytes(Some(analysis.skipped_bytes))
         .visibility(analysis.visibility)
@@ -1248,8 +2157,21 @@ impl ContextIngestionWorker {
         .metrics(metrics)
         .delta(delta)
         .reconciliation(reconciliation)
-        .attempt_id(Some(attempt_id))
-        .build() else {
+        .attempt_id(Some(input.attempt_id))
+        .build()
+        .ok()?;
+        Some((current_blocks, finalize, coverage))
+    }
+    async fn finalize_context(&mut self, input: ContextFinalizationInput<'_>) {
+        let forward = input.forward;
+        let snapshot_id = input.snapshot_id;
+        let status = input.status;
+        let Some((current_blocks, finalize, coverage)) = self.build_context_finalize(&input) else {
+            self.abort_context(snapshot_id, ContextAnalysisDropReason::CorrelationDegraded)
+                .await;
+            drop(input.analysis_permit);
+            self.counters
+                .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
             return;
         };
         let finalized = control(
@@ -1259,29 +2181,107 @@ impl ContextIngestionWorker {
             },
         )
         .await;
-        if matches!(finalized, Ok(ControlResponse::Ok { .. })) {
-            self.previous_context = Some(PreviousContextSnapshot {
-                id: snapshot_id,
-                blocks: current_blocks,
-            });
+        match finalized {
+            Ok(ControlResponse::Ok { .. }) => {
+                self.counters.observe_coverage(coverage);
+                match status {
+                    ContextAnalysisStatus::Complete => self.counters.complete(forward),
+                    ContextAnalysisStatus::Partial => self.counters.partial(forward),
+                    ContextAnalysisStatus::ResourceLimit => self.counters.partial_with_drop_reason(
+                        forward,
+                        ContextAnalysisDropReason::ResourceLimit,
+                    ),
+                    ContextAnalysisStatus::Malformed => self
+                        .counters
+                        .partial_with_drop_reason(forward, ContextAnalysisDropReason::Malformed),
+                    ContextAnalysisStatus::ObserverBackpressure => {
+                        self.counters.partial_with_drop_reason(
+                            forward,
+                            ContextAnalysisDropReason::ObserverBackpressure,
+                        );
+                    }
+                    ContextAnalysisStatus::CorrelationDegraded => {
+                        self.counters.partial_with_drop_reason(
+                            forward,
+                            ContextAnalysisDropReason::CorrelationDegraded,
+                        );
+                    }
+                    ContextAnalysisStatus::Cancelled => self
+                        .counters
+                        .partial_with_drop_reason(forward, ContextAnalysisDropReason::Cancelled),
+                    _ => self
+                        .counters
+                        .partial_with_drop_reason(forward, ContextAnalysisDropReason::Unsupported),
+                }
+                self.previous_context = Some(PreviousContextSnapshot {
+                    id: snapshot_id,
+                    blocks: current_blocks,
+                    status,
+                });
+            }
+            Ok(
+                ControlResponse::Error { .. }
+                | ControlResponse::Context { .. }
+                | ControlResponse::ContextStatus { .. },
+            )
+            | Err(_) => {
+                self.abort_context(snapshot_id, ContextAnalysisDropReason::CorrelationDegraded)
+                    .await;
+                self.counters
+                    .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
+            }
         }
+        drop(input.analysis_permit);
     }
 }
+async fn flush_context_drops(config: &Config, session_id: SessionId, counters: &ContextCounters) {
+    let reasons = [
+        ContextAnalysisDropReason::ObserverBackpressure,
+        ContextAnalysisDropReason::ResourceLimit,
+        ContextAnalysisDropReason::Malformed,
+        ContextAnalysisDropReason::CorrelationDegraded,
+        ContextAnalysisDropReason::Unsupported,
+        ContextAnalysisDropReason::Cancelled,
+    ];
+    let Ok(observed_at_us) = current_timestamp_us() else {
+        return;
+    };
+    for reason in reasons {
+        let dropped = counters.take_pending_drop_count(reason);
+        if dropped == 0 {
+            continue;
+        }
+        let _ = control(
+            config,
+            ControlRequest::RecordContextAnalysisDropped {
+                session_id,
+                reason,
+                dropped,
+                observed_at_us,
+            },
+        )
+        .await;
+    }
+}
+
+type ObservationRecordParts = (
+    ObservationRecord,
+    Option<ContextAnalysisOutcome>,
+    Option<OwnedSemaphorePermit>,
+    Option<u64>,
+    bool,
+);
 
 fn observation_record(
     semantic: SemanticRecord,
     ended_at: String,
     correlation: CorrelationStatus,
-) -> Option<(
-    ObservationRecord,
-    Option<ContextAnalysisOutcome>,
-    Option<u64>,
-    bool,
-)> {
+) -> Option<ObservationRecordParts> {
     let SemanticRecord {
         pending,
         response,
         context,
+        analysis_permit,
         status_code,
         transport_failure,
         ..
@@ -1332,14 +2332,16 @@ fn observation_record(
     Some((
         record,
         context,
+        analysis_permit,
         provider_input_tokens,
         provider_usage_comparable,
     ))
 }
 
-fn context_block_summaries(analysis: &ContextAnalysisResult) -> Vec<ContextBlockSummary> {
-    analysis
-        .blocks
+fn context_block_summaries(
+    blocks: &[tracepress_context::ContextBlockDraft],
+) -> Vec<ContextBlockSummary> {
+    blocks
         .iter()
         .map(|block| ContextBlockSummary {
             exact_fingerprint: block.exact_fingerprint,
@@ -1361,10 +2363,11 @@ fn context_block_summaries(analysis: &ContextAnalysisResult) -> Vec<ContextBlock
     reason = "bounded context token totals are intentionally projected to metric ratios"
 )]
 fn context_metrics(
-    analysis: &ContextAnalysisResult,
+    blocks: &[tracepress_context::ContextBlockDraft],
+    status: ContextAnalysisStatus,
     stable_explicit_prefix_estimate: Option<u64>,
 ) -> (ContextAnalysisMetrics, Option<u64>) {
-    let analysis_complete = matches!(analysis.status, ContextAnalysisStatus::Complete);
+    let analysis_complete = matches!(status, ContextAnalysisStatus::Complete);
     let mut all = TokenEstimateAggregate::new();
     let mut by_kind: [TokenEstimateAggregate; 15] =
         std::array::from_fn(|_| TokenEstimateAggregate::new());
@@ -1382,7 +2385,7 @@ fn context_metrics(
     let mut largest_tool_schema = 0_u64;
     let mut schema_aggregate = TokenEstimateAggregate::new();
 
-    for block in &analysis.blocks {
+    for block in blocks {
         let estimate = block.token_estimate.as_ref();
         all.observe_estimate(estimate);
         by_kind[context_kind_index(block.kind)].observe_estimate(estimate);
@@ -1517,7 +2520,7 @@ fn context_metrics(
     };
 
     let mut metrics = ContextAnalysisMetrics::new();
-    metrics.explicit_bytes = Some(analysis.analyzed_bytes);
+    metrics.explicit_bytes = Some(blocks.iter().map(|block| block.raw_bytes).sum());
     metrics.estimated_tokens_by_kind = kind_totals;
     metrics.estimated_tokens_by_role = role_totals;
     metrics.estimated_tokens_by_origin = origin_totals;
@@ -1621,12 +2624,14 @@ struct RunRecording {
     parent_operation_id: OperationId,
     context_queue_items: usize,
     context_analysis_limits: ContextAnalysisLimits,
+    analysis_enabled: bool,
     previous_context: Option<PreviousContextSnapshot>,
 }
 /// The recorder of one run: its proxy, its workers, and the counters it publishes.
 struct SpawnedRecorder {
     proxy: TransparentProxy,
     recorder_task: tokio::task::JoinHandle<Result<(), String>>,
+    transport_task: tokio::task::JoinHandle<()>,
     context_task: tokio::task::JoinHandle<Result<(), String>>,
     /// Correlation accounting the run reports, readable whether or not the workers finished.
     counters: Arc<CorrelationCounters>,
@@ -1642,13 +2647,17 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
         parent_operation_id,
         context_queue_items,
         context_analysis_limits,
+        analysis_enabled,
         previous_context,
     } = recording;
     let (sender, receiver) = tokio::sync::mpsc::channel(RECORDER_QUEUE_ITEMS);
+    let (transport_sender, transport_receiver) =
+        tokio::sync::mpsc::channel(TRANSPORT_DISPATCH_QUEUE_ITEMS);
     let context_queue_items = context_ingestion_queue_capacity(context_queue_items);
     let (context_sender, context_receiver) = tokio::sync::mpsc::channel(context_queue_items);
     let counters = Arc::new(CorrelationCounters::default());
     let context_counters = Arc::new(ContextCounters::default());
+    let analysis_slots = Arc::new(Semaphore::new(CONTEXT_HEAVY_OUTCOME_CAP));
     let context_task = tokio::spawn(
         ContextIngestionWorker {
             config: config.clone(),
@@ -1665,6 +2674,7 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
             session_id,
             parent_operation_id,
             context_sender,
+            analysis_enabled,
             context_counters: Arc::clone(&context_counters),
             forwards: BTreeMap::new(),
             retired_orphans: BTreeMap::new(),
@@ -1675,24 +2685,29 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
         }
         .run(receiver),
     );
-    let background = proxy.background_task_spawner();
-    let ordering = Arc::new(TransportOrdering::default());
-    let metadata_sink = Arc::new(RecorderSink {
-        sender: sender.clone(),
-        background: background.clone(),
-        ordering: Arc::clone(&ordering),
-    });
-    let observation_sink = Arc::new(RecorderSink {
-        sender,
-        background,
-        ordering,
-    });
+    let transport_task = tokio::spawn(run_transport_dispatcher(transport_receiver, sender.clone()));
+    let ordering = Arc::new(TransportOrdering::new(transport_sender));
     let proxy = proxy
-        .with_metadata_sink(metadata_sink)
-        .with_observation_sink(observation_sink);
+        .with_metadata_sink(Arc::new(RecorderSink {
+            sender: sender.clone(),
+            ordering: Arc::clone(&ordering),
+            counters: Arc::clone(&counters),
+            context_counters: Arc::clone(&context_counters),
+            analysis_slots: Arc::clone(&analysis_slots),
+            analysis_enabled,
+        }))
+        .with_observation_sink(Arc::new(RecorderSink {
+            sender,
+            ordering,
+            counters: Arc::clone(&counters),
+            context_counters: Arc::clone(&context_counters),
+            analysis_slots,
+            analysis_enabled,
+        }));
     SpawnedRecorder {
         proxy,
         recorder_task,
+        transport_task,
         context_task,
         counters,
         context_counters,
@@ -1831,6 +2846,45 @@ async fn control(config: &Config, request: ControlRequest) -> Result<ControlResp
         }
     }
 }
+
+/// Reconciles pending analyses against durable daemon state before the forced-drain drop
+/// boundary. A status without a completion timestamp is still active and must remain pending.
+async fn reconcile_pending_context(config: &Config, counters: &ContextCounters) {
+    reconcile_pending_context_with(counters, |evidence| async move {
+        let request = ControlRequest::ContextStatus {
+            request_id: Some(evidence.provider_request_id),
+            snapshot_id: evidence.snapshot_id,
+        };
+        match tokio::time::timeout(Duration::from_millis(250), control(config, request)).await {
+            Ok(Ok(ControlResponse::ContextStatus {
+                snapshot_status: Some(status),
+            })) => Some(status),
+            _ => None,
+        }
+    })
+    .await;
+}
+
+async fn reconcile_pending_context_with<F, Fut>(counters: &ContextCounters, mut lookup: F)
+where
+    F: FnMut(PendingAnalysisEvidence) -> Fut,
+    Fut: Future<Output = Option<ContextSnapshotStatus>>,
+{
+    for evidence in counters.pending_evidence() {
+        let Some(status) = lookup(evidence).await else {
+            continue;
+        };
+        if status.completed_at_us.is_none() {
+            continue;
+        }
+        if status.status == "complete" {
+            counters.complete_sequence(evidence.sequence);
+        } else {
+            counters.partial_sequence(evidence.sequence);
+        }
+    }
+}
+
 async fn daemon_running(config: &Config) -> Result<bool, String> {
     if !config.socket.exists() {
         return Ok(false);
@@ -1850,7 +2904,7 @@ async fn daemon_running(config: &Config) -> Result<bool, String> {
     match control(config, ControlRequest::Status).await? {
         ControlResponse::Ok { .. } => Ok(true),
         ControlResponse::Error { message } => Err(message),
-        ControlResponse::Context { .. } => {
+        ControlResponse::Context { .. } | ControlResponse::ContextStatus { .. } => {
             Err("daemon returned an unexpected context response".to_owned())
         }
     }
@@ -1923,7 +2977,7 @@ async fn daemon_stop(config: &Config) -> Result<(), String> {
     match response {
         ControlResponse::Ok { .. } => {}
         ControlResponse::Error { message } => return Err(message),
-        ControlResponse::Context { .. } => {
+        ControlResponse::Context { .. } | ControlResponse::ContextStatus { .. } => {
             return Err("daemon returned an unexpected context response".to_owned());
         }
     }
@@ -2009,13 +3063,14 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         ControlResponse::Ok { .. } => {
             return Err("daemon did not return a session and root operation".to_owned());
         }
-        ControlResponse::Context { .. } => {
+        ControlResponse::Context { .. } | ControlResponse::ContextStatus { .. } => {
             return Err("daemon returned an unexpected context response".to_owned());
         }
     };
     let SpawnedRecorder {
         proxy,
         mut recorder_task,
+        mut transport_task,
         mut context_task,
         counters,
         context_counters,
@@ -2026,6 +3081,7 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
             parent_operation_id,
             context_queue_items,
             context_analysis_limits,
+            analysis_enabled: matches!(analysis_mode, ContextAnalysisMode::Shadow),
             previous_context: None,
         },
         proxy,
@@ -2054,14 +3110,29 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         // The recorder's channel must be closed before it is drained; otherwise the recorder
         // cannot observe end-of-run and wait for more events forever.
         drop(background_proxy);
-        drain_recorders(&mut recorder_task, &mut context_task).await
+        drain_recorders(&mut recorder_task, &mut transport_task, &mut context_task).await
     })
     .await
     {
         Ok(result) => result,
         Err(_elapsed) => {
+            // Reconcile any snapshot that committed before its response was lost. Only unresolved
+            // identities are dropped at the cancellation boundary below.
+            reconcile_pending_context(config, &context_counters).await;
+            // The drain timeout is a terminal cancellation boundary. Account every admitted
+            // analysis before aborting workers, then make one bounded best-effort drop flush.
+            context_counters.drop_pending(ContextAnalysisDropReason::Cancelled);
+            transport_task.abort();
             recorder_task.abort();
             context_task.abort();
+            let _ = (&mut transport_task).await;
+            let _ = (&mut recorder_task).await;
+            let _ = (&mut context_task).await;
+            let _ = tokio::time::timeout(
+                Duration::from_secs(1),
+                flush_context_drops(config, session.session_id, &context_counters),
+            )
+            .await;
             Err(format!(
                 "provider observer/recorder drain exceeded {}s",
                 RECORDER_DRAIN_TIMEOUT.as_secs()
@@ -2090,7 +3161,7 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
                 "agent finished but session finalization failed: {message}"
             ));
         }
-        ControlResponse::Context { .. } => {
+        ControlResponse::Context { .. } | ControlResponse::ContextStatus { .. } => {
             return Err("daemon returned an unexpected context response".to_owned());
         }
     }
@@ -2103,12 +3174,14 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
 
 async fn drain_recorders(
     recorder_task: &mut tokio::task::JoinHandle<Result<(), String>>,
+    transport_task: &mut tokio::task::JoinHandle<()>,
     context_task: &mut tokio::task::JoinHandle<Result<(), String>>,
 ) -> Result<(), String> {
     let recorder_result = (&mut *recorder_task)
         .await
         .map_err(|error| format!("recording worker failed: {error}"))
         .and_then(|result| result);
+    let _transport_result = (&mut *transport_task).await;
     // Always wait for the context worker after the recorder has stopped, even when the
     // provider worker reported an IPC error.
     let context_result = (&mut *context_task)
@@ -2174,7 +3247,7 @@ async fn context(config: &Config, request_id: RequestId) -> Result<(), String> {
     match control(config, ControlRequest::Context { request_id }).await? {
         ControlResponse::Context { inspection } => print_context_inspection(&inspection),
         ControlResponse::Error { message } => return Err(message),
-        ControlResponse::Ok { .. } => {
+        ControlResponse::Ok { .. } | ControlResponse::ContextStatus { .. } => {
             return Err("daemon returned an unexpected context response".to_owned());
         }
     }
@@ -2560,7 +3633,14 @@ async fn main() -> Result<(), String> {
 }
 #[cfg(test)]
 mod tests {
-    use super::{CONTEXT_INGESTION_QUEUE_HARD_CAP, context_ingestion_queue_capacity};
+    use std::sync::atomic::Ordering;
+
+    use super::{
+        AnalysisSequence, CONTEXT_INGESTION_QUEUE_HARD_CAP, ContextAnalysisDropReason,
+        ContextCounters, ContextSnapshotId, ContextSnapshotStatus, PendingAnalysisEvidence,
+        RequestId, TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator, context_ingestion_queue_capacity,
+        reconcile_pending_context_with,
+    };
 
     #[test]
     fn context_ingestion_queue_is_hard_capped_without_zero_capacity() {
@@ -2575,5 +3655,225 @@ mod tests {
             CONTEXT_INGESTION_QUEUE_HARD_CAP
         );
         assert_eq!(context_ingestion_queue_capacity(128), 4);
+    }
+
+    #[test]
+    fn context_lifecycle_bounds_reordered_terminal_holes() {
+        let counters = ContextCounters::default();
+        let total = u64::try_from(TERMINAL_ANALYSIS_IDENTITIES).unwrap_or(u64::MAX) + 32;
+        for ordinal in 0..total {
+            counters.ensure_seen_sequence(AnalysisSequence(ordinal));
+        }
+        for ordinal in (1..total).rev() {
+            counters.complete_sequence(AnalysisSequence(ordinal));
+        }
+
+        let (terminal_through, terminal_holes_len) = {
+            let lifecycle = counters
+                .lifecycle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (lifecycle.terminal_through, lifecycle.terminal_holes.len())
+        };
+        assert_eq!(terminal_through, None);
+        assert_eq!(terminal_holes_len, TERMINAL_ANALYSIS_IDENTITIES);
+
+        counters.complete_sequence(AnalysisSequence(0));
+        counters.complete_sequence(AnalysisSequence(0));
+        let (terminal_through, terminal_holes_len) = {
+            let lifecycle = counters
+                .lifecycle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            (lifecycle.terminal_through, lifecycle.terminal_holes.len())
+        };
+        assert_eq!(terminal_through, Some(AnalysisSequence(0)));
+        assert!(terminal_holes_len <= TERMINAL_ANALYSIS_IDENTITIES);
+
+        let seen = counters.analysis_requests_seen.load(Ordering::Relaxed);
+        let complete = counters.analysis_requests_complete.load(Ordering::Relaxed);
+        let partial = counters.analysis_requests_partial.load(Ordering::Relaxed);
+        let dropped = counters.analysis_requests_dropped.load(Ordering::Relaxed);
+        assert_eq!(seen, total);
+        assert_eq!(seen, complete + partial + dropped);
+    }
+
+    #[tokio::test]
+    async fn timeout_reconciliation_committed_statuses_preserve_terminal_partition() {
+        let counters = ContextCounters::default();
+        let ids = UuidV7Generator::new();
+
+        for ordinal in 0..2 {
+            let sequence = AnalysisSequence(ordinal);
+            counters.ensure_seen_sequence(sequence);
+            let evidence = PendingAnalysisEvidence {
+                sequence,
+                provider_request_id: RequestId::generate(&ids),
+                snapshot_id: Some(ContextSnapshotId::generate(&ids)),
+            };
+            let mut lifecycle = counters
+                .lifecycle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _previous = lifecycle.evidence.insert(sequence, evidence);
+        }
+
+        reconcile_pending_context_with(&counters, |evidence| async move {
+            let status = if evidence.sequence == AnalysisSequence(0) {
+                "complete"
+            } else {
+                "partial"
+            };
+            evidence.snapshot_id.map(|snapshot_id| {
+                ContextSnapshotStatus::new(
+                    snapshot_id,
+                    evidence.provider_request_id,
+                    status.to_owned(),
+                )
+                .with_completed_at(Some(1))
+            })
+        })
+        .await;
+
+        assert_eq!(
+            counters.analysis_requests_complete.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            counters.analysis_requests_partial.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(
+            counters.analysis_requests_dropped.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            counters.analysis_requests_seen.load(Ordering::Relaxed),
+            counters.analysis_requests_complete.load(Ordering::Relaxed)
+                + counters.analysis_requests_partial.load(Ordering::Relaxed)
+                + counters.analysis_requests_dropped.load(Ordering::Relaxed)
+        );
+        assert!(counters.pending_evidence().is_empty());
+    }
+
+    #[tokio::test]
+    async fn timeout_reconciliation_active_or_unavailable_statuses_drop_exact_partition() {
+        let counters = ContextCounters::default();
+        let ids = UuidV7Generator::new();
+
+        for ordinal in 0..3 {
+            let sequence = AnalysisSequence(ordinal);
+            counters.ensure_seen_sequence(sequence);
+            let evidence = PendingAnalysisEvidence {
+                sequence,
+                provider_request_id: RequestId::generate(&ids),
+                snapshot_id: Some(ContextSnapshotId::generate(&ids)),
+            };
+            let mut lifecycle = counters
+                .lifecycle
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _previous = lifecycle.evidence.insert(sequence, evidence);
+        }
+
+        reconcile_pending_context_with(&counters, |evidence| async move {
+            if evidence.sequence == AnalysisSequence(0) {
+                evidence.snapshot_id.map(|snapshot_id| {
+                    ContextSnapshotStatus::new(
+                        snapshot_id,
+                        evidence.provider_request_id,
+                        "active".to_owned(),
+                    )
+                })
+            } else {
+                // `ContextStatus` not-found and transport-unreachable both produce no status.
+                None
+            }
+        })
+        .await;
+
+        assert_eq!(
+            counters.analysis_requests_complete.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            counters.analysis_requests_partial.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(
+            counters.analysis_requests_dropped.load(Ordering::Relaxed),
+            0
+        );
+        assert_eq!(counters.pending_evidence().len(), 3);
+
+        counters.drop_pending(ContextAnalysisDropReason::Cancelled);
+
+        assert_eq!(
+            counters.analysis_requests_dropped.load(Ordering::Relaxed),
+            3
+        );
+        assert_eq!(counters.pending_drop_cancelled.load(Ordering::Relaxed), 3);
+        assert_eq!(
+            counters
+                .pre_persistence_drop_cancelled
+                .load(Ordering::Relaxed),
+            3
+        );
+        assert_eq!(
+            counters.analysis_requests_seen.load(Ordering::Relaxed),
+            counters.analysis_requests_complete.load(Ordering::Relaxed)
+                + counters.analysis_requests_partial.load(Ordering::Relaxed)
+                + counters.analysis_requests_dropped.load(Ordering::Relaxed)
+        );
+        assert!(counters.pending_evidence().is_empty());
+    }
+    #[test]
+    fn transport_admission_is_bounded_when_dispatcher_stalls() {
+        use super::{TRANSPORT_DISPATCH_QUEUE_ITEMS, TransportOrdering, TransportSequence};
+
+        let (sender, mut jobs) = tokio::sync::mpsc::channel(TRANSPORT_DISPATCH_QUEUE_ITEMS);
+        let ordering = TransportOrdering::new(sender);
+        for ordinal in 0..TRANSPORT_DISPATCH_QUEUE_ITEMS {
+            assert!(ordering.try_enqueue_placeholder(TransportSequence(ordinal as u64)));
+        }
+        assert_eq!(ordering.pending_len(), TRANSPORT_DISPATCH_QUEUE_ITEMS);
+        assert!(
+            !ordering
+                .try_enqueue_placeholder(TransportSequence(TRANSPORT_DISPATCH_QUEUE_ITEMS as u64))
+        );
+        assert_eq!(ordering.pending_len(), TRANSPORT_DISPATCH_QUEUE_ITEMS);
+
+        let mut queued = 0;
+        while jobs.try_recv().is_ok() {
+            queued += 1;
+        }
+        assert_eq!(queued, TRANSPORT_DISPATCH_QUEUE_ITEMS);
+    }
+
+    #[test]
+    fn transport_dispatcher_preserves_fifo_admission_order() {
+        use super::{TransportDispatchJob, TransportOrdering, TransportSequence};
+
+        let (sender, mut jobs) = tokio::sync::mpsc::channel(2);
+        let ordering = TransportOrdering::new(sender);
+        assert!(ordering.try_enqueue_placeholder(TransportSequence(11)));
+        assert!(ordering.try_enqueue_placeholder(TransportSequence(12)));
+        drop(ordering);
+
+        assert!(matches!(
+            jobs.try_recv(),
+            Ok(TransportDispatchJob::Placeholder {
+                sequence: TransportSequence(11),
+                ..
+            })
+        ));
+        assert!(matches!(
+            jobs.try_recv(),
+            Ok(TransportDispatchJob::Placeholder {
+                sequence: TransportSequence(12),
+                ..
+            })
+        ));
+        assert!(jobs.try_recv().is_err());
     }
 }

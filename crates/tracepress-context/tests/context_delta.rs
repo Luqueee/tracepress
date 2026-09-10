@@ -5,10 +5,10 @@
 )]
 
 use tracepress_context::{
-    ContextAnalysisLimitValues, ContextAnalysisLimits, ContextBlockKind, ContextBlockSummary,
-    ContextDeltaRequest, ContextDeltaStatus, ContextDigest, ContextRole, JsonValueKind, RawSpan,
-    SEMANTIC_FINGERPRINT_VERSION, SemanticFingerprint, SemanticFingerprintInput,
-    compute_context_delta, semantic_fingerprint,
+    ContextAnalysisLimitValues, ContextAnalysisLimits, ContextAnalysisStatus, ContextBlockKind,
+    ContextBlockSummary, ContextDeltaRequest, ContextDeltaStatus, ContextDigest, ContextRole,
+    JsonValueKind, RawSpan, SEMANTIC_FINGERPRINT_VERSION, SemanticFingerprint,
+    SemanticFingerprintInput, compute_context_delta, semantic_fingerprint,
 };
 use tracepress_core::{ContextSnapshotId, UuidV7Generator};
 
@@ -48,18 +48,39 @@ fn semantic(value: &str) -> SemanticFingerprint {
     .expect("semantic fingerprint")
 }
 
+#[derive(Clone, Copy)]
+struct DeltaInput<'blocks> {
+    previous: &'blocks [ContextBlockSummary],
+    current: &'blocks [ContextBlockSummary],
+    max_blocks: u64,
+    previous_analysis_status: ContextAnalysisStatus,
+    current_analysis_status: ContextAnalysisStatus,
+}
+
 fn delta(
     previous: &[ContextBlockSummary],
     current: &[ContextBlockSummary],
     max_blocks: u64,
 ) -> tracepress_context::ContextDelta {
+    delta_with_status(DeltaInput {
+        previous,
+        current,
+        max_blocks,
+        previous_analysis_status: ContextAnalysisStatus::Complete,
+        current_analysis_status: ContextAnalysisStatus::Complete,
+    })
+}
+
+fn delta_with_status(input: DeltaInput<'_>) -> tracepress_context::ContextDelta {
     let generator = UuidV7Generator::new();
     compute_context_delta(ContextDeltaRequest {
         previous_snapshot_id: ContextSnapshotId::generate(&generator),
         current_snapshot_id: ContextSnapshotId::generate(&generator),
-        previous,
-        current,
-        limits: limits(max_blocks),
+        previous: input.previous,
+        current: input.current,
+        previous_analysis_status: input.previous_analysis_status,
+        current_analysis_status: input.current_analysis_status,
+        limits: limits(input.max_blocks),
     })
 }
 
@@ -149,12 +170,32 @@ fn exact_duplicates_consume_the_semantically_corresponding_occurrence() {
 #[test]
 fn missing_estimates_remain_unknown_for_their_aggregates() {
     let previous = [block("same", None, Some(1))];
+
     let current = [block("same", None, None), block("new", None, None)];
 
     let result = delta(&previous, &current, 32);
     assert_eq!(result.repeated_estimated_tokens, None);
     assert_eq!(result.new_estimated_tokens, None);
     assert_eq!(result.common_prefix_estimated_tokens, None);
+}
+
+#[test]
+fn exact_cap_with_resource_status_is_not_reported_complete() {
+    let previous = vec![block("same", None, Some(1)); 64];
+    let current = vec![block("same", None, Some(1)); 64];
+
+    let result = delta_with_status(DeltaInput {
+        previous: &previous,
+        current: &current,
+        max_blocks: 64,
+        previous_analysis_status: ContextAnalysisStatus::ResourceLimit,
+        current_analysis_status: ContextAnalysisStatus::Complete,
+    });
+
+    assert_eq!(result.status, ContextDeltaStatus::ResourceLimit);
+    assert_eq!(result.compared_previous_blocks, 64);
+    assert_eq!(result.compared_current_blocks, 64);
+    assert_eq!(result.common_prefix_blocks, None);
 }
 
 #[test]

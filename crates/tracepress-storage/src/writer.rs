@@ -6,11 +6,11 @@
 use std::{path::PathBuf, thread::JoinHandle};
 
 use tokio::sync::{Semaphore, mpsc, oneshot};
-use tracepress_core::{ContentId, MaxIpcQueueItems, RequestId};
+use tracepress_core::{ContentId, ContextSnapshotId, MaxIpcQueueItems, RequestId};
 
 use crate::{
-    ConnectionSettings, ContextInspection, Durability, StorageError, WriteBatch, WriteCommand,
-    WriteReceipt,
+    ConnectionSettings, ContextInspection, ContextSnapshotStatus, ContextSnapshotStatusLookup,
+    Durability, RecoveryReceipt, StorageError, WriteBatch, WriteCommand, WriteReceipt,
     blob_store::{
         BlobError,
         database::{
@@ -19,7 +19,8 @@ use crate::{
         },
     },
     inspection::query_context_inspection,
-    records::{execute_batch, execute_single},
+    query_context_snapshot_status,
+    records::{execute_batch, execute_single, recover_stale_sessions},
 };
 
 #[cfg(not(test))]
@@ -31,9 +32,6 @@ use crate::schema::open_database_with_busy_timeout;
 enum WriterOperation {
     Single(Box<WriteCommand>),
     Batch(WriteBatch),
-    RecoverStaleSessions {
-        recovered_at: String,
-    },
     #[cfg(test)]
     InterruptedBatch {
         batch: WriteBatch,
@@ -53,6 +51,21 @@ struct Envelope {
 }
 
 #[derive(Debug)]
+struct RecoveryEnvelope {
+    recovered_at: String,
+    reply: oneshot::Sender<Result<RecoveryReceipt, StorageError>>,
+}
+
+#[derive(Debug)]
+enum WriterMessage {
+    Write(Envelope),
+    Recovery(RecoveryEnvelope),
+    Blob(BlobEnvelope),
+    ContextInspection(ContextInspectionEnvelope),
+    ContextSnapshotStatus(ContextSnapshotStatusEnvelope),
+}
+
+#[derive(Debug)]
 struct BlobEnvelope {
     operation: BlobDbOperation,
     reply: oneshot::Sender<Result<BlobDbReply, BlobError>>,
@@ -65,10 +78,9 @@ struct ContextInspectionEnvelope {
 }
 
 #[derive(Debug)]
-enum WriterMessage {
-    Write(Envelope),
-    Blob(BlobEnvelope),
-    ContextInspection(ContextInspectionEnvelope),
+struct ContextSnapshotStatusEnvelope {
+    lookup: ContextSnapshotStatusLookup,
+    reply: oneshot::Sender<Result<Option<ContextSnapshotStatus>, StorageError>>,
 }
 
 /// Startup configuration for the single `SQLite` writer.
@@ -139,13 +151,23 @@ impl StorageWriter {
                                     execute_writer_operation(&mut connection, envelope.operation);
                                 let _sent = envelope.reply.send(result);
                             }
-                            WriterMessage::Blob(envelope) => {
-                                let result = database::execute(&mut connection, envelope.operation);
+                            WriterMessage::Recovery(envelope) => {
+                                let result =
+                                    recover_stale_sessions(&mut connection, &envelope.recovered_at);
                                 let _sent = envelope.reply.send(result);
                             }
                             WriterMessage::ContextInspection(envelope) => {
                                 let result =
                                     query_context_inspection(&connection, envelope.request_id);
+                                let _sent = envelope.reply.send(result);
+                            }
+                            WriterMessage::ContextSnapshotStatus(envelope) => {
+                                let result =
+                                    query_context_snapshot_status(&connection, envelope.lookup);
+                                let _sent = envelope.reply.send(result);
+                            }
+                            WriterMessage::Blob(envelope) => {
+                                let result = database::execute(&mut connection, envelope.operation);
                                 let _sent = envelope.reply.send(result);
                             }
                         }
@@ -174,18 +196,13 @@ impl StorageWriter {
     pub async fn recover_stale_sessions(
         &self,
         recovered_at: &str,
-    ) -> Result<WriteReceipt, StorageError> {
+    ) -> Result<RecoveryReceipt, StorageError> {
         let (reply, result) = oneshot::channel();
         self.sender
-            .send(
-                Envelope {
-                    operation: WriterOperation::RecoverStaleSessions {
-                        recovered_at: recovered_at.to_owned(),
-                    },
-                    reply,
-                }
-                .into(),
-            )
+            .send(WriterMessage::Recovery(RecoveryEnvelope {
+                recovered_at: recovered_at.to_owned(),
+                reply,
+            }))
             .await
             .map_err(|_error| StorageError::QueueClosed)?;
         result.await.map_err(|_error| StorageError::ReplyStopped)?
@@ -203,6 +220,47 @@ impl StorageWriter {
         self.sender
             .send(WriterMessage::ContextInspection(
                 ContextInspectionEnvelope { request_id, reply },
+            ))
+            .await
+            .map_err(|_error| StorageError::QueueClosed)?;
+        result.await.map_err(|_error| StorageError::ReplyStopped)?
+    }
+
+    /// Reads only one context snapshot's lifecycle status through the daemon-owned connection.
+    ///
+    /// The result is empty when the snapshot has not committed its begin record yet. No block
+    /// occurrence or aggregate projection is loaded.
+    ///
+    /// # Errors
+    /// Returns a typed queue or reply error when the writer worker cannot process the request.
+    pub async fn context_snapshot_status_by_request(
+        &self,
+        request_id: RequestId,
+    ) -> Result<Option<ContextSnapshotStatus>, StorageError> {
+        self.context_snapshot_status(ContextSnapshotStatusLookup::Request(request_id))
+            .await
+    }
+
+    /// Reads one context snapshot's lifecycle status by durable snapshot identity.
+    ///
+    /// # Errors
+    /// Returns a typed queue or reply error when the writer worker cannot process the request.
+    pub async fn context_snapshot_status_by_snapshot(
+        &self,
+        snapshot_id: ContextSnapshotId,
+    ) -> Result<Option<ContextSnapshotStatus>, StorageError> {
+        self.context_snapshot_status(ContextSnapshotStatusLookup::Snapshot(snapshot_id))
+            .await
+    }
+
+    async fn context_snapshot_status(
+        &self,
+        lookup: ContextSnapshotStatusLookup,
+    ) -> Result<Option<ContextSnapshotStatus>, StorageError> {
+        let (reply, result) = oneshot::channel();
+        self.sender
+            .send(WriterMessage::ContextSnapshotStatus(
+                ContextSnapshotStatusEnvelope { lookup, reply },
             ))
             .await
             .map_err(|_error| StorageError::QueueClosed)?;
@@ -445,9 +503,6 @@ fn execute_writer_operation(
     match operation {
         WriterOperation::Single(command) => execute_single(connection, &command),
         WriterOperation::Batch(batch) => execute_batch(connection, &batch),
-        WriterOperation::RecoverStaleSessions { recovered_at } => {
-            crate::records::recover_stale_sessions(connection, &recovered_at)
-        }
         #[cfg(test)]
         WriterOperation::InterruptedBatch { batch, fail_after } => {
             crate::records::execute_interrupted_batch(connection, &batch, fail_after)

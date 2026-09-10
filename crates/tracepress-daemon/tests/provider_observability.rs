@@ -3,18 +3,18 @@
 use rusqlite::Connection;
 use tempfile::TempDir;
 use tracepress_context::{
-    ContextAnalysisLimitValues, ContextAnalysisLimits, ContextAnalysisStatus, TokenReconciliation,
-    analyze,
+    ContextAnalysisDropReason, ContextAnalysisLimitValues, ContextAnalysisLimits,
+    ContextAnalysisStatus, TokenReconciliation, analyze,
 };
 use tracepress_core::{
-    ContextSnapshotId, HttpStatusCode, MaxIpcQueueItems, OperationId, OperationKind, SessionId,
-    SessionState, UuidV7Generator,
+    ContextSnapshotId, HttpStatusCode, MaxIpcQueueItems, OperationId, OperationKind, RequestId,
+    SessionId, SessionState, UuidV7Generator,
 };
 use tracepress_daemon::{
-    ContextAnalysisBegin, ContextAnalysisFinalize, ContextAnalysisMetrics, ContextBlockBatch,
-    ContextCorrelationStatusWire, ControlRequest, CorrelationDegradation, DaemonError,
-    DaemonService, PersistProviderObservation, ProviderObservation, ProviderObservationOutcome,
-    RecordCorrelationDegradation, RecordProviderObservation,
+    ContextAnalysisAbort, ContextAnalysisBegin, ContextAnalysisFinalize, ContextAnalysisMetrics,
+    ContextBlockBatch, ContextCorrelationStatusWire, ControlRequest, CorrelationDegradation,
+    DaemonError, DaemonService, PersistProviderObservation, ProviderObservation,
+    ProviderObservationOutcome, RecordCorrelationDegradation, RecordProviderObservation,
 };
 use tracepress_provider::{
     ObservationInput, ObservationLimits, ProviderResponseState, StreamingObserver, parse_request,
@@ -242,7 +242,7 @@ async fn context_batches_are_bounded_and_preserve_five_thousand_blocks() -> Test
             encoded.len()
         );
         if encoded.len() > 30_000 && !batch.is_empty() {
-            daemon
+            let _receipt = daemon
                 .append_context_blocks(ContextBlockBatch::new(
                     snapshot,
                     sequence,
@@ -262,7 +262,7 @@ async fn context_batches_are_bounded_and_preserve_five_thousand_blocks() -> Test
         next_ordinal = next_ordinal.saturating_add(1);
     }
     if !batch.is_empty() {
-        daemon
+        let _receipt = daemon
             .append_context_blocks(ContextBlockBatch::new(snapshot, sequence, batch))
             .await?;
     }
@@ -417,7 +417,7 @@ async fn context_protocol_rejects_bad_batches_and_recovers_unfinalized_snapshots
     let mut first = template.clone();
     first.ordinal = 0;
     first.parent_ordinal = None;
-    daemon
+    let _receipt = daemon
         .append_context_blocks(ContextBlockBatch::new(snapshot, 0, vec![first]))
         .await?;
     daemon
@@ -489,7 +489,7 @@ async fn context_protocol_rejects_bad_batches_and_recovers_unfinalized_snapshots
             4,
         ))
         .await?;
-    daemon
+    let _receipt = daemon
         .append_context_blocks(ContextBlockBatch::new(unfinished, 0, vec![template]))
         .await?;
     daemon.shutdown().await?;
@@ -509,6 +509,331 @@ async fn context_protocol_rejects_bad_batches_and_recovers_unfinalized_snapshots
         |row| Ok((row.get(0)?, row.get(1)?)),
     )?;
     assert_eq!(recovered, ("partial".to_owned(), None));
+    Ok(())
+}
+
+#[tokio::test]
+async fn exact_append_caps_remain_finalizable_and_reject_a_suffix() -> TestResult {
+    let directory = TempDir::new()?;
+    let daemon = daemon(&directory).await?;
+    let session = daemon.start_session("exact-caps").await?;
+    let snapshot = begin_active_context(&daemon, session.session_id, 1).await?;
+    let analysis = analyze(
+        br#"{"input":[{"role":"user","content":[{"type":"input_text","text":"x"}]}]}"#,
+        context_limits()?,
+    );
+    let template = analysis
+        .blocks
+        .first()
+        .cloned()
+        .ok_or("fixture must produce one context block")?;
+    let max_batches = u32::try_from(ContextAnalysisLimits::MAX_BATCHES)?;
+    let blocks_per_batch =
+        usize::try_from(ContextAnalysisLimits::MAX_BLOCKS / ContextAnalysisLimits::MAX_BATCHES)?;
+    let mut last_receipt = None;
+    for sequence in 0..max_batches {
+        let mut blocks = Vec::with_capacity(blocks_per_batch);
+        for offset in 0..blocks_per_batch {
+            let mut block = template.clone();
+            block.ordinal = sequence
+                .saturating_mul(u32::try_from(blocks_per_batch)?)
+                .saturating_add(u32::try_from(offset)?);
+            block.parent_ordinal = None;
+            blocks.push(block);
+        }
+        last_receipt = Some(
+            daemon
+                .append_context_blocks(ContextBlockBatch::new(snapshot, sequence, blocks))
+                .await?,
+        );
+    }
+    let last_receipt = last_receipt.ok_or("max_batches must be non-zero")?;
+    assert_eq!(
+        last_receipt.accepted_block_count,
+        ContextAnalysisLimits::MAX_BLOCKS
+    );
+    assert_eq!(last_receipt.next_sequence, max_batches);
+    assert_eq!(
+        last_receipt.capacity,
+        tracepress_daemon::ContextAppendCapacity::BothExhausted
+    );
+    assert_eq!(last_receipt.status, ContextAnalysisStatus::Partial);
+
+    let mut extra = template;
+    extra.ordinal = u32::try_from(ContextAnalysisLimits::MAX_BLOCKS)?;
+    let rejected = daemon
+        .append_context_blocks(ContextBlockBatch::new(snapshot, max_batches, vec![extra]))
+        .await;
+    assert!(matches!(
+        rejected,
+        Err(DaemonError::ContextLimit {
+            dimension: "batches",
+            ..
+        })
+    ));
+
+    let mut finalize = minimal_context_finalize(snapshot, ContextAnalysisStatus::Complete, 2)?;
+    finalize.explicit_block_count = Some(ContextAnalysisLimits::MAX_BLOCKS);
+    daemon.finalize_context_analysis(finalize).await?;
+    daemon.shutdown().await?;
+
+    let database = Connection::open(directory.path().join("tracepress.sqlite3"))?;
+    let block_count: i64 = database.query_row(
+        "SELECT COUNT(*) FROM context_block_occurrences WHERE snapshot_id = ?1",
+        rusqlite::params![snapshot.to_string()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(
+        block_count,
+        i64::try_from(ContextAnalysisLimits::MAX_BLOCKS)?
+    );
+    let status: String = database.query_row(
+        "SELECT status FROM context_snapshots WHERE snapshot_id = ?1",
+        rusqlite::params![snapshot.to_string()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(status, "complete");
+    Ok(())
+}
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the scenario fills the bounded active table and proves deterministic session cleanup"
+)]
+async fn finishing_a_session_partials_every_active_context_and_releases_capacity() -> TestResult {
+    const ACTIVE_LIMIT: usize = 64;
+    const ACTIVE_LIMIT_U64: u64 = 64;
+    const ACTIVE_LIMIT_I64: i64 = 64;
+    let directory = TempDir::new()?;
+    let daemon = daemon(&directory).await?;
+    let session = daemon.start_session("finish-active").await?;
+    let mut snapshots = Vec::with_capacity(ACTIVE_LIMIT);
+    for ordinal in 0_u64..ACTIVE_LIMIT_U64 {
+        snapshots.push(begin_active_context(&daemon, session.session_id, ordinal).await?);
+    }
+
+    let (operation_id, provider_request_id) =
+        provider_identity(&daemon, session.session_id, ACTIVE_LIMIT_U64).await?;
+    let denied = daemon
+        .begin_context_analysis(ContextAnalysisBegin::new(
+            session.session_id,
+            provider_request_id,
+            operation_id,
+            1,
+            ACTIVE_LIMIT_U64,
+        ))
+        .await;
+    assert!(matches!(
+        denied,
+        Err(DaemonError::ContextAnalysisCapacity {
+            limit: ACTIVE_LIMIT
+        })
+    ));
+
+    let _snapshot = daemon
+        .finish_session(
+            session.session_id,
+            SessionState::Closed,
+            "finish-active-ended",
+        )
+        .await?;
+    let replacement = daemon.start_session("replacement").await?;
+    let replacement_snapshot =
+        begin_active_context(&daemon, replacement.session_id, ACTIVE_LIMIT_U64 + 1).await?;
+    daemon
+        .abort_context_analysis(ContextAnalysisAbort::new(
+            replacement_snapshot,
+            ContextAnalysisDropReason::Cancelled,
+            100,
+        ))
+        .await?;
+    daemon.shutdown().await?;
+
+    let database = Connection::open(directory.path().join("tracepress.sqlite3"))?;
+    let completed_partials: i64 = database.query_row(
+        "SELECT COUNT(*) FROM context_snapshots WHERE status = 'partial' AND completed_at_us IS NOT NULL",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(completed_partials, ACTIVE_LIMIT_I64);
+    assert_eq!(
+        event_count(&database, "context.analysis.partial")?,
+        ACTIVE_LIMIT_I64
+    );
+    assert_eq!(event_count(&database, "context.analysis.dropped")?, 1);
+    let unfinished: i64 = database.query_row(
+        "SELECT COUNT(*) FROM context_snapshots WHERE completed_at_us IS NULL",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(unfinished, 0);
+    assert_eq!(snapshots.len(), ACTIVE_LIMIT);
+    Ok(())
+}
+
+#[tokio::test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the scenario covers abort retryability, idempotence, and admission after release"
+)]
+async fn abort_releases_capacity_and_persists_exactly_one_drop_event_after_retry() -> TestResult {
+    const ACTIVE_LIMIT: usize = 64;
+    const ACTIVE_LIMIT_U64: u64 = 64;
+    let directory = TempDir::new()?;
+    let daemon = daemon(&directory).await?;
+    let session = daemon.start_session("abort-active").await?;
+    let mut snapshots = Vec::with_capacity(ACTIVE_LIMIT);
+    for ordinal in 0_u64..ACTIVE_LIMIT_U64 {
+        snapshots.push(begin_active_context(&daemon, session.session_id, ordinal).await?);
+    }
+    let aborted = *snapshots.first().ok_or("missing first context snapshot")?;
+    daemon
+        .abort_context_analysis(ContextAnalysisAbort::new(
+            aborted,
+            ContextAnalysisDropReason::Cancelled,
+            10,
+        ))
+        .await?;
+    let duplicate_abort = daemon
+        .abort_context_analysis(ContextAnalysisAbort::new(
+            aborted,
+            ContextAnalysisDropReason::Cancelled,
+            11,
+        ))
+        .await;
+    assert!(matches!(
+        duplicate_abort,
+        Err(DaemonError::UnknownContextSnapshot { snapshot_id }) if snapshot_id == aborted
+    ));
+    let duplicate_finalize = daemon
+        .finalize_context_analysis(minimal_context_finalize(
+            aborted,
+            ContextAnalysisStatus::Partial,
+            12,
+        )?)
+        .await;
+    assert!(matches!(
+        duplicate_finalize,
+        Err(DaemonError::UnknownContextSnapshot { snapshot_id }) if snapshot_id == aborted
+    ));
+
+    let retryable = *snapshots.get(1).ok_or("missing second context snapshot")?;
+    let failed_abort = daemon
+        .abort_context_analysis(ContextAnalysisAbort::new(
+            retryable,
+            ContextAnalysisDropReason::ResourceLimit,
+            u64::MAX,
+        ))
+        .await;
+    assert!(matches!(failed_abort, Err(DaemonError::Storage(_))));
+    daemon
+        .abort_context_analysis(ContextAnalysisAbort::new(
+            retryable,
+            ContextAnalysisDropReason::ResourceLimit,
+            20,
+        ))
+        .await?;
+
+    let replacement =
+        begin_active_context(&daemon, session.session_id, ACTIVE_LIMIT_U64 + 1).await?;
+    daemon
+        .abort_context_analysis(ContextAnalysisAbort::new(
+            replacement,
+            ContextAnalysisDropReason::Cancelled,
+            21,
+        ))
+        .await?;
+    daemon.shutdown().await?;
+
+    let database = Connection::open(directory.path().join("tracepress.sqlite3"))?;
+    assert_eq!(event_count(&database, "context.analysis.dropped")?, 3);
+    let statuses: (String, String) = database.query_row(
+        "SELECT (SELECT status FROM context_snapshots WHERE snapshot_id = ?1), (SELECT status FROM context_snapshots WHERE snapshot_id = ?2)",
+        rusqlite::params![aborted.to_string(), retryable.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(
+        statuses,
+        ("cancelled".to_owned(), "resource_limit".to_owned())
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn finishing_one_session_leaves_another_context_analysis_finalizable() -> TestResult {
+    let directory = TempDir::new()?;
+    let daemon = daemon(&directory).await?;
+    let first = daemon.start_session("first").await?;
+    let second = daemon.start_session("second").await?;
+    let first_snapshot = begin_active_context(&daemon, first.session_id, 1).await?;
+    let second_snapshot = begin_active_context(&daemon, second.session_id, 2).await?;
+
+    let _snapshot = daemon
+        .finish_session(first.session_id, SessionState::Closed, "first-ended")
+        .await?;
+    daemon
+        .finalize_context_analysis(minimal_context_finalize(
+            second_snapshot,
+            ContextAnalysisStatus::Complete,
+            30,
+        )?)
+        .await?;
+    let duplicate_first = daemon
+        .finalize_context_analysis(minimal_context_finalize(
+            first_snapshot,
+            ContextAnalysisStatus::Partial,
+            31,
+        )?)
+        .await;
+    assert!(matches!(
+        duplicate_first,
+        Err(DaemonError::UnknownContextSnapshot { snapshot_id }) if snapshot_id == first_snapshot
+    ));
+    daemon.shutdown().await?;
+
+    let database = Connection::open(directory.path().join("tracepress.sqlite3"))?;
+    let statuses: (String, String) = database.query_row(
+        "SELECT (SELECT status FROM context_snapshots WHERE snapshot_id = ?1), (SELECT status FROM context_snapshots WHERE snapshot_id = ?2)",
+        rusqlite::params![first_snapshot.to_string(), second_snapshot.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(statuses, ("partial".to_owned(), "complete".to_owned()));
+    assert_eq!(event_count(&database, "context.analysis.partial")?, 1);
+    assert_eq!(event_count(&database, "context.analysis.completed")?, 1);
+    Ok(())
+}
+
+#[tokio::test]
+async fn restarting_recovers_unfinished_context_once_and_releases_capacity() -> TestResult {
+    let directory = TempDir::new()?;
+    let first = daemon(&directory).await?;
+    let session = first.start_session("interrupted").await?;
+    let snapshot = begin_active_context(&first, session.session_id, 1).await?;
+    first.shutdown().await?;
+
+    let recovered = daemon(&directory).await?;
+    let replacement = recovered.start_session("replacement").await?;
+    let replacement_snapshot = begin_active_context(&recovered, replacement.session_id, 2).await?;
+    recovered
+        .abort_context_analysis(ContextAnalysisAbort::new(
+            replacement_snapshot,
+            ContextAnalysisDropReason::Cancelled,
+            20,
+        ))
+        .await?;
+    recovered.shutdown().await?;
+
+    let reopened = daemon(&directory).await?;
+    reopened.shutdown().await?;
+
+    let database = Connection::open(directory.path().join("tracepress.sqlite3"))?;
+    let status: String = database.query_row(
+        "SELECT status FROM context_snapshots WHERE snapshot_id = ?1",
+        rusqlite::params![snapshot.to_string()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(status, "partial");
+    assert_eq!(event_count(&database, "context.analysis.partial")?, 1);
     Ok(())
 }
 
@@ -936,6 +1261,74 @@ async fn a_disconnected_stream_reports_incomplete_and_partial_without_claiming_c
     assert_eq!(event_count(&database, "provider.response.completed")?, 0);
     assert_eq!(event_count(&database, "provider.response.failed")?, 0);
     Ok(())
+}
+
+async fn provider_identity(
+    daemon: &DaemonService,
+    session_id: SessionId,
+    ordinal: u64,
+) -> Result<(OperationId, RequestId), Box<dyn std::error::Error>> {
+    let operation_id = daemon
+        .create_operation(
+            session_id,
+            OperationKind::LlmInference,
+            &format!("context-operation-{ordinal}"),
+            None,
+        )
+        .await?;
+    let receipt = daemon
+        .persist_provider_observation(PersistProviderObservation::new(
+            session_id,
+            operation_id,
+            ProviderObservation::new(ordinal, request(), format!("context-request-{ordinal}"))
+                .with_response(response(br#"{"status":"completed"}"#)),
+        ))
+        .await?;
+    Ok((operation_id, receipt.request_id))
+}
+
+async fn begin_active_context(
+    daemon: &DaemonService,
+    session_id: SessionId,
+    ordinal: u64,
+) -> Result<ContextSnapshotId, Box<dyn std::error::Error>> {
+    let (operation_id, provider_request_id) =
+        provider_identity(daemon, session_id, ordinal).await?;
+    Ok(daemon
+        .begin_context_analysis(ContextAnalysisBegin::new(
+            session_id,
+            provider_request_id,
+            operation_id,
+            1,
+            ordinal.saturating_add(1),
+        ))
+        .await?)
+}
+fn minimal_context_finalize(
+    snapshot_id: ContextSnapshotId,
+    status: ContextAnalysisStatus,
+    completed_at_us: u64,
+) -> Result<ContextAnalysisFinalize, Box<dyn std::error::Error>> {
+    let analysis = analyze(
+        br#"{"input":[{"role":"user","content":[{"type":"input_text","text":"x"}]}]}"#,
+        context_limits()?,
+    );
+    Ok(
+        ContextAnalysisFinalize::builder(snapshot_id, status, completed_at_us)
+            .explicit_block_count(Some(0))
+            .visibility(analysis.visibility)
+            .correlation_status(ContextCorrelationStatusWire::Correlated)
+            .metrics(empty_context_metrics())
+            .delta(None)
+            .reconciliation(TokenReconciliation::reconcile(
+                snapshot_id,
+                analysis.visibility,
+                None,
+                None,
+                false,
+            ))
+            .build()?,
+    )
 }
 
 fn text(database: &Connection, query: &str) -> rusqlite::Result<String> {

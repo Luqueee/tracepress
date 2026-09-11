@@ -1,0 +1,616 @@
+{
+  "cohort_label": "n20",
+  "compaction": {
+    "cohort_kind": "naturalistic",
+    "legacy_requests": 0,
+    "observed_context_reduction": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p75": null,
+      "p90": null,
+      "p95": null,
+      "p99": null
+    },
+    "output_seen": 0,
+    "pre_post": [],
+    "pre_post_pairs": 0,
+    "requests": 0,
+    "survival_by_category": [],
+    "trigger_seen": 0,
+    "trigger_values": {},
+    "v2_requests": 0,
+    "windows": []
+  },
+  "composition": {
+    "by_context_block_kind": [
+      {
+        "block_count": 409,
+        "bytes": 1959217,
+        "bytes_share": 0.3393124687071306,
+        "estimated_tokens": 643024,
+        "name": "text",
+        "token_share": 0.7329713068971964
+      },
+      {
+        "block_count": 19,
+        "bytes": 601909,
+        "bytes_share": 0.10424329144093802,
+        "estimated_tokens": 231352,
+        "name": "tool_result",
+        "token_share": 0.2637139170439675
+      },
+      {
+        "block_count": 19,
+        "bytes": 12527,
+        "bytes_share": 0.0021695234859100475,
+        "estimated_tokens": 2908,
+        "name": "tool_call",
+        "token_share": 0.0033147760588361354
+      },
+      {
+        "block_count": 175,
+        "bytes": 2022080,
+        "bytes_share": 0.35019957295353943,
+        "estimated_tokens": 0,
+        "name": "message",
+        "token_share": 0.0
+      },
+      {
+        "block_count": 21,
+        "bytes": 83265,
+        "bytes_share": 0.014420481604079195,
+        "estimated_tokens": 0,
+        "name": "opaque_reasoning",
+        "token_share": 0.0
+      },
+      {
+        "block_count": 39,
+        "bytes": 1095081,
+        "bytes_share": 0.18965466180840268,
+        "estimated_tokens": 0,
+        "name": "unknown",
+        "token_share": 0.0
+      }
+    ],
+    "by_origin": [
+      {
+        "block_count": 546,
+        "bytes": 3968765,
+        "bytes_share": 0.6873416522357938,
+        "estimated_tokens": 642059,
+        "name": "human_authored",
+        "token_share": 0.7318713210317297
+      },
+      {
+        "block_count": 19,
+        "bytes": 601909,
+        "bytes_share": 0.10424329144093802,
+        "estimated_tokens": 231352,
+        "name": "tool_generated",
+        "token_share": 0.2637139170439675
+      },
+      {
+        "block_count": 57,
+        "bytes": 25059,
+        "bytes_share": 0.0043399129107862915,
+        "estimated_tokens": 3873,
+        "name": "agent_generated",
+        "token_share": 0.004414761924302735
+      },
+      {
+        "block_count": 21,
+        "bytes": 83265,
+        "bytes_share": 0.014420481604079195,
+        "estimated_tokens": 0,
+        "name": "provider_managed",
+        "token_share": 0.0
+      },
+      {
+        "block_count": 39,
+        "bytes": 1095081,
+        "bytes_share": 0.18965466180840268,
+        "estimated_tokens": 0,
+        "name": "unknown",
+        "token_share": 0.0
+      }
+    ],
+    "by_role": [
+      {
+        "block_count": 351,
+        "bytes": 4713214,
+        "bytes_share": 0.8162711317250768,
+        "estimated_tokens": 583362,
+        "name": "developer",
+        "token_share": 0.6649636833682138
+      },
+      {
+        "block_count": 38,
+        "bytes": 614436,
+        "bytes_share": 0.10641281492684808,
+        "estimated_tokens": 234260,
+        "name": "tool",
+        "token_share": 0.26702869310280364
+      },
+      {
+        "block_count": 234,
+        "bytes": 350632,
+        "bytes_share": 0.060725182319119636,
+        "estimated_tokens": 58697,
+        "name": "user",
+        "token_share": 0.06690763766351604
+      },
+      {
+        "block_count": 59,
+        "bytes": 95797,
+        "bytes_share": 0.01659087102895544,
+        "estimated_tokens": 965,
+        "name": "assistant",
+        "token_share": 0.0010999858654665992
+      }
+    ],
+    "detected_content": [
+      {
+        "block_count": 170,
+        "bytes": 1304695,
+        "bytes_share": 0.22595724790048768,
+        "estimated_tokens": 415573,
+        "name": "plain_text",
+        "token_share": 0.473704068465856
+      },
+      {
+        "block_count": 19,
+        "bytes": 601909,
+        "bytes_share": 0.10424329144093802,
+        "estimated_tokens": 231352,
+        "name": "json",
+        "token_share": 0.2637139170439675
+      },
+      {
+        "block_count": 451,
+        "bytes": 3857389,
+        "bytes_share": 0.6680526885759617,
+        "estimated_tokens": 226570,
+        "name": "unknown",
+        "token_share": 0.258263002630847
+      },
+      {
+        "block_count": 42,
+        "bytes": 10086,
+        "bytes_share": 0.0017467720826126556,
+        "estimated_tokens": 3789,
+        "name": "source_code",
+        "token_share": 0.004319011859329476
+      }
+    ],
+    "estimated_token_total": 877284,
+    "raw_bytes_total": 5774079
+  },
+  "context_analysis_metrics": {
+    "estimated_tool_definition_share_mean": null,
+    "estimated_tool_result_share_mean": null,
+    "rows": 39
+  },
+  "dataset": {
+    "request_kinds": {
+      "turn": 39
+    },
+    "request_observation_status": {
+      "complete": 20,
+      "partial": 19
+    },
+    "requests_per_session": {
+      "count": 20,
+      "max": 2.0,
+      "p50": 2.0,
+      "p75": 2.0,
+      "p90": 2.0,
+      "p95": 2.0,
+      "p99": 2.0
+    },
+    "requests_total": 39,
+    "sessions_by_state": {
+      "closed": 20
+    },
+    "sessions_closed": 20,
+    "sessions_total": 20
+  },
+  "distributions": {
+    "estimated_tokens": {
+      "count": 447,
+      "max": 18250.0,
+      "p50": 210.0,
+      "p75": 4054.0,
+      "p90": 5445.0,
+      "p95": 5445.0,
+      "p99": 16006.480000000003
+    },
+    "estimated_tokens_by_context_kind": {
+      "text": {
+        "count": 409,
+        "max": 5445.0,
+        "p50": 210.0,
+        "p75": 4054.0,
+        "p90": 4836.0,
+        "p95": 5445.0,
+        "p99": 5445.0
+      },
+      "tool_call": {
+        "count": 19,
+        "max": 243.0,
+        "p50": 155.0,
+        "p75": 172.5,
+        "p90": 181.2,
+        "p95": 188.10000000000008,
+        "p99": 232.02
+      },
+      "tool_result": {
+        "count": 19,
+        "max": 18250.0,
+        "p50": 15120.0,
+        "p75": 16000.0,
+        "p90": 16544.8,
+        "p95": 17542.600000000002,
+        "p99": 18108.52
+      }
+    },
+    "raw_bytes": {
+      "count": 682,
+      "max": 42341.0,
+      "p50": 3293.0,
+      "p75": 16168.75,
+      "p90": 28079.0,
+      "p95": 28591.0,
+      "p99": 40974.090000000004
+    },
+    "raw_bytes_by_context_kind": {
+      "message": {
+        "count": 175,
+        "max": 28591.0,
+        "p50": 4384.0,
+        "p75": 18170.0,
+        "p90": 28591.0,
+        "p95": 28591.0,
+        "p99": 28591.0
+      },
+      "opaque_reasoning": {
+        "count": 21,
+        "max": 4665.0,
+        "p50": 4365.0,
+        "p75": 4557.0,
+        "p90": 4601.0,
+        "p95": 4641.0,
+        "p99": 4660.2
+      },
+      "text": {
+        "count": 409,
+        "max": 17947.0,
+        "p50": 654.0,
+        "p75": 11785.0,
+        "p90": 14254.0,
+        "p95": 17947.0,
+        "p99": 17947.0
+      },
+      "tool_call": {
+        "count": 19,
+        "max": 879.0,
+        "p50": 662.0,
+        "p75": 701.0,
+        "p90": 722.4,
+        "p95": 750.3000000000002,
+        "p99": 853.26
+      },
+      "tool_result": {
+        "count": 19,
+        "max": 42341.0,
+        "p50": 40864.0,
+        "p75": 41037.0,
+        "p90": 41242.4,
+        "p95": 42030.5,
+        "p99": 42278.9
+      },
+      "unknown": {
+        "count": 39,
+        "max": 28079.0,
+        "p50": 28079.0,
+        "p75": 28079.0,
+        "p90": 28079.0,
+        "p95": 28079.0,
+        "p99": 28079.0
+      }
+    }
+  },
+  "generated_at_utc": "2026-09-11T15:26:19.855345+00:00",
+  "limitations": [
+    "token estimates are heuristic",
+    "Subscription has no API-cost semantics",
+    "provider-managed context may be partially invisible",
+    "candidate exposure is not saveable tokens",
+    "cost is intentionally unavailable"
+  ],
+  "manifest": {
+    "analysis_version": 1,
+    "codex_version": "0.154.0",
+    "detector_version": 1,
+    "fingerprint_version": 1,
+    "model": "gpt-5.6-luna",
+    "provider_parser_version": 1,
+    "reasoning_effort": "xhigh",
+    "token_estimator_version": 1,
+    "tracepress_commit": "70957bba",
+    "transport": "chatgpt_codex_subscription",
+    "usage_normalizer_version": 1
+  },
+  "measurement_id": "baseline-001",
+  "opportunity_ranking": [
+    {
+      "average_persistence": 1.8085106382978724,
+      "controllability": 0.7,
+      "estimated_token_volume": 415573,
+      "measurement_confidence": 0.6171164561245206,
+      "name": "plain_text",
+      "phase_4_candidate_priority_score": 0.12651845933599323,
+      "redundancy_factor": 3.8938491738150676,
+      "semantic_safety": 0.7,
+      "token_share": 0.473704068465856
+    },
+    {
+      "average_persistence": 1,
+      "controllability": 0.9,
+      "estimated_token_volume": 231352,
+      "measurement_confidence": 0.6171164561245206,
+      "name": "json",
+      "phase_4_candidate_priority_score": 0.014696572207745888,
+      "redundancy_factor": null,
+      "semantic_safety": 0.8,
+      "token_share": 0.2637139170439675
+    },
+    {
+      "average_persistence": 1.778688524590164,
+      "controllability": 0.2,
+      "estimated_token_volume": 226570,
+      "measurement_confidence": 0.6171164561245206,
+      "name": "unknown",
+      "phase_4_candidate_priority_score": 0.005569458151839717,
+      "redundancy_factor": 3.9159789426134095,
+      "semantic_safety": 0.2,
+      "token_share": 0.258263002630847
+    },
+    {
+      "average_persistence": 1.8837209302325582,
+      "controllability": 0.5,
+      "estimated_token_volume": 3789,
+      "measurement_confidence": 0.6171164561245206,
+      "name": "source_code",
+      "phase_4_candidate_priority_score": 0.0005996999908325661,
+      "redundancy_factor": 4.232530120481928,
+      "semantic_safety": 0.45,
+      "token_share": 0.004319011859329476
+    }
+  ],
+  "provider_usage": {
+    "billing_model": "unknown",
+    "cache_ratio": 0.6293893522809185,
+    "cached_input": 537856,
+    "cost_usd": null,
+    "final_rows": 39,
+    "input_total": 854568,
+    "output_total": 30349,
+    "reasoning_output": 26009,
+    "reconciliation_rows": 39,
+    "reconciliation_unavailable": {
+      "missing_local_estimate": 39
+    },
+    "residual_distribution": {
+      "count": 0,
+      "max": null,
+      "p50": null,
+      "p75": null,
+      "p90": null,
+      "p95": null,
+      "p99": null
+    },
+    "rows": 39,
+    "token_reconciliation_available": false,
+    "uncached_input": 316712
+  },
+  "quality": {
+    "analysis_complete": 39,
+    "analysis_coverage": 1.0,
+    "analysis_dropped": 0,
+    "analysis_partial": 0,
+    "analysis_requests_seen": 39,
+    "context_malformed": 0,
+    "correlation_correlated": 39,
+    "correlation_coverage": 1.0,
+    "correlation_eligible": 39,
+    "event_drop_reasons": {},
+    "forwarding_errors": 0,
+    "provider_observation_partial": 19,
+    "provider_usage_final": 39,
+    "semantic_coverage": {
+      "max": 0.9545,
+      "mean": 0.941551282051282,
+      "min": 0.9333,
+      "observations": 39,
+      "p50": 0.9333,
+      "p90": 0.95,
+      "p95": 0.95
+    },
+    "snapshot_statuses": {
+      "complete": 39
+    },
+    "token_estimation_coverage": {
+      "by_blocks": 0.655425219941349,
+      "eligible_blocks": 682,
+      "estimated_token_subset": 877284,
+      "observed_blocks": 447
+    }
+  },
+  "repetition": {
+    "cross_request": {
+      "exact_repeated_blocks": 285,
+      "exact_repeated_estimated_tokens": 312799,
+      "semantic_repeated_blocks": 190,
+      "semantic_repeated_estimated_tokens": 312799
+    },
+    "effective_presence": [
+      {
+        "average_persistence": 1.8085106382978724,
+        "candidate_redundant_exposure": 731079.5744680851,
+        "effective_presence_estimated_tokens": 831146,
+        "name": "plain_text",
+        "redundancy_factor": 3.8938491738150676,
+        "repeated_estimated_tokens": 404244,
+        "unique_semantic_information_estimated_tokens": 213451
+      },
+      {
+        "average_persistence": 1.778688524590164,
+        "candidate_redundant_exposure": 388109.8360655738,
+        "effective_presence_estimated_tokens": 450784,
+        "name": "unknown",
+        "redundancy_factor": 3.9159789426134095,
+        "repeated_estimated_tokens": 218200,
+        "unique_semantic_information_estimated_tokens": 115114
+      },
+      {
+        "average_persistence": 1,
+        "candidate_redundant_exposure": 0.0,
+        "effective_presence_estimated_tokens": 231352,
+        "name": "json",
+        "redundancy_factor": null,
+        "repeated_estimated_tokens": 0,
+        "unique_semantic_information_estimated_tokens": 0
+      },
+      {
+        "average_persistence": 1.8837209302325582,
+        "candidate_redundant_exposure": 5941.2558139534885,
+        "effective_presence_estimated_tokens": 7026,
+        "name": "source_code",
+        "redundancy_factor": 4.232530120481928,
+        "repeated_estimated_tokens": 3154,
+        "unique_semantic_information_estimated_tokens": 1660
+      }
+    ],
+    "estimated_token_total": 877284,
+    "exact_repeated_blocks": 285,
+    "exact_repeated_estimated_tokens": 312799,
+    "exact_repeated_token_share": 0.35655386397107436,
+    "persistence": {
+      "by_detected_content": {
+        "json": {
+          "average": 1,
+          "distribution": {
+            "count": 19,
+            "max": 1.0,
+            "p50": 1.0,
+            "p75": 1.0,
+            "p90": 1.0,
+            "p95": 1.0,
+            "p99": 1.0
+          }
+        },
+        "plain_text": {
+          "average": 1.8085106382978724,
+          "distribution": {
+            "count": 188,
+            "max": 2.0,
+            "p50": 2.0,
+            "p75": 2.0,
+            "p90": 2.0,
+            "p95": 2.0,
+            "p99": 2.0
+          }
+        },
+        "source_code": {
+          "average": 1.8837209302325582,
+          "distribution": {
+            "count": 43,
+            "max": 2.0,
+            "p50": 2.0,
+            "p75": 2.0,
+            "p90": 2.0,
+            "p95": 2.0,
+            "p99": 2.0
+          }
+        },
+        "unknown": {
+          "average": 1.778688524590164,
+          "distribution": {
+            "count": 366,
+            "max": 2.0,
+            "p50": 2.0,
+            "p75": 2.0,
+            "p90": 2.0,
+            "p95": 2.0,
+            "p99": 2.0
+          }
+        }
+      },
+      "distribution": {
+        "count": 616,
+        "max": 2.0,
+        "p50": 2.0,
+        "p75": 2.0,
+        "p90": 2.0,
+        "p95": 2.0,
+        "p99": 2.0
+      }
+    },
+    "semantic_repeated_blocks": 190,
+    "semantic_repeated_estimated_tokens": 312799,
+    "semantic_repeated_token_share": 0.35655386397107436,
+    "within_request": {
+      "exact_repeated_blocks": 0,
+      "exact_repeated_estimated_tokens": 0,
+      "semantic_repeated_blocks": 0,
+      "semantic_repeated_estimated_tokens": 0
+    }
+  },
+  "repetition_deltas": {
+    "changed_blocks": 0,
+    "new_blocks": 97,
+    "new_estimated_tokens": null,
+    "removed_blocks": 0,
+    "repeated_blocks": 285,
+    "repeated_estimated_tokens": null,
+    "rows": 19,
+    "stable_prefix_estimated_tokens": null
+  },
+  "report_version": 1,
+  "stable_prefix": {
+    "estimated_tokens": 0,
+    "mean_estimated_tokens": null,
+    "provider_cache_comparison": "descriptive_only",
+    "share": 0.0
+  },
+  "unknown": {
+    "block_count": 451,
+    "estimated_tokens": 226570,
+    "exact_fingerprint_max_frequency": 2,
+    "exact_fingerprint_unique": 261,
+    "raw_bytes": 3857389,
+    "semantic_fingerprint_average_frequency": 1.9047619047619047,
+    "semantic_fingerprint_max_frequency": 2,
+    "semantic_fingerprint_unique": 105,
+    "size_distribution_estimated_tokens": {
+      "count": 216,
+      "max": 4054.0,
+      "p50": 210.0,
+      "p75": 1180.0,
+      "p90": 4054.0,
+      "p95": 4054.0,
+      "p99": 4054.0
+    },
+    "size_distribution_raw_bytes": {
+      "count": 451,
+      "max": 28591.0,
+      "p50": 3293.0,
+      "p75": 18170.0,
+      "p90": 28079.0,
+      "p95": 28591.0,
+      "p99": 28591.0
+    },
+    "token_share": 0.258263002630847
+  }
+}

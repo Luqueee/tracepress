@@ -3231,22 +3231,27 @@ fn provider_endpoint(transport: ProviderTransport) -> Result<ProviderEndpoint, S
     }
 }
 
-fn configure_codex_subscription(command: &mut Command, proxy_address: std::net::SocketAddr) {
+fn configure_codex_subscription(args: &mut Vec<String>, proxy_address: std::net::SocketAddr) {
     let base_url = format!("http://{proxy_address}/v1");
-    let _command = command.args([
-        "-c",
-        "model_provider=tracepress_subscription",
-        "-c",
-        "model_providers.tracepress_subscription.name=OpenAI",
-        "-c",
-        &format!("model_providers.tracepress_subscription.base_url=\"{base_url}\""),
-        "-c",
-        "model_providers.tracepress_subscription.wire_api=\"responses\"",
-        "-c",
-        "model_providers.tracepress_subscription.requires_openai_auth=true",
-        "-c",
-        "model_providers.tracepress_subscription.supports_websockets=false",
-    ]);
+    let overrides = [
+        "-c".to_owned(),
+        "model_provider=tracepress_subscription".to_owned(),
+        "-c".to_owned(),
+        "model_providers.tracepress_subscription.name=OpenAI".to_owned(),
+        "-c".to_owned(),
+        format!("model_providers.tracepress_subscription.base_url=\"{base_url}\""),
+        "-c".to_owned(),
+        "model_providers.tracepress_subscription.wire_api=\"responses\"".to_owned(),
+        "-c".to_owned(),
+        "model_providers.tracepress_subscription.requires_openai_auth=true".to_owned(),
+        "-c".to_owned(),
+        "model_providers.tracepress_subscription.supports_websockets=false".to_owned(),
+    ];
+    let insertion = args
+        .iter()
+        .position(|argument| argument == "exec")
+        .map_or(0, |index| index.saturating_add(1));
+    let _removed = args.splice(insertion..insertion, overrides);
 }
 
 #[allow(
@@ -3313,8 +3318,9 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
     let proxy_task = tokio::spawn(async move { serve(listener, proxy.router()).await });
     let base_url = format!("http://{proxy_address}/v1");
     let mut command = Command::new(&agent);
+    let mut args = args;
     if matches!(transport, ProviderTransport::ChatGptCodexSubscription) && is_codex_agent(&agent) {
-        configure_codex_subscription(&mut command, proxy_address);
+        configure_codex_subscription(&mut args, proxy_address);
     }
     let status_result = command
         .args(args)
@@ -3881,9 +3887,27 @@ mod tests {
     use super::{
         AnalysisSequence, CONTEXT_INGESTION_QUEUE_HARD_CAP, ContextAnalysisDropReason,
         ContextCounters, ContextSnapshotId, ContextSnapshotStatus, PendingAnalysisEvidence,
-        RequestId, TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator, context_ingestion_queue_capacity,
-        reconcile_pending_context_with,
+        RequestId, TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator, configure_codex_subscription,
+        context_ingestion_queue_capacity, reconcile_pending_context_with,
     };
+
+    #[test]
+    fn codex_subscription_overrides_follow_the_exec_subcommand() {
+        let mut args = vec!["exec".to_owned(), "--ephemeral".to_owned()];
+        configure_codex_subscription(
+            &mut args,
+            std::net::SocketAddr::from(([127, 0, 0, 1], 43_191)),
+        );
+
+        assert_eq!(args[0], "exec");
+        assert_eq!(args[1], "-c");
+        assert_eq!(args[2], "model_provider=tracepress_subscription");
+        assert!(args.iter().any(|argument| {
+            argument
+                == "model_providers.tracepress_subscription.base_url=\"http://127.0.0.1:43191/v1\""
+        }));
+        assert_eq!(args[13], "--ephemeral");
+    }
 
     #[test]
     fn context_ingestion_queue_is_hard_capped_without_zero_capacity() {

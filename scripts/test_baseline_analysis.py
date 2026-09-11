@@ -1,0 +1,307 @@
+#!/usr/bin/env python3
+"""Contract tests for the offline baseline reports."""
+
+from __future__ import annotations
+
+import importlib.util
+import json
+import sqlite3
+import sys
+import unittest
+from pathlib import Path
+from tempfile import TemporaryDirectory
+
+
+ROOT = Path(__file__).resolve().parents[1]
+
+
+def load_script(name: str):
+    path = ROOT / "scripts" / name
+    spec = importlib.util.spec_from_file_location(path.stem, path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {path}")
+    module = importlib.util.module_from_spec(spec)
+    sys.modules[path.stem] = module
+    spec.loader.exec_module(module)
+    return module
+
+
+ANALYZER = load_script("analyze_baseline.py")
+CONVERGENCE = load_script("check_baseline_convergence.py")
+
+
+def create_fixture() -> sqlite3.Connection:
+    connection = sqlite3.connect(":memory:")
+    connection.executescript(
+        """
+        CREATE TABLE sessions (
+            session_id TEXT PRIMARY KEY,
+            state TEXT NOT NULL,
+            ended_at TEXT
+        );
+        CREATE TABLE operations (
+            operation_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            kind TEXT NOT NULL,
+            status TEXT NOT NULL
+        );
+        CREATE TABLE provider_requests (
+            request_id TEXT PRIMARY KEY,
+            operation_id TEXT NOT NULL,
+            request_kind TEXT NOT NULL,
+            transport TEXT,
+            model TEXT,
+            reasoning_effort TEXT,
+            parser_version INTEGER,
+            observation_status TEXT,
+            content_encoding TEXT,
+            analysis_decode_status TEXT,
+            wire_bytes INTEGER,
+            decoded_bytes INTEGER
+        );
+        CREATE TABLE provider_attempts (
+            attempt_id TEXT PRIMARY KEY,
+            request_id TEXT NOT NULL,
+            status_code INTEGER,
+            status TEXT NOT NULL,
+            observation_status TEXT,
+            transport_error TEXT
+        );
+        CREATE TABLE provider_usage (
+            attempt_id TEXT PRIMARY KEY,
+            input_total INTEGER,
+            input_cached INTEGER,
+            output_total INTEGER,
+            output_reasoning INTEGER,
+            usage_status TEXT,
+            normalizer_version INTEGER
+        );
+        CREATE TABLE context_snapshots (
+            snapshot_id TEXT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            provider_request_id TEXT NOT NULL,
+            inference_operation_id TEXT NOT NULL,
+            analysis_version INTEGER,
+            status TEXT NOT NULL,
+            correlation_status TEXT,
+            explicit_request_complete INTEGER
+        );
+        CREATE TABLE context_analysis_metrics (
+            snapshot_id TEXT PRIMARY KEY,
+            explicit_bytes INTEGER,
+            unknown_block_count INTEGER,
+            semantic_coverage_basis_points INTEGER,
+            estimated_tool_definition_share REAL,
+            estimated_tool_result_share REAL,
+            stable_explicit_prefix_estimate INTEGER,
+            estimator TEXT,
+            estimator_version INTEGER,
+            estimate_confidence TEXT
+        );
+        CREATE TABLE context_block_occurrences (
+            block_occurrence_id TEXT PRIMARY KEY,
+            snapshot_id TEXT NOT NULL,
+            ordinal INTEGER NOT NULL,
+            kind TEXT NOT NULL,
+            role TEXT NOT NULL,
+            origin TEXT NOT NULL,
+            raw_bytes INTEGER NOT NULL,
+            exact_fingerprint BLOB,
+            semantic_fingerprint BLOB,
+            fingerprint_version INTEGER,
+            estimated_tokens INTEGER,
+            estimator TEXT,
+            estimator_version INTEGER,
+            estimate_confidence TEXT,
+            detected_kind TEXT,
+            detector_version INTEGER,
+            repetition_score REAL
+        );
+        CREATE TABLE context_deltas (
+            current_snapshot_id TEXT PRIMARY KEY,
+            previous_snapshot_id TEXT,
+            repeated_blocks INTEGER,
+            new_blocks INTEGER,
+            changed_blocks INTEGER,
+            removed_blocks INTEGER,
+            repeated_estimated_tokens INTEGER,
+            new_estimated_tokens INTEGER,
+            common_prefix_estimated_tokens INTEGER
+        );
+        CREATE TABLE token_reconciliations (
+            snapshot_id TEXT PRIMARY KEY,
+            visible_estimated_tokens INTEGER,
+            provider_input_tokens INTEGER,
+            residual_tokens INTEGER,
+            comparability TEXT NOT NULL
+        );
+        CREATE TABLE events (
+            seq INTEGER PRIMARY KEY,
+            event_type TEXT NOT NULL,
+            payload BLOB NOT NULL
+        );
+        INSERT INTO sessions VALUES ('s1', 'closed', 'done');
+        INSERT INTO operations VALUES ('op1', 's1', 'llm_inference', 'completed');
+        INSERT INTO provider_requests VALUES
+            ('r1', 'op1', 'turn', 'chatgpt_codex_subscription', 'gpt-5.6-luna', 'xhigh', 1, 'complete', 'zstd', 'decoded', 100, 300);
+        INSERT INTO provider_attempts VALUES ('a1', 'r1', 200, 'completed', 'complete', NULL);
+        INSERT INTO provider_usage VALUES ('a1', 100, 60, 10, 4, 'final', 1);
+        INSERT INTO context_snapshots VALUES ('snap1', 's1', 'r1', 'op1', 1, 'complete', 'correlated', 1);
+        INSERT INTO context_analysis_metrics VALUES ('snap1', 300, 1, 9000, 0.2, 0.6, 40, 'structural-heuristic', 1, 'heuristic');
+        INSERT INTO context_block_occurrences VALUES
+            ('b1', 'snap1', 0, 'text', 'user', 'human_authored', 100, X'01', X'11', 1, 10, 'structural-heuristic', 1, 'heuristic', 'plain_text', 1, 0.1),
+            ('b2', 'snap1', 1, 'tool_result', 'tool', 'tool_generated', 200, X'02', NULL, 1, 30, 'structural-heuristic', 1, 'heuristic', 'json', 1, 0.4),
+            ('b3', 'snap1', 2, 'unknown', 'unknown', 'unknown', 50, X'03', NULL, 1, NULL, NULL, NULL, NULL, NULL, NULL, 0.0);
+        INSERT INTO token_reconciliations VALUES ('snap1', NULL, NULL, NULL, 'missing_local_estimate');
+        INSERT INTO events VALUES (1, 'context.analysis.started', '{}');
+        INSERT INTO events VALUES (2, 'context.analysis.completed', '{}');
+        INSERT INTO events VALUES (3, 'provider.request.observed', '{}');
+        INSERT INTO events VALUES (4, 'provider.response.completed', '{}');
+        INSERT INTO events VALUES (5, 'provider.usage.observed', '{}');
+        """
+    )
+    return connection
+
+
+class BaselineAnalysisContractTests(unittest.TestCase):
+    def test_report_is_token_weighted_and_keeps_missing_reconciliation_unknown(self) -> None:
+        report = ANALYZER.analyze_connection(
+            create_fixture(),
+            measurement_id="baseline-001",
+            cohort_label="n20",
+            cohort_kind="naturalistic",
+            tracepress_commit="70957bba",
+            codex_version="0.154.0",
+        )
+
+        self.assertEqual(report["dataset"]["sessions_total"], 1)
+        self.assertEqual(report["dataset"]["requests_total"], 1)
+        self.assertEqual(report["quality"]["analysis_coverage"], 1.0)
+        self.assertEqual(report["quality"]["correlation_coverage"], 1.0)
+        self.assertEqual(report["quality"]["semantic_coverage"]["mean"], 0.9)
+        self.assertFalse(report["provider_usage"]["token_reconciliation_available"])
+        self.assertEqual(report["provider_usage"]["reconciliation_unavailable"]["missing_local_estimate"], 1)
+
+        content = {row["name"]: row for row in report["composition"]["detected_content"]}
+        self.assertGreater(content["json"]["token_share"], content["plain_text"]["token_share"])
+        self.assertEqual(report["unknown"]["estimated_tokens"], 0)
+        self.assertEqual(report["unknown"]["block_count"], 1)
+
+    def test_compaction_report_pairs_adjacent_visible_windows_without_payloads(self) -> None:
+        requests = [
+            {"request_id": "r1", "request_kind": "turn"},
+            {"request_id": "r2", "request_kind": "compaction_v2", "compaction_trigger": "unknown"},
+            {"request_id": "r3", "request_kind": "turn"},
+        ]
+        attempts = {
+            "r2": [{"compaction_output_seen": 1}],
+        }
+        usage = {"r1": 100, "r2": 120, "r3": 40}
+        snapshots = [
+            {"snapshot_id": "s1", "session_id": "session", "provider_request_id": "r1"},
+            {"snapshot_id": "s2", "session_id": "session", "provider_request_id": "r2"},
+            {"snapshot_id": "s3", "session_id": "session", "provider_request_id": "r3"},
+        ]
+        context = {
+            "s1": {"session_id": "session", "snapshot_order": 0, "request_id": "r1"},
+            "s2": {"session_id": "session", "snapshot_order": 1, "request_id": "r2"},
+            "s3": {"session_id": "session", "snapshot_order": 2, "request_id": "r3"},
+        }
+        blocks = {
+            "s1": [{"kind": "tool_result", "detected_kind": "json", "estimated_tokens": 20, "raw_bytes": 80, "semantic_fingerprint": b"same"}],
+            "s2": [],
+            "s3": [{"kind": "tool_result", "detected_kind": "json", "estimated_tokens": 10, "raw_bytes": 40, "semantic_fingerprint": b"same"}],
+        }
+
+        result = ANALYZER.compaction_report(
+            requests,
+            attempts,
+            usage,
+            snapshots,
+            blocks,
+            context,
+            "compaction_calibration",
+        )
+
+        self.assertEqual(result["requests"], 1)
+        self.assertEqual(result["output_seen"], 1)
+        self.assertEqual(result["pre_post_pairs"], 1)
+        self.assertEqual(result["observed_context_reduction"]["count"], 1)
+        self.assertEqual(result["observed_context_reduction"]["p50"], 0.5)
+        self.assertEqual(result["survival_by_category"][0]["survival_share"], 1.0)
+        self.assertEqual(len(result["windows"]), 2)
+
+    def test_report_contains_no_payload_or_fingerprint_values(self) -> None:
+        report = ANALYZER.analyze_connection(
+            create_fixture(),
+            measurement_id="baseline-001",
+            cohort_label="n20",
+            cohort_kind="naturalistic",
+            tracepress_commit="70957bba",
+            codex_version="0.154.0",
+        )
+        serialized = json.dumps(report, sort_keys=True)
+        self.assertNotIn("0101", serialized)
+        self.assertNotIn("0203", serialized)
+        self.assertNotIn("Authorization", serialized)
+        self.assertNotIn("Bearer", serialized)
+
+    def test_artifacts_include_a_reproducible_manifest(self) -> None:
+        report = ANALYZER.analyze_connection(
+            create_fixture(),
+            measurement_id="baseline-001",
+            cohort_label="n20",
+            cohort_kind="naturalistic",
+            tracepress_commit="70957bba",
+            codex_version="0.154.0",
+        )
+        with TemporaryDirectory() as directory:
+            paths = ANALYZER.write_report_artifacts(report, Path(directory))
+            manifest = json.loads(paths[2].read_text())
+
+        self.assertEqual(manifest["measurement_id"], "baseline-001")
+        self.assertEqual(manifest["cohort_kind"], "naturalistic")
+        self.assertEqual(manifest["tracepress_commit"], "70957bba")
+        self.assertEqual(manifest["analysis_version"], 1)
+
+
+class BaselineConvergenceContractTests(unittest.TestCase):
+    @staticmethod
+    def report(n: int, share: float = 0.5) -> dict:
+        return {
+            "dataset": {"sessions_total": n},
+            "quality": {
+                "analysis_coverage": 1.0,
+                "correlation_coverage": 1.0,
+                "forwarding_errors": 0,
+                "context_malformed": 0,
+            },
+            "composition": {
+                "detected_content": [
+                    {"name": "plain_text", "token_share": share},
+                    {"name": "json", "token_share": 1.0 - share},
+                ],
+                "by_kind": [],
+            },
+            "repetition": {"exact_repeated_token_share": 0.1, "semantic_repeated_token_share": 0.2},
+            "provider_usage": {"cache_ratio": 0.4},
+            "stable_prefix": {"share": 0.3},
+            "distributions": {"estimated_tokens": {"p50": 10.0, "p90": 20.0}},
+            "opportunity_ranking": [{"name": "json"}, {"name": "plain_text"}, {"name": "tool_result"}],
+        }
+
+    def test_convergence_requires_two_stable_transitions_and_n40(self) -> None:
+        n20 = self.report(20)
+        n30 = self.report(30)
+        n40 = self.report(40)
+        self.assertEqual(CONVERGENCE.evaluate_reports([n20, n30])["status"], "NEED_MORE_SESSIONS")
+        result = CONVERGENCE.evaluate_reports([n20, n30, n40])
+        self.assertEqual(result["status"], "CONVERGED")
+
+    def test_convergence_rejects_large_share_change(self) -> None:
+        result = CONVERGENCE.evaluate_reports([self.report(20), self.report(30, 0.7), self.report(40, 0.7)])
+        self.assertEqual(result["status"], "NEED_MORE_SESSIONS")
+
+
+if __name__ == "__main__":
+    raise SystemExit(unittest.main())

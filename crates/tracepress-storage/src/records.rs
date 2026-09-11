@@ -17,8 +17,9 @@ use crate::{
         detected_content_kind_text, estimate_confidence_text, fidelity_class, inference_status,
         logical_context_status_text, observation_status_text, operation_kind, operation_status,
         opportunity_signals_text, provider_kind_text, provider_protocol_text,
-        provider_transport_text, reconciliation_status_text, request_method, request_route,
-        response_state_text, session_state, sqlite, sqlite_optional, sqlite_u64, usage_status_text,
+        provider_transport_text, reconciliation_status_text, request_kind, request_method,
+        request_route, response_state_text, session_state, sqlite, sqlite_optional, sqlite_u64,
+        usage_status_text,
     },
 };
 
@@ -252,7 +253,7 @@ fn insert(
             image_input_block_count,
             file_input_block_count,
         } => committed(sqlite(transaction.execute(
-            "INSERT INTO provider_requests(request_id, operation_id, route, method, request_bytes, provider, protocol, parser_version, observation_status, model, stream, background, store, reasoning_effort, text_verbosity, truncation, previous_response_id_present, input_item_count, tool_count, text_input_block_count, image_input_block_count, file_input_block_count, transport, endpoint_profile_version, usage_source, billing_model, content_encoding, analysis_decode_status, wire_bytes, wire_sha256, decoded_bytes, decode_duration_us, decoder_version) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33)",
+            "INSERT INTO provider_requests(request_id, operation_id, route, method, request_bytes, provider, protocol, parser_version, observation_status, model, stream, background, store, reasoning_effort, text_verbosity, truncation, previous_response_id_present, input_item_count, tool_count, text_input_block_count, image_input_block_count, file_input_block_count, transport, endpoint_profile_version, usage_source, billing_model, content_encoding, analysis_decode_status, wire_bytes, wire_sha256, decoded_bytes, decode_duration_us, decoder_version, request_kind) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34)",
             params![
                 metadata.request_id().to_string(),
                 operation_id.to_string(),
@@ -290,6 +291,7 @@ fn insert(
                 (*decoded_bytes).map(|value| sqlite_u64(value, "decoded_bytes")).transpose()?,
                 (*decode_duration_us).map(|value| sqlite_u64(value, "decode_duration_us")).transpose()?,
                 (*decoder_version).map(|value| sqlite_u64(u64::from(value), "decoder_version")).transpose()?,
+                request_kind(metadata.route()),
             ],
         ))?),
         WriteCommand::ProviderAttempt {
@@ -505,6 +507,7 @@ fn insert(
             status,
             completed_at_us,
             request_content_hash,
+            analysis_content_hash,
             explicit_block_count,
             analyzed_bytes,
             skipped_bytes,
@@ -521,12 +524,13 @@ fn insert(
             reference_resolved_locally,
             correlation_status,
         } => committed(sqlite(transaction.execute(
-            "UPDATE context_snapshots SET status = ?2, completed_at_us = ?3, request_content_hash = ?4, explicit_block_count = ?5, analyzed_bytes = ?6, skipped_bytes = ?7, explicit_request_complete = ?8, uses_previous_response = ?9, uses_conversation_state = ?10, uses_item_references = ?11, uses_prompt_reference = ?12, uses_external_files = ?13, uses_external_images = ?14, contains_opaque_items = ?15, logical_context_status = ?16, duplicate_key_detected = ?17, reference_resolved_locally = ?18, correlation_status = ?19 WHERE snapshot_id = ?1",
+            "UPDATE context_snapshots SET status = ?2, completed_at_us = ?3, request_content_hash = ?4, analysis_content_hash = ?5, explicit_block_count = ?6, analyzed_bytes = ?7, skipped_bytes = ?8, explicit_request_complete = ?9, uses_previous_response = ?10, uses_conversation_state = ?11, uses_item_references = ?12, uses_prompt_reference = ?13, uses_external_files = ?14, uses_external_images = ?15, contains_opaque_items = ?16, logical_context_status = ?17, duplicate_key_detected = ?18, reference_resolved_locally = ?19, correlation_status = ?20 WHERE snapshot_id = ?1",
             params![
                 snapshot_id.to_string(),
                 context_analysis_status_text(*status),
                 sqlite_optional(*completed_at_us, "completed_at_us")?,
                 request_content_hash.as_deref(),
+                analysis_content_hash.as_deref(),
                 sqlite_optional(*explicit_block_count, "explicit_block_count")?,
                 sqlite_optional(*analyzed_bytes, "analyzed_bytes")?,
                 sqlite_optional(*skipped_bytes, "skipped_bytes")?,

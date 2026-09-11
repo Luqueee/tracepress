@@ -15,6 +15,8 @@ pub enum RequestRoute {
     ChatCompletions,
     /// OpenAI-compatible `/v1/responses`.
     Responses,
+    /// `OpenAI` Responses compaction endpoint.
+    ResponsesCompact,
 }
 
 /// The allowlisted method for a provider request.
@@ -133,6 +135,20 @@ impl RequestMetadata {
         Self {
             request_id,
             route: RequestRoute::Responses,
+            method: RequestMethod::Post,
+            request_bytes,
+            status_code: None,
+            response_bytes: None,
+            latency_us: None,
+        }
+    }
+
+    /// Creates transport metadata for the Responses compaction forwarding seam.
+    #[must_use]
+    pub const fn responses_compact(request_id: RequestId, request_bytes: u64) -> Self {
+        Self {
+            request_id,
+            route: RequestRoute::ResponsesCompact,
             method: RequestMethod::Post,
             request_bytes,
             status_code: None,

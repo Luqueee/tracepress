@@ -122,6 +122,9 @@ const V4_COLUMNS: [&str; 11] = [
     "decoder_version",
 ];
 
+const V5_COLUMNS: [&str; 1] = ["request_kind"];
+const V6_COLUMNS: [&str; 1] = ["analysis_content_hash"];
+
 #[test]
 fn released_v1_and_v2_migrations_are_byte_identical() {
     // Given: the released migrations, which no later phase may edit.
@@ -175,7 +178,7 @@ async fn migration_from_empty_and_reopen() -> TestResult {
         [],
         |row| row.get(0),
     )?;
-    assert_eq!(version, 4);
+    assert_eq!(version, 6);
     let mut statement = connection.prepare(
         "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
     )?;
@@ -208,14 +211,14 @@ fn context_snapshot_recovery_marker_is_nullable_and_has_no_default() -> TestResu
 }
 
 #[tokio::test]
-async fn unsupported_schema_version_above_v4_is_rejected_on_open() -> TestResult {
+async fn unsupported_schema_version_above_v6_is_rejected_on_open() -> TestResult {
     // Given: a real database whose schema metadata records a future version.
     let directory = TempDir::new()?;
     let database = directory.path().join("newer-schema.sqlite3");
     let connection = Connection::open(&database)?;
     connection.execute_batch(
         "CREATE TABLE schema_metadata (schema_version INTEGER NOT NULL PRIMARY KEY, applied_at TEXT NOT NULL) STRICT;
-         INSERT INTO schema_metadata(schema_version, applied_at) VALUES (5, '2026-09-08T00:00:00Z');",
+         INSERT INTO schema_metadata(schema_version, applied_at) VALUES (7, '2026-09-08T00:00:00Z');",
     )?;
     drop(connection);
     let config = StorageConfig::new(database, Durability::Balanced, MaxIpcQueueItems::new(1)?);
@@ -227,8 +230,8 @@ async fn unsupported_schema_version_above_v4_is_rejected_on_open() -> TestResult
     assert!(matches!(
         result,
         Err(StorageError::UnsupportedSchemaVersion {
-            found: 5,
-            supported: 4
+            found: 7,
+            supported: 6
         })
     ));
     Ok(())
@@ -260,7 +263,7 @@ fn sqlite_busy_and_interrupted_migration_leaves_prior_or_complete_state() -> Tes
         [],
         |row| row.get(0),
     )?;
-    assert_eq!(version, 4);
+    assert_eq!(version, 6);
     Ok(())
 }
 
@@ -310,7 +313,7 @@ fn interrupted_v2_migration_rolls_back_atomically_from_v1() -> TestResult {
     let versions = statement
         .query_map([], |row| row.get::<_, i64>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    assert_eq!(versions, vec![1, 2, 3, 4]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6]);
     for (table, columns) in V2_COLUMNS {
         let actual = table_columns(&connection, table)?;
         for column in columns {
@@ -378,7 +381,7 @@ fn interrupted_v3_migration_rolls_back_atomically_from_v2() -> TestResult {
     let versions = statement
         .query_map([], |row| row.get::<_, i64>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    assert_eq!(versions, vec![1, 2, 3, 4]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6]);
     for table in V3_TABLES {
         assert!(
             !table_columns(&connection, table)?.is_empty(),
@@ -391,6 +394,22 @@ fn interrupted_v3_migration_rolls_back_atomically_from_v2() -> TestResult {
                 .iter()
                 .any(|actual| actual == column),
             "v4 column provider_requests.{column} was not applied"
+        );
+    }
+    for column in V5_COLUMNS {
+        assert!(
+            table_columns(&connection, "provider_requests")?
+                .iter()
+                .any(|actual| actual == column),
+            "v5 column provider_requests.{column} was not applied"
+        );
+    }
+    for column in V6_COLUMNS {
+        assert!(
+            table_columns(&connection, "context_snapshots")?
+                .iter()
+                .any(|actual| actual == column),
+            "v6 column context_snapshots.{column} was not applied"
         );
     }
     Ok(())
@@ -432,7 +451,7 @@ async fn existing_phase_two_database_upgrades_to_v3_without_losing_rows() -> Tes
     let versions = statement
         .query_map([], |row| row.get::<_, i64>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    assert_eq!(versions, vec![1, 2, 3, 4]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6]);
     let preserved: (String, i64, i64) = connection.query_row(
         "SELECT model, request_bytes, (SELECT input_total FROM provider_usage WHERE attempt_id = 'phase-two-attempt') FROM provider_requests WHERE request_id = 'phase-two-request'",
         [],

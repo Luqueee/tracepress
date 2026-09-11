@@ -20,9 +20,9 @@ use tracepress_provider::{
     ResponseObservation,
 };
 use tracepress_proxy::{
-    ContextAnalysisMode, ContextAnalysisObservation, ContextAnalysisOutcome, ForwardId,
-    ObservationSinkError, ProviderObservationSink, ProxyConfig, RequestContextObservation,
-    TransparentProxy, TransportFailure,
+    CompactionObservation, ContextAnalysisMode, ContextAnalysisObservation, ContextAnalysisOutcome,
+    ForwardId, ObservationSinkError, ProviderObservationSink, ProxyConfig,
+    RequestContextObservation, TransparentProxy, TransportFailure,
 };
 
 type TestResult = Result<(), Box<dyn std::error::Error>>;
@@ -40,6 +40,7 @@ struct Arrival {
 struct Sink {
     requests: Arc<Mutex<Vec<RequestObservation>>>,
     contexts: Arc<Mutex<Vec<ContextAnalysisOutcome>>>,
+    compactions: Arc<Mutex<Vec<CompactionObservation>>>,
 }
 
 impl ProviderObservationSink for Sink {
@@ -80,6 +81,17 @@ impl ProviderObservationSink for Sink {
     ) -> Result<(), ObservationSinkError> {
         Ok(())
     }
+
+    fn try_record_compaction(
+        &self,
+        observation: CompactionObservation,
+    ) -> Result<(), ObservationSinkError> {
+        self.compactions
+            .lock()
+            .map_err(|_error| ObservationSinkError::rejected())?
+            .push(observation);
+        Ok(())
+    }
 }
 
 fn limits() -> Result<ResourceLimits, tracepress_core::ResourceLimitsError> {
@@ -116,6 +128,21 @@ async fn wait_for(sink: &Sink) -> TestResult {
         tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     }
     Err("phase 3.1 observation did not settle".into())
+}
+
+async fn wait_for_compaction(sink: &Sink) -> TestResult {
+    for _attempt in 0..500 {
+        if !sink
+            .compactions
+            .lock()
+            .map_err(|_error| "compaction lock poisoned")?
+            .is_empty()
+        {
+            return Ok(());
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+    Err("compaction observation did not settle".into())
 }
 
 #[allow(
@@ -230,6 +257,7 @@ async fn zstd_forwarding_is_wire_exact_while_analysis_uses_json() -> TestResult 
         AnalysisDecodeStatus::Decoded
     );
     assert_eq!(observation.wire_bytes, Some(wire.len() as u64));
+    assert_eq!(observation.request_bytes, Some(json.len() as u64));
     assert_eq!(observation.decoded_bytes, Some(json.len() as u64));
     assert_eq!(
         observation.wire_sha256.as_deref().map(<[u8]>::len),
@@ -249,9 +277,248 @@ async fn zstd_forwarding_is_wire_exact_while_analysis_uses_json() -> TestResult 
         .wire_sha256
         .as_deref()
         .ok_or("wire digest missing")?;
-    assert_ne!(
+    assert_eq!(
         context.request_content_hash.as_bytes().as_slice(),
         wire_sha256
+    );
+    assert_ne!(
+        context.analysis_content_hash.as_bytes().as_slice(),
+        wire_sha256
+    );
+
+    proxy_task.abort();
+    upstream_task.abort();
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the test keeps the complete compaction wire assertions in one vertical slice"
+)]
+#[tokio::test]
+async fn compaction_is_wire_exact_and_transport_only() -> TestResult {
+    let arrivals = Arc::new(Mutex::new(Vec::<Arrival>::new()));
+    let upstream_arrivals = Arc::clone(&arrivals);
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let upstream_address = upstream_listener.local_addr()?;
+    let upstream_task = tokio::spawn(async move {
+        let app = Router::new().route(
+            "/v1/responses/compact",
+            post(move |request: Request| {
+                let upstream_arrivals = Arc::clone(&upstream_arrivals);
+                async move {
+                    let (parts, body) = request.into_parts();
+                    let body = to_bytes(body, 8 * 1024 * 1024).await.unwrap_or_default();
+                    if let Ok(mut arrivals) = upstream_arrivals.lock() {
+                        arrivals.push(Arrival {
+                            path: parts.uri.path().to_owned(),
+                            body,
+                            authorization: parts
+                                .headers
+                                .get("authorization")
+                                .and_then(|value| value.to_str().ok())
+                                .map(str::to_owned),
+                            content_encoding: parts
+                                .headers
+                                .get("content-encoding")
+                                .and_then(|value| value.to_str().ok())
+                                .map(str::to_owned),
+                            content_length: parts
+                                .headers
+                                .get("content-length")
+                                .and_then(|value| value.to_str().ok())
+                                .map(str::to_owned),
+                        });
+                    }
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "application/octet-stream")
+                        .body(Body::from("compact-result"))
+                        .unwrap_or_else(|_error| Response::new(Body::empty()))
+                }
+            }),
+        );
+        let _result = axum::serve(upstream_listener, app).await;
+    });
+
+    let sink = Arc::new(Sink::default());
+    let proxy = TransparentProxy::new(ProxyConfig::new(
+        ProviderEndpoint::new(&format!("http://{upstream_address}/v1/responses/compact"))?,
+        limits()?,
+        ContextAnalysisMode::Shadow,
+    )?)?
+    .with_observation_sink(Arc::<Sink>::clone(&sink));
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_address = proxy_listener.local_addr()?;
+    let proxy_task = tokio::spawn(async move {
+        let _result = axum::serve(proxy_listener, proxy.router()).await;
+    });
+
+    let json = br#"{"previous_response_id":"resp_old","input":[{"type":"input_text","text":"compact me"}]}"#;
+    let wire = zstd::stream::encode_all(std::io::Cursor::new(json), 1)?;
+    let response = reqwest::Client::new()
+        .post(format!("http://{proxy_address}/v1/responses/compact"))
+        .header("content-encoding", "zstd")
+        .header(
+            "authorization",
+            "Bearer TRACEPRESS_SUBSCRIPTION_SECRET_CANARY",
+        )
+        .body(wire.clone())
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    assert_eq!(response.bytes().await?.as_ref(), b"compact-result");
+    wait_for_compaction(&sink).await?;
+
+    let arrival = arrivals
+        .lock()
+        .map_err(|_error| "upstream lock poisoned")?
+        .first()
+        .cloned()
+        .ok_or("upstream did not receive compact request")?;
+    assert_eq!(arrival.path, "/v1/responses/compact");
+    assert_eq!(arrival.body.as_ref(), wire.as_slice());
+    assert_eq!(arrival.content_encoding.as_deref(), Some("zstd"));
+    assert_eq!(
+        arrival.authorization.as_deref(),
+        Some("Bearer TRACEPRESS_SUBSCRIPTION_SECRET_CANARY")
+    );
+
+    assert!(
+        sink.requests
+            .lock()
+            .map_err(|_| "request lock poisoned")?
+            .is_empty()
+    );
+    assert!(
+        sink.contexts
+            .lock()
+            .map_err(|_| "context lock poisoned")?
+            .is_empty()
+    );
+    let observation = sink
+        .compactions
+        .lock()
+        .map_err(|_error| "compaction lock poisoned")?
+        .first()
+        .cloned()
+        .ok_or("compaction observation missing")?;
+    assert_eq!(observation.request_bytes, wire.len() as u64);
+    assert_eq!(observation.response_bytes, "compact-result".len() as u64);
+    assert_eq!(observation.status_code, Some(200));
+    assert_eq!(
+        observation.outcome,
+        tracepress_proxy::CompactionOutcome::Completed
+    );
+    assert_eq!(observation.content_encoding, ContentEncoding::Zstd);
+    assert!(observation.duration_us.is_some());
+
+    proxy_task.abort();
+    upstream_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
+async fn compaction_provider_error_is_forwarded_and_marked_failed() -> TestResult {
+    let arrivals = Arc::new(Mutex::new(Vec::<Arrival>::new()));
+    let upstream_arrivals = Arc::clone(&arrivals);
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let upstream_address = upstream_listener.local_addr()?;
+    let upstream_task = tokio::spawn(async move {
+        let app = Router::new().route(
+            "/v1/responses/compact",
+            post(move |request: Request| {
+                let upstream_arrivals = Arc::clone(&upstream_arrivals);
+                async move {
+                    let (parts, body) = request.into_parts();
+                    let body = to_bytes(body, 8 * 1024 * 1024).await.unwrap_or_default();
+                    if let Ok(mut arrivals) = upstream_arrivals.lock() {
+                        arrivals.push(Arrival {
+                            path: parts.uri.path().to_owned(),
+                            body,
+                            authorization: parts
+                                .headers
+                                .get("authorization")
+                                .and_then(|value| value.to_str().ok())
+                                .map(str::to_owned),
+                            content_encoding: parts
+                                .headers
+                                .get("content-encoding")
+                                .and_then(|value| value.to_str().ok())
+                                .map(str::to_owned),
+                            content_length: parts
+                                .headers
+                                .get("content-length")
+                                .and_then(|value| value.to_str().ok())
+                                .map(str::to_owned),
+                        });
+                    }
+                    Response::builder()
+                        .status(StatusCode::TOO_MANY_REQUESTS)
+                        .header("content-type", "application/json")
+                        .body(Body::from(r#"{"error":"retry"}"#))
+                        .unwrap_or_else(|_error| Response::new(Body::empty()))
+                }
+            }),
+        );
+        let _result = axum::serve(upstream_listener, app).await;
+    });
+
+    let sink = Arc::new(Sink::default());
+    let proxy = TransparentProxy::new(ProxyConfig::new(
+        ProviderEndpoint::new(&format!("http://{upstream_address}/v1/responses/compact"))?,
+        limits()?,
+        ContextAnalysisMode::Shadow,
+    )?)?
+    .with_observation_sink(Arc::<Sink>::clone(&sink));
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_address = proxy_listener.local_addr()?;
+    let proxy_task = tokio::spawn(async move {
+        let _result = axum::serve(proxy_listener, proxy.router()).await;
+    });
+
+    let request_body = Bytes::from_static(br#"{"input":[]}"#);
+    let response = reqwest::Client::new()
+        .post(format!("http://{proxy_address}/v1/responses/compact"))
+        .header(
+            "authorization",
+            "Bearer TRACEPRESS_SUBSCRIPTION_SECRET_CANARY",
+        )
+        .body(request_body.clone())
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(response.bytes().await?.as_ref(), br#"{"error":"retry"}"#);
+    wait_for_compaction(&sink).await?;
+
+    let arrival = arrivals
+        .lock()
+        .map_err(|_error| "upstream lock poisoned")?
+        .first()
+        .cloned()
+        .ok_or("upstream did not receive compact request")?;
+    assert_eq!(arrival.path, "/v1/responses/compact");
+    assert_eq!(arrival.body, request_body);
+    assert_eq!(
+        arrival.authorization.as_deref(),
+        Some("Bearer TRACEPRESS_SUBSCRIPTION_SECRET_CANARY")
+    );
+
+    let observation = sink
+        .compactions
+        .lock()
+        .map_err(|_error| "compaction lock poisoned")?
+        .first()
+        .cloned()
+        .ok_or("compaction observation missing")?;
+    assert_eq!(observation.status_code, Some(429));
+    assert_eq!(
+        observation.response_bytes,
+        br#"{"error":"retry"}"#.len() as u64
+    );
+    assert_eq!(
+        observation.outcome,
+        tracepress_proxy::CompactionOutcome::Failed
     );
 
     proxy_task.abort();

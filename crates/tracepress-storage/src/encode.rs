@@ -114,6 +114,7 @@ pub(crate) const fn operation_kind(value: OperationKind) -> &'static str {
         OperationKind::Recovery => "recovery",
         OperationKind::Evaluation => "evaluation",
         OperationKind::ProviderTool => "provider_tool",
+        OperationKind::ContextCompaction => "context_compaction",
     }
 }
 
@@ -144,6 +145,14 @@ pub(crate) const fn request_route(value: RequestRoute) -> &'static str {
     match value {
         RequestRoute::ChatCompletions => "chat_completions",
         RequestRoute::Responses => "responses",
+        RequestRoute::ResponsesCompact => "responses_compact",
+    }
+}
+
+pub(crate) const fn request_kind(value: RequestRoute) -> &'static str {
+    match value {
+        RequestRoute::ResponsesCompact => "compaction",
+        RequestRoute::ChatCompletions | RequestRoute::Responses => "turn",
     }
 }
 

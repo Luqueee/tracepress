@@ -512,6 +512,7 @@ async fn a_snapshot_only_becomes_complete_when_its_outcome_commits() -> TestResu
             status: ContextAnalysisStatus::Complete,
             completed_at_us: Some(1_757_412_000_250_000),
             request_content_hash: Some(Box::new([7_u8; 32])),
+            analysis_content_hash: Some(Box::new([8_u8; 32])),
             explicit_block_count: Some(3),
             analyzed_bytes: Some(4_096),
             skipped_bytes: Some(0),

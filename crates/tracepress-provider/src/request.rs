@@ -5,7 +5,8 @@ use serde_json::{Map, Value};
 
 use crate::domain::{
     AnalysisDecodeStatus, ContentEncoding, OPENAI_RESPONSES_PARSER_VERSION, ObservationInput,
-    ObservationStatus, ProviderKind, ProviderProtocol, ProviderTransport, status_for_error,
+    ObservationStatus, ProviderKind, ProviderProtocol, ProviderRequestKind, ProviderTransport,
+    status_for_error,
 };
 use crate::json::{self, NestedField, StringExtraction};
 
@@ -20,6 +21,9 @@ pub struct RequestObservation {
     /// Transport surface on which this request was forwarded.
     #[serde(default)]
     pub transport: ProviderTransport,
+    /// Whether this is a normal turn or a provider compaction request.
+    #[serde(default)]
+    pub request_kind: ProviderRequestKind,
     /// Version of the selected endpoint profile.
     #[serde(default)]
     pub endpoint_profile_version: Option<u32>,
@@ -87,6 +91,7 @@ impl RequestObservation {
             provider: ProviderKind::OpenAi,
             protocol: ProviderProtocol::OpenAiResponsesV1,
             transport: ProviderTransport::OpenAiPublicApi,
+            request_kind: ProviderRequestKind::Turn,
             endpoint_profile_version: None,
             parser_version: OPENAI_RESPONSES_PARSER_VERSION,
             status,
@@ -112,6 +117,36 @@ impl RequestObservation {
             image_input_blocks: None,
             file_input_blocks: None,
         }
+    }
+
+    /// Constructs an observation whose semantic body was unavailable to the parser.
+    #[must_use]
+    pub const fn unavailable(status: ObservationStatus) -> Self {
+        Self::empty(status)
+    }
+
+    /// Constructs a metadata-only observation for a request that is not parsed as Responses JSON.
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the transport-only record keeps each bounded wire metric explicit"
+    )]
+    #[must_use]
+    pub const fn transport_only(
+        request_kind: ProviderRequestKind,
+        request_bytes: u64,
+        wire_bytes: u64,
+        content_encoding: ContentEncoding,
+        transport: ProviderTransport,
+        endpoint_profile_version: u32,
+    ) -> Self {
+        let mut result = Self::empty(ObservationStatus::Unsupported);
+        result.request_bytes = Some(request_bytes);
+        result.wire_bytes = Some(wire_bytes);
+        result.content_encoding = content_encoding;
+        result.transport = transport;
+        result.endpoint_profile_version = Some(endpoint_profile_version);
+        result.request_kind = request_kind;
+        result
     }
 }
 

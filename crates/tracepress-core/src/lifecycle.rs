@@ -22,6 +22,8 @@ pub enum OperationKind {
     Evaluation,
     /// A provider-native tool execution.
     ProviderTool,
+    /// A provider-managed context compaction operation.
+    ContextCompaction,
 }
 
 /// Persisted lifecycle state of a Tracepress session.

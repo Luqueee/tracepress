@@ -17,8 +17,8 @@ use tracepress_daemon::{
     ProviderObservationOutcome, RecordCorrelationDegradation, RecordProviderObservation,
 };
 use tracepress_provider::{
-    ObservationInput, ObservationLimits, ProviderResponseState, StreamingObserver, parse_request,
-    parse_response,
+    ContentEncoding, ObservationInput, ObservationLimits, ProviderRequestKind,
+    ProviderResponseState, ProviderTransport, StreamingObserver, parse_request, parse_response,
 };
 use tracepress_storage::{Durability, StorageConfig, StorageWriter};
 
@@ -74,6 +74,76 @@ async fn persists_session_inference_request_attempt_and_usage_causally() -> Test
             row.get(0)
         })?;
     assert_eq!(usage_attempt, receipt.attempt_id.to_string());
+    Ok(())
+}
+
+#[tokio::test]
+async fn persists_compaction_as_a_dedicated_transport_operation() -> TestResult {
+    let directory = TempDir::new()?;
+    let daemon = daemon(&directory).await?;
+    let session = daemon.start_session("t0").await?;
+    let root = daemon
+        .create_operation(session.session_id, OperationKind::Agent, "t1", None)
+        .await?;
+    let mut request = tracepress_provider::RequestObservation::transport_only(
+        ProviderRequestKind::Compaction,
+        128,
+        128,
+        ContentEncoding::Zstd,
+        ProviderTransport::ChatGptCodexSubscription,
+        1,
+    );
+    request.wire_sha256 = Some(Box::new([7_u8; 32]));
+    let recorded = daemon
+        .record_provider_observation(RecordProviderObservation::new(
+            session.session_id,
+            root,
+            ProviderObservation::new(128, request, "t2")
+                .with_status_code(HttpStatusCode::new(200)?)
+                .with_transport_metrics(64, Some(9))
+                .with_outcome(ProviderObservationOutcome::Completed)
+                .with_ended_at("t3"),
+        ))
+        .await?;
+    daemon.shutdown().await?;
+
+    let database = Connection::open(directory.path().join("tracepress.sqlite3"))?;
+    let operation: (String, String) = database.query_row(
+        "SELECT kind, status FROM operations WHERE operation_id = ?1",
+        [recorded.operation_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(
+        operation,
+        ("context_compaction".to_owned(), "completed".to_owned())
+    );
+    let request_row: (String, String, String, String, Option<i64>, Option<i64>) = database.query_row(
+        "SELECT route, request_kind, transport, content_encoding, decoded_bytes, previous_response_id_present FROM provider_requests WHERE request_id = ?1",
+        [recorded.receipt.request_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?, row.get(5)?)),
+    )?;
+    assert_eq!(
+        request_row,
+        (
+            "responses_compact".to_owned(),
+            "compaction".to_owned(),
+            "chatgpt_codex_subscription".to_owned(),
+            "zstd".to_owned(),
+            None,
+            None,
+        )
+    );
+    let attempt: (i64, i64, i64) = database.query_row(
+        "SELECT status_code, byte_count, duration_us FROM provider_attempts WHERE attempt_id = ?1",
+        [recorded.receipt.attempt_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?)),
+    )?;
+    assert_eq!(attempt, (200, 64, 9));
+    let snapshots: i64 =
+        database.query_row("SELECT COUNT(*) FROM context_snapshots", [], |row| {
+            row.get(0)
+        })?;
+    assert_eq!(snapshots, 0);
     Ok(())
 }
 

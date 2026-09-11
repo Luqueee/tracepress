@@ -100,6 +100,7 @@ pub struct ContextAnalysisFinalize {
     pub status: AnalyzerAnalysisStatus,
     pub completed_at_us: u64,
     pub request_content_hash: Option<ContextDigest>,
+    pub analysis_content_hash: Option<ContextDigest>,
     pub explicit_block_count: Option<u64>,
     pub analyzed_bytes: Option<u64>,
     pub skipped_bytes: Option<u64>,
@@ -164,6 +165,7 @@ pub struct ContextAnalysisFinalizeBuilder {
     status: AnalyzerAnalysisStatus,
     completed_at_us: u64,
     request_content_hash: Option<ContextDigest>,
+    analysis_content_hash: Option<ContextDigest>,
     explicit_block_count: Option<u64>,
     analyzed_bytes: Option<u64>,
     skipped_bytes: Option<u64>,
@@ -202,6 +204,7 @@ impl ContextAnalysisFinalizeBuilder {
             status,
             completed_at_us,
             request_content_hash: None,
+            analysis_content_hash: None,
             explicit_block_count: None,
             analyzed_bytes: None,
             skipped_bytes: None,
@@ -220,6 +223,13 @@ impl ContextAnalysisFinalizeBuilder {
     #[must_use]
     pub const fn request_content_hash(mut self, value: Option<ContextDigest>) -> Self {
         self.request_content_hash = value;
+        self
+    }
+
+    /// Sets the digest of the bytes presented to the analyzer.
+    #[must_use]
+    pub const fn analysis_content_hash(mut self, value: Option<ContextDigest>) -> Self {
+        self.analysis_content_hash = value;
         self
     }
 
@@ -329,6 +339,7 @@ impl ContextAnalysisFinalizeBuilder {
             status: self.status,
             completed_at_us: self.completed_at_us,
             request_content_hash: self.request_content_hash,
+            analysis_content_hash: self.analysis_content_hash,
             explicit_block_count: self.explicit_block_count,
             analyzed_bytes: self.analyzed_bytes,
             skipped_bytes: self.skipped_bytes,
@@ -1311,6 +1322,9 @@ fn outcome_command(summary: &ContextAnalysisFinalize) -> WriteCommand {
         completed_at_us: Some(summary.completed_at_us),
         request_content_hash: summary
             .request_content_hash
+            .map(|hash| hash.as_bytes().to_vec().into_boxed_slice()),
+        analysis_content_hash: summary
+            .analysis_content_hash
             .map(|hash| hash.as_bytes().to_vec().into_boxed_slice()),
         explicit_block_count: summary.explicit_block_count,
         analyzed_bytes: summary.analyzed_bytes,

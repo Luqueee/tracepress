@@ -28,8 +28,8 @@ use tracepress_provider::{
     AnalysisDecodeStatus as ProviderAnalysisDecodeStatus, AnomalyFlags,
     ContentEncoding as ProviderContentEncoding, ObservationStatus as ProviderObservationStatus,
     ProviderKind as CanonicalProviderKind, ProviderProtocol as CanonicalProviderProtocol,
-    ProviderResponseState, ProviderTransport as CanonicalProviderTransport, RequestObservation,
-    ResponseObservation, UsageStatus as ProviderUsageStatus,
+    ProviderRequestKind, ProviderResponseState, ProviderTransport as CanonicalProviderTransport,
+    RequestObservation, ResponseObservation, UsageStatus as ProviderUsageStatus,
 };
 use tracepress_storage::{
     AnalysisDecodeStatus, ContentEncoding, ContextInspection, ContextSnapshotStatus,
@@ -208,6 +208,12 @@ pub struct ProviderObservation {
     pub ended_at: Option<String>,
     /// Upstream HTTP status, when response headers were observed.
     pub status_code: Option<HttpStatusCode>,
+    /// Exact response bytes forwarded for transport-only observations.
+    #[serde(default)]
+    pub response_bytes: Option<u64>,
+    /// Monotonic transport duration for transport-only observations.
+    #[serde(default)]
+    pub duration_us: Option<u64>,
     /// Transport error text, when forwarding failed.
     pub transport_error: Option<String>,
     /// Explicit transport lifecycle evidence for response-less attempts.
@@ -233,6 +239,8 @@ impl ProviderObservation {
             started_at: started_at.into(),
             ended_at: None,
             status_code: None,
+            response_bytes: None,
+            duration_us: None,
             transport_error: None,
             outcome: ProviderObservationOutcome::InProgress,
             streaming: None,
@@ -257,6 +265,18 @@ impl ProviderObservation {
     #[must_use]
     pub const fn with_status_code(mut self, status_code: HttpStatusCode) -> Self {
         self.status_code = Some(status_code);
+        self
+    }
+
+    /// Adds bounded transport byte and duration measurements.
+    #[must_use]
+    pub const fn with_transport_metrics(
+        mut self,
+        response_bytes: u64,
+        duration_us: Option<u64>,
+    ) -> Self {
+        self.response_bytes = Some(response_bytes);
+        self.duration_us = duration_us;
         self
     }
 
@@ -544,6 +564,7 @@ const fn context_snapshot_outcome(input: ContextSnapshotOutcomeInput) -> WriteCo
         status: map_analysis_status(status),
         completed_at_us: Some(completed_at_us),
         request_content_hash: None,
+        analysis_content_hash: None,
         explicit_block_count,
         analyzed_bytes: None,
         skipped_bytes: None,
@@ -922,10 +943,14 @@ impl DaemonService {
             parent_operation_id,
             observation,
         } = input;
+        let operation_kind = match observation.request.request_kind {
+            ProviderRequestKind::Compaction => OperationKind::ContextCompaction,
+            _ => OperationKind::LlmInference,
+        };
         let operation_id = self
             .create_operation(
                 session_id,
-                OperationKind::LlmInference,
+                operation_kind,
                 &observation.started_at,
                 Some((parent_operation_id, CausalRelationship::Spawned)),
             )
@@ -985,7 +1010,10 @@ impl DaemonService {
                 session_id,
                 operation_id,
             })?;
-        if kind != OperationKind::LlmInference {
+        if !matches!(
+            kind,
+            OperationKind::LlmInference | OperationKind::ContextCompaction
+        ) {
             return Err(DaemonError::OperationNotInference {
                 session_id,
                 operation_id,
@@ -1465,6 +1493,31 @@ fn errored_upstream_status(status_code: Option<HttpStatusCode>) -> bool {
 /// `Completed` is reported only when the provider itself reported a completed response with no
 /// error evidence beside it.
 fn inference_status(observation: &ProviderObservation) -> InferenceStatus {
+    if matches!(
+        observation.request.request_kind,
+        ProviderRequestKind::Compaction
+    ) {
+        if observation.transport_error.is_some()
+            || errored_upstream_status(observation.status_code)
+            || observation.outcome == ProviderObservationOutcome::Failed
+        {
+            return InferenceStatus::Errored;
+        }
+        return match observation.outcome {
+            ProviderObservationOutcome::Completed => InferenceStatus::Completed,
+            ProviderObservationOutcome::Incomplete => InferenceStatus::Incomplete,
+            ProviderObservationOutcome::Cancelled => InferenceStatus::Cancelled,
+            ProviderObservationOutcome::Disconnected => InferenceStatus::Disconnected,
+            ProviderObservationOutcome::Failed => InferenceStatus::Errored,
+            ProviderObservationOutcome::InProgress => {
+                if observation.ended_at.is_some() {
+                    InferenceStatus::Incomplete
+                } else {
+                    InferenceStatus::Started
+                }
+            }
+        };
+    }
     if observation.transport_error.is_some() {
         return InferenceStatus::Errored;
     }
@@ -1634,21 +1687,31 @@ fn provider_request_command(
     observation: &ProviderObservation,
 ) -> WriteCommand {
     let request = &observation.request;
+    let compaction = matches!(request.request_kind, ProviderRequestKind::Compaction);
+    let metadata = if matches!(request.request_kind, ProviderRequestKind::Compaction) {
+        RequestMetadata::responses_compact(request_id, observation.request_bytes)
+    } else {
+        RequestMetadata::responses(request_id, observation.request_bytes)
+    };
     WriteCommand::ProviderRequest {
         operation_id,
-        metadata: RequestMetadata::responses(request_id, observation.request_bytes),
+        metadata,
         provider: storage_provider(request.provider),
         protocol: storage_protocol(request.protocol),
         transport: storage_transport(request.transport),
         endpoint_profile_version: request.endpoint_profile_version,
         content_encoding: storage_content_encoding(request.content_encoding),
-        analysis_decode_status: storage_decode_status(request.analysis_decode_status),
+        analysis_decode_status: (!compaction)
+            .then(|| storage_decode_status(request.analysis_decode_status))
+            .flatten(),
         wire_bytes: request.wire_bytes,
         wire_sha256: request.wire_sha256.clone(),
-        decoded_bytes: request.decoded_bytes,
-        decode_duration_us: request.decode_duration_us,
-        decoder_version: request.decoder_version,
-        parser_version: Some(request.parser_version),
+        decoded_bytes: (!compaction).then_some(request.decoded_bytes).flatten(),
+        decode_duration_us: (!compaction)
+            .then_some(request.decode_duration_us)
+            .flatten(),
+        decoder_version: (!compaction).then_some(request.decoder_version).flatten(),
+        parser_version: (!compaction).then_some(request.parser_version),
         observation_status: storage_observation_status(request.status),
         model: request.model.clone(),
         stream: request.stream,
@@ -1657,7 +1720,9 @@ fn provider_request_command(
         reasoning_effort: request.reasoning_effort.clone(),
         text_verbosity: request.verbosity.clone(),
         truncation: request.truncation.clone(),
-        previous_response_id_present: Some(request.has_previous_response_id),
+        // Compaction is intentionally transport-only: its semantic request fields were never
+        // parsed, so false would incorrectly turn "unknown" into a factual absence.
+        previous_response_id_present: (!compaction).then_some(request.has_previous_response_id),
         input_item_count: request.input_item_count,
         tool_count: request.tool_count,
         text_input_block_count: request.text_input_blocks,
@@ -1694,11 +1759,15 @@ fn provider_attempt_command(evidence: ObservedAttempt<'_>) -> WriteCommand {
             .or_else(|| storage_observation_status(observation.request.status)),
         streaming: streaming_flag(observation),
         chunk_count: response.and_then(|value| value.chunk_count),
-        byte_count: response.and_then(|value| value.byte_count),
+        byte_count: response
+            .and_then(|value| value.byte_count)
+            .or(observation.response_bytes),
         // Only measurements the observer actually took are persisted; unknown stays NULL.
         ttfb_us: response.and_then(|value| value.ttfb_us),
         ttft_us: response.and_then(|value| value.ttft_us),
-        duration_us: response.and_then(|value| value.duration_us),
+        duration_us: response
+            .and_then(|value| value.duration_us)
+            .or(observation.duration_us),
         anomaly_metadata: response.and_then(|value| {
             value
                 .normalized_usage
@@ -1803,21 +1872,23 @@ fn provider_events(
         commands: Vec::new(),
     };
     let request = &observation.request;
+    let compaction = matches!(request.request_kind, ProviderRequestKind::Compaction);
     events.push(
         EVENT_REQUEST_OBSERVED,
         serde_json::json!({
             "provider": request.provider,
             "protocol": request.protocol,
             "transport": request.transport,
+            "request_kind": request.request_kind,
             "endpoint_profile_version": request.endpoint_profile_version,
-            "parser_version": request.parser_version,
+            "parser_version": (!compaction).then_some(request.parser_version),
             "observation_status": request.status,
             "content_encoding": request.content_encoding,
-            "analysis_decode_status": request.analysis_decode_status,
+            "analysis_decode_status": (!compaction).then_some(request.analysis_decode_status),
             "wire_bytes": request.wire_bytes,
-            "decoded_bytes": request.decoded_bytes,
-            "decode_duration_us": request.decode_duration_us,
-            "decoder_version": request.decoder_version,
+            "decoded_bytes": (!compaction).then_some(request.decoded_bytes).flatten(),
+            "decode_duration_us": (!compaction).then_some(request.decode_duration_us).flatten(),
+            "decoder_version": (!compaction).then_some(request.decoder_version).flatten(),
             "model": request.model,
             "stream": request.stream,
             "request_bytes": observation.request_bytes,

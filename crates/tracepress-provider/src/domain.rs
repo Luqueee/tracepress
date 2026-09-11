@@ -39,6 +39,18 @@ pub enum ProviderTransport {
     ChatGptCodexSubscription,
 }
 
+/// Kind of provider request represented by one observation.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ProviderRequestKind {
+    /// A normal model turn.
+    #[default]
+    Turn,
+    /// A provider-managed context compaction request.
+    Compaction,
+}
+
 /// Content encoding observed on an incoming provider request.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

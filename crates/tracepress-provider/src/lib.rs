@@ -49,7 +49,10 @@ impl ProviderEndpoint {
         if uri.authority().is_none() {
             return Err(ProviderEndpointError::MissingAuthority);
         }
-        if !matches!(uri.path(), "/v1/chat/completions" | "/v1/responses") {
+        if !matches!(
+            uri.path(),
+            "/v1/chat/completions" | "/v1/responses" | "/v1/responses/compact"
+        ) {
             return Err(ProviderEndpointError::WrongPath);
         }
         Ok(Self {
@@ -114,10 +117,12 @@ impl ProviderEndpoint {
             ProviderEndpointProfile::OpenAiPublicApiV1 => match incoming_path {
                 "/v1/chat/completions" => Ok("/v1/chat/completions"),
                 "/v1/responses" => Ok("/v1/responses"),
+                "/v1/responses/compact" => Ok("/v1/responses/compact"),
                 _ => Err(ProviderEndpointError::WrongPath),
             },
             ProviderEndpointProfile::ChatGptCodexSubscriptionV1 => match incoming_path {
                 "/v1/responses" => Ok("/backend-api/codex/responses"),
+                "/v1/responses/compact" => Ok("/backend-api/codex/responses/compact"),
                 _ => Err(ProviderEndpointError::SubscriptionResponsesOnly),
             },
         }
@@ -139,18 +144,18 @@ pub enum ProviderEndpointError {
     #[error("provider endpoint must include an authority")]
     MissingAuthority,
     /// Provider endpoint is not one of the supported OpenAI-compatible routes.
-    #[error("provider endpoint path must be /v1/chat/completions or /v1/responses")]
+    #[error("provider endpoint path must be an allowlisted OpenAI route")]
     WrongPath,
-    /// The subscription profile only accepts the Responses v1 route.
-    #[error("ChatGPT Codex subscription transport only supports /v1/responses")]
+    /// The subscription profile only accepts the Responses v1 routes.
+    #[error("ChatGPT Codex subscription transport only supports Responses routes")]
     SubscriptionResponsesOnly,
 }
 pub use domain::{
     AnalysisDecodeStatus, AnomalyFlags, ContentCaptureMode, ContentEncoding, LimitsError,
     MAX_RETAINED_USAGE_BYTES, NormalizedUsage, OPENAI_RESPONSES_PARSER_VERSION, ObservationError,
     ObservationInput, ObservationLimitValues, ObservationLimits, ObservationStatus, ProviderKind,
-    ProviderProtocol, ProviderResponseState, ProviderTransport, RawProviderUsage,
-    USAGE_NORMALIZER_VERSION, UsageError, UsageStatus,
+    ProviderProtocol, ProviderRequestKind, ProviderResponseState, ProviderTransport,
+    RawProviderUsage, USAGE_NORMALIZER_VERSION, UsageError, UsageStatus,
 };
 pub use observer::{ObservationResult, OpenAiResponsesV1Observer, ProviderObserver};
 pub use request::{OpenAiResponsesRequestObservation, RequestObservation, parse_request};
@@ -179,6 +184,10 @@ mod tests {
         assert!(matches!(
             endpoint.upstream_path("/v1/chat/completions"),
             Err(ProviderEndpointError::SubscriptionResponsesOnly)
+        ));
+        assert!(matches!(
+            endpoint.upstream_path("/v1/responses/compact"),
+            Ok("/backend-api/codex/responses/compact")
         ));
     }
 

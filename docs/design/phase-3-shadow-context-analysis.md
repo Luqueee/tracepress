@@ -45,7 +45,7 @@ Analysis may complete, be partial, hit a resource limit, find malformed input, b
 
 `ContextSnapshot` carries `id`, `session_id`, `provider_request_id`, `inference_operation_id`, `analysis_version`, `status`, `visibility`, `request_content_hash`, `explicit_block_count`, `analyzed_bytes`, `skipped_bytes`, `started_at_us`, `completed_at_us`, `recovered_at_us`. `analysis_version` is `1` for this phase and is persisted with every snapshot so a future re-analysis is distinguishable rather than silently mixed.
 
-`request_content_hash` is `SHA-256` over the exact accepted request bytes, computed by the analyzer without retaining the bytes.
+`request_content_hash` is `SHA-256` over the exact accepted wire request bytes, computed without retaining the bytes. When analysis-only decoding is used, `analysis_content_hash` separately identifies the decoded JSON bytes presented to the analyzer; raw spans and their offsets always refer to that decoded representation.
 
 `ContextAnalysisStatus` is `Complete | Partial | ResourceLimit | Malformed | ObserverBackpressure | CorrelationDegraded | Unsupported | Cancelled`. A partial analysis with useful aggregates is still `Partial`.
 

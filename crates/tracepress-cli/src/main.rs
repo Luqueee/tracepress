@@ -51,13 +51,13 @@ use tracepress_ipc::{
     Credential, Endpoint, IpcClient, IpcLimits, IpcRequest, ResponseOutcome, UnixEndpoint,
 };
 use tracepress_provider::{
-    ProviderEndpoint, ProviderResponseState, ProviderTransport, RequestObservation,
-    ResponseObservation,
+    ProviderEndpoint, ProviderRequestKind, ProviderResponseState, ProviderTransport,
+    RequestObservation, ResponseObservation,
 };
 use tracepress_proxy::{
-    ContextAnalysisDropReason, ContextAnalysisMode, ContextAnalysisObservation,
-    ContextAnalysisOutcome, ForwardId, ForwardMetadata, InboundRoute, MetadataSink,
-    MetadataSinkError, ObservationSinkError, ProviderObservationSink, ProxyConfig,
+    CompactionObservation, ContextAnalysisDropReason, ContextAnalysisMode,
+    ContextAnalysisObservation, ContextAnalysisOutcome, ForwardId, ForwardMetadata, InboundRoute,
+    MetadataSink, MetadataSinkError, ObservationSinkError, ProviderObservationSink, ProxyConfig,
     RequestContextObservation, TransparentProxy, TransportFailure,
 };
 use tracepress_storage::{
@@ -115,6 +115,8 @@ struct CorrelationCounters {
     degraded_retired_limit: AtomicU64,
     /// Terminal semantic evidence that reached the recorder without its request half.
     missing_total: AtomicU64,
+    /// Compact transport evidence rejected after the recorder queue closed.
+    compaction_dropped_total: AtomicU64,
 }
 
 impl CorrelationCounters {
@@ -139,12 +141,19 @@ impl CorrelationCounters {
     /// something degraded cannot distinguish a clean run from a report that never arrived.
     fn report(&self) -> String {
         format!(
-            "correlation_degraded_total={} correlation_degraded_inflight_limit={} correlation_degraded_retired_limit={} correlation_missing_total={}",
+            "correlation_degraded_total={} correlation_degraded_inflight_limit={} correlation_degraded_retired_limit={} correlation_missing_total={}\ncompaction_observation_dropped_total={}",
             self.degraded_total.load(Ordering::Relaxed),
             self.degraded_inflight_limit.load(Ordering::Relaxed),
             self.degraded_retired_limit.load(Ordering::Relaxed),
             self.missing_total.load(Ordering::Relaxed),
+            self.compaction_dropped_total.load(Ordering::Relaxed),
         )
+    }
+
+    fn compaction_dropped(&self) {
+        let _counted = self
+            .compaction_dropped_total
+            .fetch_add(1, Ordering::Relaxed);
     }
 }
 /// One auxiliary record of a single forward, tagged with its correlation identity.
@@ -165,6 +174,8 @@ enum RunEvent {
     TransportAdmissionFailed(ForwardId, CorrelationDegradation),
     /// The classified transport failure of a forward that obtained no upstream response.
     TransportFailure(ForwardId, TransportFailure),
+    /// Transport-only evidence for one provider-managed context compaction.
+    Compaction(Box<CompactionObservation>),
 }
 
 /// Context data handed from the provider recorder to the independent context worker.
@@ -880,6 +891,11 @@ impl RecorderSink {
 
     /// Admits transport metadata without allocating a per-forward task.
     fn offer_transport(&self, metadata: ForwardMetadata) -> Result<(), MetadataSinkError> {
+        if matches!(metadata.route, InboundRoute::ResponsesCompact) {
+            // Compaction has its own terminal transport observation; creating a generic
+            // inference here would double-count the provider request.
+            return Ok(());
+        }
         let forward = metadata.forward;
         if self.ordering.try_enqueue_transport(metadata) {
             return Ok(());
@@ -1023,6 +1039,17 @@ impl ProviderObservationSink for RecorderSink {
         self.ordering.release_transport(forward);
         self.offer_durable(RunEvent::TransportFailure(forward, failure))
             .map_err(|_error| ObservationSinkError::rejected())
+    }
+
+    fn try_record_compaction(
+        &self,
+        observation: CompactionObservation,
+    ) -> Result<(), ObservationSinkError> {
+        self.offer_durable(RunEvent::Compaction(Box::new(observation)))
+            .map_err(|_error| {
+                self.counters.compaction_dropped();
+                ObservationSinkError::rejected()
+            })
     }
 }
 /// One semantic request observation awaiting its terminal response evidence.
@@ -1169,6 +1196,11 @@ impl RunRecorder {
                 RunEvent::TransportFailure(forward, failure) => {
                     self.transport_failure(forward, failure).await;
                 }
+                RunEvent::Compaction(observation) => {
+                    if let Err(error) = self.compaction(*observation).await {
+                        let _first = first_error.get_or_insert(error);
+                    }
+                }
             }
         }
         // A forward still in flight when the run ends is recorded with what it has.
@@ -1234,6 +1266,68 @@ impl RunRecorder {
             record.await;
         }
         Ok(())
+    }
+
+    /// Records compaction as a dedicated causal operation without invoking Responses parsing.
+    async fn compaction(&self, observation: CompactionObservation) -> Result<(), String> {
+        let ended_at = current_timestamp()?;
+        let mut request = RequestObservation::transport_only(
+            ProviderRequestKind::Compaction,
+            observation.request_bytes,
+            observation.request_bytes,
+            observation.content_encoding,
+            observation.transport,
+            observation.endpoint_profile_version,
+        );
+        request.wire_sha256 = Some(observation.wire_sha256.to_vec().into_boxed_slice());
+        let mut record =
+            ObservationRecord::new(observation.request_bytes, request, ended_at.clone())
+                .with_transport_metrics(observation.response_bytes, observation.duration_us)
+                .with_outcome(match observation.outcome {
+                    tracepress_proxy::CompactionOutcome::Completed => {
+                        ProviderObservationOutcome::Completed
+                    }
+                    tracepress_proxy::CompactionOutcome::Failed => {
+                        ProviderObservationOutcome::Failed
+                    }
+                    tracepress_proxy::CompactionOutcome::Incomplete => {
+                        ProviderObservationOutcome::Incomplete
+                    }
+                    tracepress_proxy::CompactionOutcome::Cancelled => {
+                        ProviderObservationOutcome::Cancelled
+                    }
+                    tracepress_proxy::CompactionOutcome::Disconnected => {
+                        ProviderObservationOutcome::Disconnected
+                    }
+                    _ => ProviderObservationOutcome::Incomplete,
+                })
+                .with_ended_at(ended_at);
+        if let Some(status) = observation
+            .status_code
+            .and_then(|status| HttpStatusCode::new(status).ok())
+        {
+            record = record.with_status_code(status);
+        }
+        if let Some(failure) = observation.transport_failure {
+            record = record.with_transport_error(failure.label());
+        }
+        let response = control(
+            &self.config,
+            ControlRequest::RecordProviderObservation {
+                session_id: self.session_id,
+                parent_operation_id: self.parent_operation_id,
+                observation: Box::new(record),
+            },
+        )
+        .await;
+        match response {
+            Ok(ControlResponse::Ok { .. }) => Ok(()),
+            Ok(ControlResponse::Error { message }) => Err(message),
+            Ok(ControlResponse::Context { .. } | ControlResponse::ContextStatus { .. }) => {
+                Err("daemon returned an unexpected context response".to_owned())
+            }
+            Err(error) => Err(error),
+        }
     }
 
     /// Buffers the Phase 2 request half before dispatch and waits for its detached Phase 3 outcome
@@ -2148,6 +2242,7 @@ impl ContextIngestionWorker {
             current_timestamp_us().unwrap_or(input.started_at_us),
         )
         .request_content_hash(Some(analysis.request_content_hash))
+        .analysis_content_hash(Some(analysis.analysis_content_hash))
         .explicit_block_count(Some(input.accepted_block_count))
         .analyzed_bytes(Some(analysis.analyzed_bytes))
         .skipped_bytes(Some(analysis.skipped_bytes))
@@ -2288,7 +2383,13 @@ fn observation_record(
         ..
     } = semantic;
     // The parser always measures its bounded input; an unmeasured body is never invented.
-    let request_bytes = pending.request.request_bytes?;
+    // A decoder rejected by the bounded analysis capacity did not present bytes to the semantic
+    // parser. The provider row still keeps the exact accepted wire count, while the semantic
+    // request length remains NULL in `RequestObservation`.
+    let request_bytes = pending
+        .request
+        .request_bytes
+        .or(pending.request.wire_bytes)?;
     let streaming = pending.request.stream;
     // An unobserved or unrepresentable status stays unknown rather than fabricated.
     let status_code = status_code.and_then(|value| HttpStatusCode::new(value).ok());

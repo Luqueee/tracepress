@@ -60,10 +60,6 @@ impl AnalysisBody {
     pub(crate) fn as_ref(&self) -> &[u8] {
         &self.0
     }
-
-    pub(crate) fn clone_bytes(&self) -> Bytes {
-        self.0.clone()
-    }
 }
 
 impl fmt::Debug for AnalysisBody {
@@ -132,7 +128,7 @@ impl AnalysisDecoder for BoundedAnalysisDecoder {
         match encoding {
             ContentEncoding::Identity => finish(
                 AnalysisDecodeStatus::Identity,
-                Some(AnalysisBody::new(Bytes::copy_from_slice(wire.as_ref()))),
+                Some(AnalysisBody::new(wire.clone_bytes())),
                 wire_bytes,
             ),
             ContentEncoding::Unsupported => {

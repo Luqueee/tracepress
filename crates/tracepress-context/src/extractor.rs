@@ -190,6 +190,8 @@ pub struct ContextAnalysis {
     pub duplicate_key_detected: bool,
     /// SHA-256 over the exact accepted request bytes.
     pub request_content_hash: ContextDigest,
+    /// SHA-256 over the bytes actually presented to the context analyzer.
+    pub analysis_content_hash: ContextDigest,
     /// Bytes structurally inspected by the span indexer.
     pub analyzed_bytes: u64,
     /// Bytes forwarded but not structurally inspected.
@@ -210,6 +212,7 @@ impl fmt::Debug for ContextAnalysis {
             .field("visibility", &self.visibility)
             .field("duplicate_key_detected", &self.duplicate_key_detected)
             .field("request_content_hash", &self.request_content_hash)
+            .field("analysis_content_hash", &self.analysis_content_hash)
             .field("analyzed_bytes", &self.analyzed_bytes)
             .field("skipped_bytes", &self.skipped_bytes)
             .field("block_count", &self.blocks.len())
@@ -419,6 +422,7 @@ where
     Lookup: ObservedResponseIdLookup + ?Sized,
 {
     let request_content_hash = ContextDigest::from_bytes(request);
+    let analysis_content_hash = request_content_hash;
     let mut state = ExtractionState::default();
     let root = index.root();
     if let Some(root) = root {
@@ -611,6 +615,7 @@ where
         visibility: visibility.visibility,
         duplicate_key_detected: index.duplicate_key_detected(),
         request_content_hash,
+        analysis_content_hash,
         analyzed_bytes: index.analyzed_bytes(),
         skipped_bytes: index.skipped_bytes(),
         blocks,

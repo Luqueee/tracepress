@@ -961,6 +961,7 @@ pub enum WriteCommand {
         status: ContextAnalysisStatus,
         completed_at_us: Option<u64>,
         request_content_hash: Option<Box<[u8]>>,
+        analysis_content_hash: Option<Box<[u8]>>,
         explicit_block_count: Option<u64>,
         analyzed_bytes: Option<u64>,
         skipped_bytes: Option<u64>,

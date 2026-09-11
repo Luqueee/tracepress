@@ -21,7 +21,7 @@ use axum::http::{HeaderMap, HeaderName, StatusCode, Uri};
 use axum::response::Response;
 use axum::routing::post;
 use decoding::{
-    AnalysisBody, AnalysisDecoder, BoundedAnalysisDecoder, DecodeLimits, WireBody,
+    AnalysisBody, AnalysisDecoder, BoundedAnalysisDecoder, DecodeLimits, DecodeResult, WireBody,
     parse_content_encoding_header,
 };
 use futures_util::{StreamExt as _, stream};
@@ -30,13 +30,16 @@ use thiserror::Error;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 pub use tracepress_context::ContextAnalysisDropReason;
 use tracepress_context::{
-    ContextAnalysisLimits, ContextAnalysisLimitsError, ContextAnalysisResult, analyze_responses,
+    ContextAnalysisLimits, ContextAnalysisLimitsError, ContextAnalysisResult, ContextDigest,
+    analyze_responses,
 };
 use tracepress_core::{MaxRequestBodyBytes, MaxResponseBodyBytes, ResourceLimits};
+pub use tracepress_provider::ContentEncoding;
 use tracepress_provider::{
-    MAX_RETAINED_USAGE_BYTES, ObservationInput, ObservationLimitValues, ObservationLimits,
-    ObservationStatus, OpenAiResponsesV1Observer, ProviderEndpoint, ProviderObserver,
-    RequestObservation, ResponseObservation, StreamingObserver,
+    AnalysisDecodeStatus, MAX_RETAINED_USAGE_BYTES, ObservationInput, ObservationLimitValues,
+    ObservationLimits, ObservationStatus, OpenAiResponsesV1Observer, ProviderEndpoint,
+    ProviderObserver, ProviderTransport, RequestObservation, ResponseObservation,
+    StreamingObserver,
 };
 
 /// Gives a newly accepted N+1 forward priority over detached analysis from N.
@@ -53,6 +56,8 @@ const OBSERVATION_QUEUE_CAPACITY: usize = 32;
 /// memory pressure. The effective value is the smaller of this cap, available parallelism, and
 /// the configured CPU-work budget.
 const CONTEXT_ANALYSIS_CONCURRENCY_HARD_CAP: usize = 2;
+/// Bounds concurrent request decoders independently of the Phase 3 analysis slots.
+const OBSERVATION_DECODE_CONCURRENCY_HARD_CAP: usize = 8;
 
 /// Correlation identity of one forwarded provider request.
 ///
@@ -183,6 +188,8 @@ pub enum InboundRoute {
     ChatCompletions,
     /// `/v1/responses`, forwarded with semantic observation.
     Responses,
+    /// `/v1/responses/compact`, forwarded as provider-managed compaction transport only.
+    ResponsesCompact,
 }
 
 impl InboundRoute {
@@ -190,6 +197,7 @@ impl InboundRoute {
         match self {
             Self::ChatCompletions => "/v1/chat/completions",
             Self::Responses => "/v1/responses",
+            Self::ResponsesCompact => "/v1/responses/compact",
         }
     }
 }
@@ -253,6 +261,50 @@ pub enum TransportFailure {
     Endpoint,
     /// Transport failed for a reason the proxy does not classify further.
     Other,
+}
+
+/// Terminal transport outcome of a provider-managed compaction exchange.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum CompactionOutcome {
+    /// The upstream response body settled with a successful HTTP status.
+    Completed,
+    /// The upstream returned an error status or failed before response headers.
+    Failed,
+    /// The response ended before its body settled successfully.
+    Incomplete,
+    /// The downstream cancelled the response.
+    Cancelled,
+    /// The upstream disconnected while its body was being forwarded.
+    Disconnected,
+}
+
+/// Bounded, content-free evidence of one `/responses/compact` exchange.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct CompactionObservation {
+    /// Correlation identity allocated for the accepted forward.
+    pub forward: ForwardId,
+    /// Exact request body bytes accepted and forwarded.
+    pub request_bytes: u64,
+    /// SHA-256 of the exact request body sent upstream.
+    pub wire_sha256: [u8; 32],
+    /// Content encoding retained on the wire.
+    pub content_encoding: ContentEncoding,
+    /// Provider transport profile used for the exchange.
+    pub transport: ProviderTransport,
+    /// Version of the endpoint profile used for the exchange.
+    pub endpoint_profile_version: u32,
+    /// Upstream response status, when response headers were received.
+    pub status_code: Option<u16>,
+    /// Exact response bytes forwarded to the downstream consumer.
+    pub response_bytes: u64,
+    /// Local monotonic duration from upstream dispatch to body settlement.
+    pub duration_us: Option<u64>,
+    /// Terminal transport outcome.
+    pub outcome: CompactionOutcome,
+    /// Content-free pre-response failure classification, when applicable.
+    pub transport_failure: Option<TransportFailure>,
 }
 
 impl TransportFailure {
@@ -369,6 +421,21 @@ pub trait ProviderObservationSink: Send + Sync + 'static {
         forward: ForwardId,
         failure: TransportFailure,
     ) -> Result<(), ObservationSinkError>;
+
+    /// Attempts to accept bounded transport evidence for a compaction request.
+    ///
+    /// Compaction is intentionally not passed through the Responses semantic parser. The
+    /// default keeps existing sinks source-compatible while callers that persist provider
+    /// evidence can opt into the dedicated request kind.
+    ///
+    /// # Errors
+    /// Returns a sink-local failure when the sink cannot accept the bounded observation.
+    fn try_record_compaction(
+        &self,
+        _observation: CompactionObservation,
+    ) -> Result<(), ObservationSinkError> {
+        Ok(())
+    }
 }
 
 #[derive(Debug)]
@@ -513,6 +580,7 @@ pub struct TransparentProxy {
     observations: Arc<dyn ProviderObservationSink>,
     observations_enabled: bool,
     context_analysis_permits: Arc<Semaphore>,
+    observation_decode_permits: Arc<Semaphore>,
     forwards: Arc<AtomicU64>,
     active_forwards: Arc<AtomicU64>,
     background: BackgroundTracker,
@@ -541,6 +609,9 @@ impl TransparentProxy {
         Ok(Self {
             context_analysis_permits: Arc::new(Semaphore::new(
                 config.context_analysis_concurrency.get(),
+            )),
+            observation_decode_permits: Arc::new(Semaphore::new(
+                OBSERVATION_DECODE_CONCURRENCY_HARD_CAP,
             )),
             client,
             config,
@@ -595,6 +666,7 @@ impl TransparentProxy {
         Router::new()
             .route("/v1/chat/completions", post(forward_chat))
             .route("/v1/responses", post(forward_responses))
+            .route("/v1/responses/compact", post(forward_responses_compact))
             .with_state(self)
     }
 }
@@ -605,6 +677,13 @@ async fn forward_chat(State(proxy): State<TransparentProxy>, request: Request) -
 
 async fn forward_responses(State(proxy): State<TransparentProxy>, request: Request) -> Response {
     forward(&proxy, request, InboundRoute::Responses).await
+}
+
+async fn forward_responses_compact(
+    State(proxy): State<TransparentProxy>,
+    request: Request,
+) -> Response {
+    forward(&proxy, request, InboundRoute::ResponsesCompact).await
 }
 
 async fn forward(proxy: &TransparentProxy, request: Request, route: InboundRoute) -> Response {
@@ -631,6 +710,7 @@ async fn forward_inner(
     let forward_background = proxy.background.guard();
     let active_forward = proxy.begin_forward();
     let observed = proxy.observations_enabled && matches!(route, InboundRoute::Responses);
+    let compaction = proxy.observations_enabled && matches!(route, InboundRoute::ResponsesCompact);
     let context_enabled = observed
         && matches!(
             proxy.config.context_analysis_mode,
@@ -652,7 +732,16 @@ async fn forward_inner(
     let target = match upstream_uri(&proxy.config.upstream, route) {
         Ok(target) => target,
         Err(error) => {
-            if observed {
+            if compaction {
+                queue_compaction_failure(
+                    proxy,
+                    forward,
+                    request_bytes,
+                    &wire_body,
+                    content_encoding,
+                    TransportFailure::Endpoint,
+                );
+            } else if observed {
                 queue_transport_failure(proxy, forward, TransportFailure::Endpoint);
             }
             return Err(error);
@@ -694,7 +783,16 @@ async fn forward_inner(
                     }
                 }
             }
-            if observed {
+            if compaction {
+                queue_compaction_failure(
+                    proxy,
+                    forward,
+                    request_bytes,
+                    &wire_body,
+                    content_encoding,
+                    TransportFailure::classify(&error),
+                );
+            } else if observed {
                 queue_transport_failure(proxy, forward, TransportFailure::classify(&error));
             }
             return Err(ForwardError::Upstream(error));
@@ -728,7 +826,27 @@ async fn forward_inner(
     } else {
         None
     };
-    let body = if let Some(mode) = selection {
+    let body = if compaction {
+        Body::from_stream(tapped_compaction_response_stream(
+            upstream.bytes_stream(),
+            CompactionTapConfig {
+                forward,
+                request_bytes,
+                wire_sha256: Sha256::digest(wire_body.as_ref()).into(),
+                content_encoding,
+                transport: proxy.config.upstream.transport(),
+                endpoint_profile_version: proxy.config.upstream.profile_version(),
+                status_code: status.as_u16(),
+                upstream_length,
+                maximum_response,
+                started: Instant::now(),
+                sink: Arc::clone(&proxy.observations),
+                background: proxy.background.clone(),
+                background_guard: forward_background,
+                active_forward: Some(active_forward),
+            },
+        ))
+    } else if let Some(mode) = selection {
         Body::from_stream(tapped_response_stream(
             upstream.bytes_stream(),
             ResponseTapConfig {
@@ -903,7 +1021,8 @@ fn response_mode(
 /// started later by [`queue_context_analysis`], after the upstream dispatch boundary.
 struct QueuedRequestObservation {
     stream_hint: tokio::sync::oneshot::Receiver<Option<bool>>,
-    analysis_body: tokio::sync::oneshot::Receiver<Option<AnalysisBody>>,
+    analysis_body:
+        tokio::sync::oneshot::Receiver<(Option<AnalysisBody>, AnalysisDecodeStatus, ContextDigest)>,
     /// Present only after a Phase 3 reservation was acquired before this object was built.
     permit: Option<OwnedSemaphorePermit>,
 }
@@ -940,6 +1059,14 @@ fn queue_request_observation(
     let sink = Arc::clone(&proxy.observations);
     let (hint, stream_hint) = tokio::sync::oneshot::channel();
     let (sender, analysis_body) = tokio::sync::oneshot::channel();
+    let decode_permit = matches!(content_encoding, ContentEncoding::Zstd)
+        .then(|| {
+            Arc::clone(&proxy.observation_decode_permits)
+                .try_acquire_owned()
+                .ok()
+        })
+        .flatten();
+    let skip_decode = matches!(content_encoding, ContentEncoding::Zstd) && decode_permit.is_none();
     let (permit, context) = match analysis_permit {
         Some(Ok(permit)) => (Some(permit), None),
         Some(Err(reason)) => (None, Some(ContextAnalysisOutcome::Dropped(reason))),
@@ -948,20 +1075,32 @@ fn queue_request_observation(
     let task_guard = proxy.background.guard();
     drop(tokio::task::spawn_blocking(move || {
         let _task_guard = task_guard;
-        let decoded = BoundedAnalysisDecoder.decode(&wire_body, content_encoding, &decode_limits);
-        let parse_bytes = decoded
-            .body
-            .as_ref()
-            .map_or_else(|| wire_body.clone_bytes(), AnalysisBody::clone_bytes);
-        let parsed = OpenAiResponsesV1Observer::new()
-            .observe_request(ObservationInput::new(&parse_bytes, limits))
-            .unwrap_or_else(|_error| {
-                tracepress_provider::parse_request(ObservationInput::new(&parse_bytes, limits))
-            });
-        let mut parsed = parsed;
+        let _decode_permit = decode_permit;
+        let wire_content_hash = ContextDigest::from_bytes(wire_body.as_ref());
+        let decoded = if skip_decode {
+            DecodeResult {
+                status: AnalysisDecodeStatus::ResourceLimit,
+                body: None,
+                wire_bytes: u64::try_from(wire_body.len()).unwrap_or(u64::MAX),
+                decoded_bytes: 0,
+                decode_duration_us: 0,
+                decoder_version: 1,
+            }
+        } else {
+            BoundedAnalysisDecoder.decode(&wire_body, content_encoding, &decode_limits)
+        };
+        let mut parsed = if let Some(body) = decoded.body.as_ref() {
+            OpenAiResponsesV1Observer::new()
+                .observe_request(ObservationInput::new(body.as_ref(), limits))
+                .unwrap_or_else(|_error| {
+                    tracepress_provider::parse_request(ObservationInput::new(body.as_ref(), limits))
+                })
+        } else {
+            RequestObservation::unavailable(observation_status_for_decode(decoded.status))
+        };
         parsed.transport = transport;
         parsed.endpoint_profile_version = Some(endpoint_profile_version);
-        parsed.request_bytes = Some(decoded.wire_bytes);
+        parsed.request_bytes = decoded.body.as_ref().map(|_body| decoded.decoded_bytes);
         parsed.wire_bytes = Some(decoded.wire_bytes);
         parsed.wire_sha256 = Some(
             Sha256::digest(wire_body.as_ref())
@@ -979,7 +1118,7 @@ fn queue_request_observation(
             context,
         });
         let _delivered = hint.send(parsed.stream);
-        let _sent = sender.send(decoded.body);
+        let _sent = sender.send((decoded.body, decoded.status, wire_content_hash));
     }));
     Some(QueuedRequestObservation {
         stream_hint,
@@ -996,7 +1135,8 @@ struct QueuedContextAnalysis {
 
 struct ContextAnalysisTrigger {
     forward: ForwardId,
-    analysis_body: tokio::sync::oneshot::Receiver<Option<AnalysisBody>>,
+    analysis_body:
+        tokio::sync::oneshot::Receiver<(Option<AnalysisBody>, AnalysisDecodeStatus, ContextDigest)>,
     context_limits: ContextAnalysisLimits,
     permit: OwnedSemaphorePermit,
     sink: Arc<dyn ProviderObservationSink>,
@@ -1026,7 +1166,7 @@ impl ContextAnalysisTrigger {
         let task_guard = background.guard();
         drop(tokio::spawn(async move {
             let _task_guard = task_guard;
-            let Ok(analysis_body) = analysis_body.await else {
+            let Ok((analysis_body, decode_status, wire_content_hash)) = analysis_body.await else {
                 drop(permit);
                 return;
             };
@@ -1045,13 +1185,12 @@ impl ContextAnalysisTrigger {
                     });
                     return;
                 }
-                let outcome = analysis_body.map_or(
-                    ContextAnalysisOutcome::Dropped(ContextAnalysisDropReason::Malformed),
+                let outcome = analysis_body.map_or_else(
+                    || ContextAnalysisOutcome::Dropped(decode_drop_reason(decode_status)),
                     |body| {
-                        ContextAnalysisOutcome::Analyzed(analyze_responses(
-                            body.as_ref(),
-                            context_limits,
-                        ))
+                        let mut analysis = analyze_responses(body.as_ref(), context_limits);
+                        analysis.request_content_hash = wire_content_hash;
+                        ContextAnalysisOutcome::Analyzed(analysis)
                     },
                 );
                 let _accepted = sink
@@ -1059,6 +1198,32 @@ impl ContextAnalysisTrigger {
             })
             .await;
         }));
+    }
+}
+
+const fn observation_status_for_decode(status: AnalysisDecodeStatus) -> ObservationStatus {
+    match status {
+        AnalysisDecodeStatus::Identity | AnalysisDecodeStatus::Decoded => {
+            ObservationStatus::Complete
+        }
+        AnalysisDecodeStatus::CorruptPayload => ObservationStatus::Malformed,
+        AnalysisDecodeStatus::ResourceLimit | AnalysisDecodeStatus::Timeout => {
+            ObservationStatus::ResourceLimit
+        }
+        _ => ObservationStatus::Unsupported,
+    }
+}
+
+const fn decode_drop_reason(status: AnalysisDecodeStatus) -> ContextAnalysisDropReason {
+    match status {
+        AnalysisDecodeStatus::Identity | AnalysisDecodeStatus::Decoded => {
+            ContextAnalysisDropReason::Malformed
+        }
+        AnalysisDecodeStatus::CorruptPayload => ContextAnalysisDropReason::Malformed,
+        AnalysisDecodeStatus::ResourceLimit | AnalysisDecodeStatus::Timeout => {
+            ContextAnalysisDropReason::ResourceLimit
+        }
+        _ => ContextAnalysisDropReason::Unsupported,
     }
 }
 
@@ -1102,6 +1267,209 @@ fn queue_transport_failure(
         let _task_guard = task_guard;
         sink.try_record_transport_failure(forward, failure)
     }));
+}
+
+/// Records a compact transport failure without retaining any request or response bytes.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the failure record carries the bounded transport facts without retaining a payload"
+)]
+fn queue_compaction_failure(
+    proxy: &TransparentProxy,
+    forward: ForwardId,
+    request_bytes: u64,
+    wire_body: &WireBody,
+    content_encoding: ContentEncoding,
+    failure: TransportFailure,
+) {
+    let observation = CompactionObservation {
+        forward,
+        request_bytes,
+        wire_sha256: Sha256::digest(wire_body.as_ref()).into(),
+        content_encoding,
+        transport: proxy.config.upstream.transport(),
+        endpoint_profile_version: proxy.config.upstream.profile_version(),
+        status_code: None,
+        response_bytes: 0,
+        duration_us: None,
+        outcome: CompactionOutcome::Failed,
+        transport_failure: Some(failure),
+    };
+    queue_compaction_observation(
+        Arc::clone(&proxy.observations),
+        &proxy.background,
+        observation,
+    );
+}
+
+/// Hands compact transport evidence to the sink on a detached blocking auxiliary task.
+///
+/// The CLI sink uses a bounded durable send here. Keeping the wait in the auxiliary task preserves
+/// forwarding latency while ensuring a full recorder queue is backpressured and counted at the
+/// shutdown boundary instead of silently dropping compact evidence.
+fn queue_compaction_observation(
+    sink: Arc<dyn ProviderObservationSink>,
+    background: &BackgroundTracker,
+    observation: CompactionObservation,
+) {
+    let task_guard = background.guard();
+    drop(tokio::task::spawn_blocking(move || {
+        let _task_guard = task_guard;
+        let _accepted = sink.try_record_compaction(observation);
+    }));
+}
+
+struct CompactionTapConfig {
+    forward: ForwardId,
+    request_bytes: u64,
+    wire_sha256: [u8; 32],
+    content_encoding: ContentEncoding,
+    transport: ProviderTransport,
+    endpoint_profile_version: u32,
+    status_code: u16,
+    upstream_length: Option<u64>,
+    maximum_response: u64,
+    started: Instant,
+    sink: Arc<dyn ProviderObservationSink>,
+    background: BackgroundTracker,
+    background_guard: BackgroundGuard,
+    active_forward: Option<ActiveForwardGuard>,
+}
+
+/// Forwards a compaction response byte-for-byte while measuring only bounded transport facts.
+fn tapped_compaction_response_stream<S>(
+    source: S,
+    config: CompactionTapConfig,
+) -> impl futures_util::Stream<Item = Result<Bytes, std::io::Error>>
+where
+    S: futures_util::Stream<Item = Result<Bytes, reqwest::Error>> + Unpin + Send + 'static,
+{
+    stream::unfold(
+        CompactionTapState {
+            source,
+            forward: config.forward,
+            request_bytes: config.request_bytes,
+            wire_sha256: config.wire_sha256,
+            content_encoding: config.content_encoding,
+            transport: config.transport,
+            endpoint_profile_version: config.endpoint_profile_version,
+            status_code: config.status_code,
+            upstream_length: config.upstream_length,
+            maximum_response: config.maximum_response,
+            started: config.started,
+            sink: config.sink,
+            background: config.background,
+            background_guard: Some(config.background_guard),
+            active_forward: config.active_forward,
+            seen: 0,
+            settled: false,
+        },
+        |mut state| async move {
+            match state.source.next().await {
+                Some(Ok(chunk)) if !state.settled => {
+                    let length = u64::try_from(chunk.len()).unwrap_or(u64::MAX);
+                    let Some(total) = state.seen.checked_add(length) else {
+                        state.settle(CompactionOutcome::Incomplete, None);
+                        return Some((
+                            Err(std::io::Error::other(
+                                "response body exceeds configured limit",
+                            )),
+                            state,
+                        ));
+                    };
+                    if total > state.maximum_response {
+                        state.settle(CompactionOutcome::Incomplete, None);
+                        return Some((
+                            Err(std::io::Error::other(
+                                "response body exceeds configured limit",
+                            )),
+                            state,
+                        ));
+                    }
+                    state.seen = total;
+                    Some((Ok(chunk), state))
+                }
+                Some(Ok(_chunk)) => None,
+                Some(Err(error)) if !state.settled => {
+                    state.settle(CompactionOutcome::Disconnected, None);
+                    Some((Err(std::io::Error::other(error)), state))
+                }
+                Some(Err(_error)) => None,
+                None if !state.settled => {
+                    let outcome = if (200..300).contains(&state.status_code) {
+                        CompactionOutcome::Completed
+                    } else {
+                        CompactionOutcome::Failed
+                    };
+                    state.settle(outcome, None);
+                    None
+                }
+                None => None,
+            }
+        },
+    )
+}
+
+struct CompactionTapState<StreamType> {
+    source: StreamType,
+    forward: ForwardId,
+    request_bytes: u64,
+    wire_sha256: [u8; 32],
+    content_encoding: ContentEncoding,
+    transport: ProviderTransport,
+    endpoint_profile_version: u32,
+    status_code: u16,
+    upstream_length: Option<u64>,
+    maximum_response: u64,
+    started: Instant,
+    sink: Arc<dyn ProviderObservationSink>,
+    background: BackgroundTracker,
+    background_guard: Option<BackgroundGuard>,
+    active_forward: Option<ActiveForwardGuard>,
+    seen: u64,
+    settled: bool,
+}
+
+impl<StreamType> CompactionTapState<StreamType> {
+    fn settle(&mut self, outcome: CompactionOutcome, transport_failure: Option<TransportFailure>) {
+        if self.settled {
+            return;
+        }
+        self.settled = true;
+        let observation = CompactionObservation {
+            forward: self.forward,
+            request_bytes: self.request_bytes,
+            wire_sha256: self.wire_sha256,
+            content_encoding: self.content_encoding,
+            transport: self.transport,
+            endpoint_profile_version: self.endpoint_profile_version,
+            status_code: Some(self.status_code),
+            response_bytes: self.seen,
+            duration_us: elapsed_us(self.started),
+            outcome,
+            transport_failure,
+        };
+        queue_compaction_observation(Arc::clone(&self.sink), &self.background, observation);
+        drop(self.active_forward.take());
+        drop(self.background_guard.take());
+    }
+}
+
+impl<StreamType> Drop for CompactionTapState<StreamType> {
+    fn drop(&mut self) {
+        if !self.settled {
+            let outcome = if self.upstream_length == Some(self.seen) {
+                if (200..300).contains(&self.status_code) {
+                    CompactionOutcome::Completed
+                } else {
+                    CompactionOutcome::Failed
+                }
+            } else {
+                CompactionOutcome::Cancelled
+            };
+            self.settle(outcome, None);
+        }
+    }
 }
 
 enum ObservationMessage {
@@ -1705,7 +2073,11 @@ mod tests {
         let bytes = Bytes::from_static(br#"{"model":"test","input":"value"}"#);
         let (sender, analysis_body) = tokio::sync::oneshot::channel();
         sender
-            .send(Some(AnalysisBody::new(bytes)))
+            .send((
+                Some(AnalysisBody::new(bytes)),
+                AnalysisDecodeStatus::Identity,
+                ContextDigest::from_bytes(br#"{"model":"test","input":"value"}"#),
+            ))
             .expect("observation receiver is live");
         let context_limits =
             ContextAnalysisLimits::new(tracepress_context::ContextAnalysisLimitValues {

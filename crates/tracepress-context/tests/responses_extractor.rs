@@ -152,11 +152,10 @@ fn unknown_items_keep_their_span_without_becoming_opaque() {
 
     let analysis = analyze_responses(request, limits());
 
-    assert_eq!(analysis.status, ContextAnalysisStatus::Partial);
-    assert_eq!(
-        analysis.reason,
-        Some(ContextAnalysisReason::UnknownContextItem)
-    );
+    assert_eq!(analysis.status, ContextAnalysisStatus::Complete);
+    assert_eq!(analysis.reason, None);
+    assert_eq!(analysis.unknown_block_count, 1);
+    assert_eq!(analysis.semantic_coverage_basis_points, Some(0));
     assert_eq!(analysis.blocks.len(), 1);
     let block = &analysis.blocks[0];
     assert_eq!(block.kind, ContextBlockKind::Unknown);
@@ -171,7 +170,25 @@ fn unknown_items_keep_their_span_without_becoming_opaque() {
     assert!(!analysis.visibility.contains_opaque_items);
     assert_eq!(
         analysis.logical_context_status(),
-        LogicalContextStatus::Unknown
+        LogicalContextStatus::ExplicitOnly
+    );
+}
+
+#[test]
+fn compaction_trigger_is_lifecycle_metadata_and_does_not_reduce_structural_coverage() {
+    let request = br#"{"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"private"}]},{"type":"compaction_trigger"}]}"#;
+
+    let analysis = analyze_responses(request, limits());
+
+    assert_eq!(analysis.status, ContextAnalysisStatus::Complete);
+    assert!(analysis.compaction_trigger_seen);
+    assert_eq!(analysis.unknown_block_count, 0);
+    assert_eq!(analysis.semantic_coverage_basis_points, Some(10_000));
+    assert!(
+        analysis
+            .blocks
+            .iter()
+            .all(|block| block.kind != ContextBlockKind::Unknown)
     );
 }
 

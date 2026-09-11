@@ -391,6 +391,9 @@ const fn context_block_kind_index(value: ContextBlockKind) -> usize {
         ContextBlockKind::AssistantHistory => 11,
         ContextBlockKind::OpaqueReasoning => 12,
         ContextBlockKind::Opaque => 13,
+        // Lifecycle markers are intentionally not part of token composition: they carry no
+        // user/model content and therefore share the non-semantic bucket if a future estimator
+        // ever reports a value for one.
         ContextBlockKind::Unknown => 14,
     }
 }
@@ -719,6 +722,10 @@ pub struct ContextInspectionCoverage {
     pub skipped_bytes: Option<u64>,
     /// Explicit bytes reported by aggregate metrics.
     pub explicit_bytes: Option<u64>,
+    /// Structurally complete blocks whose semantic type is unknown to this release.
+    pub unknown_block_count: Option<u64>,
+    /// Recognized-block coverage in basis points, independent of structural status.
+    pub semantic_coverage_basis_points: Option<u16>,
 }
 
 /// Metadata for one of the largest context blocks.
@@ -806,6 +813,8 @@ pub enum WriteCommand {
         decode_duration_us: Option<u64>,
         decoder_version: Option<u32>,
         parser_version: Option<u32>,
+        request_kind: Option<String>,
+        compaction_trigger: Option<String>,
         observation_status: Option<ObservationStatus>,
         model: Option<String>,
         stream: Option<bool>,
@@ -844,6 +853,7 @@ pub enum WriteCommand {
         ttfb_us: Option<u64>,
         ttft_us: Option<u64>,
         duration_us: Option<u64>,
+        compaction_output_seen: Option<bool>,
         anomaly_metadata: Option<String>,
     },
     /// Inserts provider usage without inventing unavailable measurements.
@@ -1025,6 +1035,8 @@ pub enum WriteCommand {
     ContextAnalysisMetrics {
         snapshot_id: ContextSnapshotId,
         explicit_bytes: Option<u64>,
+        unknown_block_count: Option<u64>,
+        semantic_coverage_basis_points: Option<u16>,
         estimated_tokens: Box<EstimatedTokenComposition>,
         estimated_tool_definition_share: Option<f64>,
         estimated_tool_result_share: Option<f64>,

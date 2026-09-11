@@ -108,6 +108,8 @@ const INSPECTION_SQL: &str = "SELECT
         s.analyzed_bytes AS analyzed_bytes,
         s.skipped_bytes AS skipped_bytes,
         m.explicit_bytes AS explicit_bytes,
+        m.unknown_block_count AS unknown_block_count,
+        m.semantic_coverage_basis_points AS semantic_coverage_basis_points,
         m.estimated_tokens_kind_instructions,
         m.estimated_tokens_kind_message,
         m.estimated_tokens_kind_text,
@@ -228,6 +230,8 @@ struct RawCoverage {
     analyzed_bytes: Option<i64>,
     skipped_bytes: Option<i64>,
     explicit_bytes: Option<i64>,
+    unknown_block_count: Option<i64>,
+    semantic_coverage_basis_points: Option<i64>,
 }
 
 struct RawComposition {
@@ -313,6 +317,8 @@ fn read_snapshot(row: &Row<'_>) -> rusqlite::Result<RawSnapshot> {
             analyzed_bytes: row.get("analyzed_bytes")?,
             skipped_bytes: row.get("skipped_bytes")?,
             explicit_bytes: row.get("explicit_bytes")?,
+            unknown_block_count: row.get("unknown_block_count")?,
+            semantic_coverage_basis_points: row.get("semantic_coverage_basis_points")?,
         },
         kind_tokens: KIND_COLUMNS
             .iter()
@@ -551,6 +557,19 @@ fn build_inspection(
             analyzed_bytes: optional_u64(raw.coverage.analyzed_bytes, "analyzed_bytes")?,
             skipped_bytes: optional_u64(raw.coverage.skipped_bytes, "skipped_bytes")?,
             explicit_bytes: optional_u64(raw.coverage.explicit_bytes, "explicit_bytes")?,
+            unknown_block_count: optional_u64(
+                raw.coverage.unknown_block_count,
+                "unknown_block_count",
+            )?,
+            semantic_coverage_basis_points: raw
+                .coverage
+                .semantic_coverage_basis_points
+                .map(|value| {
+                    u16::try_from(value).map_err(|_| StorageError::InvalidContextInspection {
+                        field: "semantic_coverage_basis_points",
+                    })
+                })
+                .transpose()?,
         },
         largest_blocks,
     };

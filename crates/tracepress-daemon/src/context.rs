@@ -42,6 +42,8 @@ const MAX_ACTIVE_CONTEXT_ANALYSES: usize = 64;
 #[non_exhaustive]
 pub struct ContextAnalysisMetrics {
     pub explicit_bytes: Option<u64>,
+    pub unknown_block_count: Option<u64>,
+    pub semantic_coverage_basis_points: Option<u16>,
     pub estimated_tokens_by_kind: [Option<u64>; 15],
     pub estimated_tokens_by_role: [Option<u64>; 6],
     pub estimated_tokens_by_origin: [Option<u64>; 8],
@@ -69,6 +71,8 @@ impl ContextAnalysisMetrics {
     pub const fn new() -> Self {
         Self {
             explicit_bytes: None,
+            unknown_block_count: None,
+            semantic_coverage_basis_points: None,
             estimated_tokens_by_kind: [None; 15],
             estimated_tokens_by_role: [None; 6],
             estimated_tokens_by_origin: [None; 8],
@@ -476,8 +480,17 @@ impl DaemonService {
                 state: session.state,
             });
         }
-        if session.operations.get(&inference_operation_id)
-            != Some(&tracepress_core::OperationKind::LlmInference)
+        let operation_is_context_capable = session
+            .operations
+            .get(&inference_operation_id)
+            .is_some_and(|kind| {
+                matches!(
+                    kind,
+                    tracepress_core::OperationKind::LlmInference
+                        | tracepress_core::OperationKind::ContextCompaction
+                )
+            });
+        if !operation_is_context_capable
             || session.provider_requests.get(&inference_operation_id) != Some(&provider_request_id)
         {
             return Err(DaemonError::InvalidContextAssociation { session_id });
@@ -1227,6 +1240,8 @@ fn metrics_command(
     WriteCommand::ContextAnalysisMetrics {
         snapshot_id,
         explicit_bytes: metrics.explicit_bytes,
+        unknown_block_count: metrics.unknown_block_count,
+        semantic_coverage_basis_points: metrics.semantic_coverage_basis_points,
         estimated_tokens: Box::new(EstimatedTokenComposition::new(by_kind, by_role, by_origin)),
         estimated_tool_definition_share: metrics.estimated_tool_definition_share,
         estimated_tool_result_share: metrics.estimated_tool_result_share,

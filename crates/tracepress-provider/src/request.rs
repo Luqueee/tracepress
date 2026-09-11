@@ -4,9 +4,9 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::domain::{
-    AnalysisDecodeStatus, ContentEncoding, OPENAI_RESPONSES_PARSER_VERSION, ObservationInput,
-    ObservationStatus, ProviderKind, ProviderProtocol, ProviderRequestKind, ProviderTransport,
-    status_for_error,
+    AnalysisDecodeStatus, CompactionProtocol, CompactionTrigger, ContentEncoding,
+    OPENAI_RESPONSES_PARSER_VERSION, ObservationInput, ObservationStatus, ProviderKind,
+    ProviderProtocol, ProviderRequestKind, ProviderTransport, status_for_error,
 };
 use crate::json::{self, NestedField, StringExtraction};
 
@@ -24,6 +24,9 @@ pub struct RequestObservation {
     /// Whether this is a normal turn or a provider compaction request.
     #[serde(default)]
     pub request_kind: ProviderRequestKind,
+    /// Trigger classification found on a V2 compaction request, never the trigger payload.
+    #[serde(default)]
+    pub compaction_trigger: Option<CompactionTrigger>,
     /// Version of the selected endpoint profile.
     #[serde(default)]
     pub endpoint_profile_version: Option<u32>,
@@ -92,6 +95,7 @@ impl RequestObservation {
             protocol: ProviderProtocol::OpenAiResponsesV1,
             transport: ProviderTransport::OpenAiPublicApi,
             request_kind: ProviderRequestKind::Turn,
+            compaction_trigger: None,
             endpoint_profile_version: None,
             parser_version: OPENAI_RESPONSES_PARSER_VERSION,
             status,
@@ -146,6 +150,7 @@ impl RequestObservation {
         result.transport = transport;
         result.endpoint_profile_version = Some(endpoint_profile_version);
         result.request_kind = request_kind;
+        result.compaction_trigger = request_kind.compaction_trigger();
         result
     }
 }
@@ -196,6 +201,14 @@ pub fn parse_request(input: ObservationInput<'_>) -> RequestObservation {
         for item in input_items {
             count_blocks(item, &mut counts, &mut extraction.partial);
         }
+        if input_items.iter().any(is_compaction_trigger) {
+            let trigger = CompactionTrigger::Unknown;
+            result.request_kind = ProviderRequestKind::Compaction {
+                protocol: CompactionProtocol::ResponsesTriggerV2,
+                trigger,
+            };
+            result.compaction_trigger = Some(trigger);
+        }
         result.text_input_blocks = Some(counts.text);
         result.image_input_blocks = Some(counts.image);
         result.file_input_blocks = Some(counts.file);
@@ -204,6 +217,14 @@ pub fn parse_request(input: ObservationInput<'_>) -> RequestObservation {
         result.status = ObservationStatus::Partial;
     }
     result
+}
+
+fn is_compaction_trigger(value: &Value) -> bool {
+    value
+        .as_object()
+        .and_then(|object| object.get("type"))
+        .and_then(Value::as_str)
+        == Some("compaction_trigger")
 }
 
 fn optional_bool(map: &Map<String, Value>, key: &str, partial: &mut bool) -> Option<bool> {
@@ -341,6 +362,21 @@ mod tests {
         assert_eq!(observation.model, None);
         assert_eq!(observation.stream, Some(false));
         assert_eq!(observation.status, ObservationStatus::Partial);
+    }
+
+    #[test]
+    fn compaction_trigger_classifies_the_responses_request_without_retaining_content() {
+        let observation = parse_request(ObservationInput::new(
+            br#"{"model":"gpt-5.6-sol","input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"private"}]},{"type":"compaction_trigger"}]}"#,
+            ObservationLimits::default(),
+        ));
+
+        assert_eq!(observation.status, ObservationStatus::Complete);
+        assert_eq!(observation.request_kind.as_wire_str(), "compaction_v2");
+        assert_eq!(
+            observation.compaction_trigger,
+            Some(CompactionTrigger::Unknown)
+        );
     }
 
     fn tight_limits() -> ObservationLimits {

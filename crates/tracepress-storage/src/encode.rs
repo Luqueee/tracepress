@@ -151,7 +151,7 @@ pub(crate) const fn request_route(value: RequestRoute) -> &'static str {
 
 pub(crate) const fn request_kind(value: RequestRoute) -> &'static str {
     match value {
-        RequestRoute::ResponsesCompact => "compaction",
+        RequestRoute::ResponsesCompact => "compaction_legacy",
         RequestRoute::ChatCompletions | RequestRoute::Responses => "turn",
     }
 }

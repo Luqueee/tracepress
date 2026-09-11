@@ -1077,6 +1077,25 @@ struct ForwardState {
 }
 
 impl ForwardState {
+    /// Returns whether the forwarding half has reached a terminal state that can be joined to
+    /// semantic evidence.
+    const fn transport_is_terminal(&self) -> bool {
+        self.transport
+            || self.transport_failure.is_some()
+            || self.transport_admission_failure.is_some()
+    }
+
+    /// Returns whether this forward has all evidence required for one durable observation.
+    ///
+    /// Context analysis is detached from forwarding, so the response/transport halves must not
+    /// settle the forward while its admitted analysis outcome is still in flight.
+    const fn is_ready_to_settle(&self) -> bool {
+        self.request.is_some()
+            && (self.response.is_some() || self.transport_failure.is_some())
+            && self.transport_is_terminal()
+            && !self.context_pending
+    }
+
     /// Takes the evidence observed for this forward so far.
     ///
     /// A response without its request half carries no logical request, so it is dropped in
@@ -1252,7 +1271,7 @@ impl RunRecorder {
             }
             state.transport = true;
             state.status_code = metadata.status_code;
-            if state.request.is_none() || state.response.is_none() {
+            if state.request.is_none() || state.response.is_none() || state.context_pending {
                 return Ok(());
             }
             // Metadata is handed off from a tracked blocking task. A response observer can
@@ -1272,7 +1291,10 @@ impl RunRecorder {
     async fn compaction(&self, observation: CompactionObservation) -> Result<(), String> {
         let ended_at = current_timestamp()?;
         let mut request = RequestObservation::transport_only(
-            ProviderRequestKind::Compaction,
+            ProviderRequestKind::Compaction {
+                protocol: tracepress_provider::CompactionProtocol::DedicatedEndpointLegacy,
+                trigger: tracepress_provider::CompactionTrigger::Unknown,
+            },
             observation.request_bytes,
             observation.request_bytes,
             observation.content_encoding,
@@ -1357,8 +1379,13 @@ impl RunRecorder {
                 request: observation.observation,
                 started_at,
             });
-            state.context = observation.context;
-            state.context_pending = state.context.is_none();
+            if let Some(context) = observation.context {
+                state.context = Some(context);
+            }
+            state.context_pending = self.analysis_enabled && state.context.is_none();
+            if !state.is_ready_to_settle() {
+                return;
+            }
             state.settled = true;
             {
                 let record = self.record(state.evidence(forward), CorrelationStatus::Correlated);
@@ -1385,9 +1412,11 @@ impl RunRecorder {
             request: observation.observation,
             started_at,
         });
-        state.context = observation.context;
-        state.context_pending = state.context.is_none();
-        if state.response.is_none() && state.transport_failure.is_none() {
+        if let Some(context) = observation.context {
+            state.context = Some(context);
+        }
+        state.context_pending = self.analysis_enabled && state.context.is_none();
+        if !state.is_ready_to_settle() {
             return;
         }
         state.settled = true;
@@ -1429,8 +1458,7 @@ impl RunRecorder {
         state.context = Some(outcome);
         state.analysis_permit = analysis_permit;
         state.context_pending = false;
-        if state.request.is_none() || state.response.is_none() && state.transport_failure.is_none()
-        {
+        if !state.is_ready_to_settle() {
             return;
         }
         state.settled = true;
@@ -1455,8 +1483,7 @@ impl RunRecorder {
             return;
         }
         state.transport_admission_failure = Some(reason);
-        if state.request.is_none() || state.response.is_none() && state.transport_failure.is_none()
-        {
+        if !state.is_ready_to_settle() {
             return;
         }
         state.settled = true;
@@ -1491,6 +1518,7 @@ impl RunRecorder {
         state.response = Some(observation);
         if state.request.is_none()
             || (!state.transport && state.transport_admission_failure.is_none())
+            || state.context_pending
         {
             return;
         }
@@ -1512,7 +1540,7 @@ impl RunRecorder {
             return;
         }
         state.transport_failure = Some(failure);
-        if state.request.is_none() {
+        if state.request.is_none() || state.context_pending {
             return;
         }
         state.settled = true;
@@ -1947,8 +1975,8 @@ impl ContextIngestionWorker {
                 started_at_us,
             },
         )
-        .await
-        .map_err(|_error| ContextAnalysisDropReason::CorrelationDegraded)?;
+        .await;
+        let response = response.map_err(|_error| ContextAnalysisDropReason::CorrelationDegraded)?;
         match response {
             ControlResponse::Ok {
                 context_snapshot_id: Some(snapshot_id),
@@ -2157,6 +2185,10 @@ impl ContextIngestionWorker {
         .await;
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the finalization boundary assembles all durable context evidence atomically"
+    )]
     fn build_context_finalize(
         &self,
         input: &ContextFinalizationInput<'_>,
@@ -2182,13 +2214,35 @@ impl ContextIngestionWorker {
                 limits: self.context_analysis_limits,
             })
         });
-        let (metrics, visible_estimated_tokens) = context_metrics(
+        let (mut metrics, visible_estimated_tokens) = context_metrics(
             accepted_blocks,
             input.status,
             delta
                 .as_ref()
                 .and_then(|value| value.common_prefix_estimated_tokens),
         );
+        let unknown_block_count = accepted_blocks
+            .iter()
+            .filter(|block| block.kind == ContextBlockKind::Unknown)
+            .count();
+        metrics.unknown_block_count = Some(u64::try_from(unknown_block_count).unwrap_or(u64::MAX));
+        metrics.semantic_coverage_basis_points = if input.status != ContextAnalysisStatus::Complete
+            || accepted_len != analysis.blocks.len()
+            || accepted_blocks.is_empty()
+        {
+            None
+        } else {
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "the bounded block count makes this basis-point projection intentional"
+            )]
+            let basis_points = accepted_blocks
+                .len()
+                .saturating_sub(unknown_block_count)
+                .saturating_mul(10_000)
+                / accepted_blocks.len();
+            u16::try_from(basis_points).ok()
+        };
         let token_eligible = accepted_blocks
             .iter()
             .filter(|block| {
@@ -3651,6 +3705,20 @@ fn print_context_inspection(inspection: &ContextInspection) {
     println!(
         "  explicit bytes: {}",
         optional_number(inspection.coverage.explicit_bytes)
+    );
+    println!(
+        "  unknown blocks: {}",
+        optional_number(inspection.coverage.unknown_block_count)
+    );
+    println!(
+        "  semantic coverage: {}",
+        inspection
+            .coverage
+            .semantic_coverage_basis_points
+            .map_or_else(
+                || "unknown".to_owned(),
+                |value| { format!("{:.2}%", f64::from(value) / 100.0) }
+            )
     );
 
     println!("\nCorrelation");

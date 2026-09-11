@@ -86,7 +86,10 @@ async fn persists_compaction_as_a_dedicated_transport_operation() -> TestResult 
         .create_operation(session.session_id, OperationKind::Agent, "t1", None)
         .await?;
     let mut request = tracepress_provider::RequestObservation::transport_only(
-        ProviderRequestKind::Compaction,
+        ProviderRequestKind::Compaction {
+            protocol: tracepress_provider::CompactionProtocol::DedicatedEndpointLegacy,
+            trigger: tracepress_provider::CompactionTrigger::Unknown,
+        },
         128,
         128,
         ContentEncoding::Zstd,
@@ -126,7 +129,7 @@ async fn persists_compaction_as_a_dedicated_transport_operation() -> TestResult 
         request_row,
         (
             "responses_compact".to_owned(),
-            "compaction".to_owned(),
+            "compaction_legacy".to_owned(),
             "chatgpt_codex_subscription".to_owned(),
             "zstd".to_owned(),
             None,
@@ -144,6 +147,87 @@ async fn persists_compaction_as_a_dedicated_transport_operation() -> TestResult 
             row.get(0)
         })?;
     assert_eq!(snapshots, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn persists_responses_v2_compaction_lifecycle_without_content() -> TestResult {
+    let directory = TempDir::new()?;
+    let daemon = daemon(&directory).await?;
+    let session = daemon.start_session("t0").await?;
+    let root = daemon
+        .create_operation(session.session_id, OperationKind::Agent, "t1", None)
+        .await?;
+    let mut request = parse_request(ObservationInput::new(
+        br#"{"model":"gpt-5","stream":true,"input":[{"type":"compaction_trigger"}]}"#,
+        ObservationLimits::default(),
+    ));
+    request.transport = ProviderTransport::ChatGptCodexSubscription;
+    request.endpoint_profile_version = Some(1);
+    request.content_encoding = ContentEncoding::Zstd;
+    request.wire_bytes = Some(512);
+    let response = response(
+        br#"{"id":"resp_compaction_v2","model":"gpt-5","status":"completed","output":[{"type":"compaction","encrypted_content":"private-compaction-output"}],"usage":{"input_tokens":320,"output_tokens":12,"total_tokens":332}}"#,
+    );
+    assert_eq!(request.request_kind.as_wire_str(), "compaction_v2");
+    assert_eq!(
+        request.compaction_trigger,
+        Some(tracepress_provider::CompactionTrigger::Unknown)
+    );
+    assert!(response.compaction_output_seen);
+    let recorded = daemon
+        .record_provider_observation(RecordProviderObservation::new(
+            session.session_id,
+            root,
+            ProviderObservation::new(512, request, "t2")
+                .with_response(response)
+                .with_status_code(HttpStatusCode::new(200)?)
+                .with_outcome(ProviderObservationOutcome::Completed)
+                .with_ended_at("t3"),
+        ))
+        .await?;
+    daemon.shutdown().await?;
+
+    let database = Connection::open(directory.path().join("tracepress.sqlite3"))?;
+    let request_row: (String, String, String, Option<String>, Option<String>) = database.query_row(
+        "SELECT request_kind, legacy_request_kind, route, compaction_trigger, transport FROM provider_requests WHERE request_id = ?1",
+        [recorded.receipt.request_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?, row.get(4)?)),
+    )?;
+    assert_eq!(
+        request_row,
+        (
+            "compaction_v2".to_owned(),
+            "turn".to_owned(),
+            "responses".to_owned(),
+            Some("unknown".to_owned()),
+            Some("chatgpt_codex_subscription".to_owned()),
+        )
+    );
+    let attempt: (Option<String>, i64) = database.query_row(
+        "SELECT provider_response_id, compaction_output_seen FROM provider_attempts WHERE attempt_id = ?1",
+        [recorded.receipt.attempt_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(attempt, (Some("resp_compaction_v2".to_owned()), 1));
+    let usage: i64 = database.query_row(
+        "SELECT input_total FROM provider_usage WHERE attempt_id = ?1",
+        [recorded.receipt.attempt_id.to_string()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(usage, 320);
+    let event_payloads: Vec<Vec<u8>> = database
+        .prepare("SELECT payload FROM events ORDER BY rowid")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    let event_text = event_payloads
+        .into_iter()
+        .filter_map(|payload| String::from_utf8(payload).ok())
+        .collect::<Vec<_>>()
+        .join("\n");
+    assert!(event_text.contains("compaction_v2"));
+    assert!(event_text.contains("compaction_output_seen"));
+    assert!(!event_text.contains("private-compaction-output"));
     Ok(())
 }
 

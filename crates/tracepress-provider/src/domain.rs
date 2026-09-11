@@ -39,6 +39,42 @@ pub enum ProviderTransport {
     ChatGptCodexSubscription,
 }
 
+/// Trigger associated with a provider-managed context compaction.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum CompactionTrigger {
+    /// A user or client explicitly requested compaction.
+    Manual,
+    /// The client initiated compaction after reaching its configured threshold.
+    Auto,
+    /// The wire request carried no trustworthy trigger classification.
+    Unknown,
+}
+
+impl CompactionTrigger {
+    /// Returns the stable durable trigger value.
+    #[must_use]
+    pub const fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::Manual => "manual",
+            Self::Auto => "auto",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+/// Protocol used to perform provider-managed context compaction.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum CompactionProtocol {
+    /// V2 compaction represented by a `compaction_trigger` input item on Responses.
+    ResponsesTriggerV2,
+    /// Legacy compaction represented by the dedicated `/responses/compact` endpoint.
+    DedicatedEndpointLegacy,
+}
+
 /// Kind of provider request represented by one observation.
 #[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]
@@ -47,8 +83,55 @@ pub enum ProviderRequestKind {
     /// A normal model turn.
     #[default]
     Turn,
-    /// A provider-managed context compaction request.
-    Compaction,
+    /// A provider-managed context compaction request, with its wire protocol and trigger.
+    Compaction {
+        /// Route/protocol used for this compaction.
+        protocol: CompactionProtocol,
+        /// Trigger classification, which may remain unknown.
+        trigger: CompactionTrigger,
+    },
+}
+
+impl ProviderRequestKind {
+    /// Returns the stable durable request-kind value.
+    #[must_use]
+    pub const fn as_wire_str(self) -> &'static str {
+        match self {
+            Self::Turn => "turn",
+            Self::Compaction {
+                protocol: CompactionProtocol::ResponsesTriggerV2,
+                ..
+            } => "compaction_v2",
+            Self::Compaction {
+                protocol: CompactionProtocol::DedicatedEndpointLegacy,
+                ..
+            } => "compaction_legacy",
+        }
+    }
+
+    /// Returns the compaction protocol, if this is a compaction request.
+    #[must_use]
+    pub const fn compaction_protocol(self) -> Option<CompactionProtocol> {
+        match self {
+            Self::Turn => None,
+            Self::Compaction { protocol, .. } => Some(protocol),
+        }
+    }
+
+    /// Returns the compaction trigger, if this is a compaction request.
+    #[must_use]
+    pub const fn compaction_trigger(self) -> Option<CompactionTrigger> {
+        match self {
+            Self::Turn => None,
+            Self::Compaction { trigger, .. } => Some(trigger),
+        }
+    }
+
+    /// Returns whether this observation is a provider-managed compaction.
+    #[must_use]
+    pub const fn is_compaction(self) -> bool {
+        matches!(self, Self::Compaction { .. })
+    }
 }
 
 /// Content encoding observed on an incoming provider request.

@@ -11,7 +11,8 @@ use crate::domain::{
 };
 use crate::json::{self, StringExtraction};
 use crate::response::{
-    ResponseObservation, UsageOutcome, extract_usage, is_terminal_state, settle_usage_status,
+    ResponseObservation, UsageOutcome, contains_compaction_item, extract_usage, is_terminal_state,
+    settle_usage_status,
 };
 
 /// One completed SSE event. Data contains only that event's joined `data` fields.
@@ -552,6 +553,9 @@ impl StreamingObserver {
                 )
             },
         );
+        if contains_compaction_item(&payload) {
+            self.response.compaction_output_seen = true;
+        }
         if let Some(object) = object.as_object() {
             let mut extraction = StringExtraction::new(limits.max_string_bytes);
             if self.response.provider_response_id.is_none() {
@@ -654,6 +658,7 @@ mod tests {
         raw_usage: Option<&'a [u8]>,
         normalized_usage: Option<&'a crate::NormalizedUsage>,
         usage_status: UsageStatus,
+        compaction_output_seen: bool,
     }
 
     fn semantic_projection(observation: &ResponseObservation) -> SemanticProjection<'_> {
@@ -670,6 +675,7 @@ mod tests {
             raw_usage: observation.raw_usage.as_ref().map(AsRef::as_ref),
             normalized_usage: observation.normalized_usage.as_ref(),
             usage_status: observation.usage_status,
+            compaction_output_seen: observation.compaction_output_seen,
         }
     }
 
@@ -682,6 +688,8 @@ mod tests {
     }
 
     const COMPLETED_STREAM: &[u8] = b"event: response.created\r\ndata: {\"response\":{\"id\":\"resp_1\",\"model\":\"gpt\"}}\r\n\r\nevent: response.output_text.delta\ndata: {\"delta\":\"secret\"}\n\nevent: response.completed\ndata: {\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":2,\"output_tokens\":1,\"total_tokens\":3}}}\n\n";
+
+    const COMPACTION_STREAM: &[u8] = b"event: response.created\ndata: {\"response\":{\"id\":\"resp_compact\"}}\n\nevent: response.output_item.done\ndata: {\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"PRIVATE\"}}\n\nevent: response.completed\ndata: {\"response\":{\"status\":\"completed\",\"usage\":{\"input_tokens\":4,\"output_tokens\":1,\"total_tokens\":5}}}\n\n";
 
     #[test]
     fn fragmentation_is_semantically_invariant() {
@@ -699,6 +707,17 @@ mod tests {
         assert_eq!(seven.chunk_count, Some(stream.len().div_ceil(7) as u64));
         assert_eq!(one.response_state, ProviderResponseState::Completed);
         assert_eq!(one.usage_status, UsageStatus::Final);
+    }
+
+    #[test]
+    fn a_compaction_output_item_is_detected_across_sse_fragments() {
+        let observation = stream_with_chunks(COMPACTION_STREAM, 3);
+
+        assert!(observation.compaction_output_seen);
+        assert_eq!(observation.response_state, ProviderResponseState::Completed);
+        assert_eq!(observation.usage_status, UsageStatus::Final);
+        let debug = format!("{observation:?}");
+        assert!(!debug.contains("PRIVATE"));
     }
 
     /// A gateway that appends one more non-lifecycle event after the terminal event.

@@ -75,6 +75,8 @@ async fn writer_serializes_events_and_persists_unknowns_as_null() -> TestResult 
                 decode_duration_us: None,
                 decoder_version: None,
                 parser_version: None,
+                request_kind: None,
+                compaction_trigger: None,
                 observation_status: None,
                 model: None,
                 stream: None,
@@ -116,6 +118,7 @@ async fn writer_serializes_events_and_persists_unknowns_as_null() -> TestResult 
                 ttfb_us: None,
                 ttft_us: None,
                 duration_us: None,
+                compaction_output_seen: None,
                 anomaly_metadata: None,
             })
             .await?,

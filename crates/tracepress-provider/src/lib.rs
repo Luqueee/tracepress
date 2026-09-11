@@ -151,11 +151,12 @@ pub enum ProviderEndpointError {
     SubscriptionResponsesOnly,
 }
 pub use domain::{
-    AnalysisDecodeStatus, AnomalyFlags, ContentCaptureMode, ContentEncoding, LimitsError,
-    MAX_RETAINED_USAGE_BYTES, NormalizedUsage, OPENAI_RESPONSES_PARSER_VERSION, ObservationError,
-    ObservationInput, ObservationLimitValues, ObservationLimits, ObservationStatus, ProviderKind,
-    ProviderProtocol, ProviderRequestKind, ProviderResponseState, ProviderTransport,
-    RawProviderUsage, USAGE_NORMALIZER_VERSION, UsageError, UsageStatus,
+    AnalysisDecodeStatus, AnomalyFlags, CompactionProtocol, CompactionTrigger, ContentCaptureMode,
+    ContentEncoding, LimitsError, MAX_RETAINED_USAGE_BYTES, NormalizedUsage,
+    OPENAI_RESPONSES_PARSER_VERSION, ObservationError, ObservationInput, ObservationLimitValues,
+    ObservationLimits, ObservationStatus, ProviderKind, ProviderProtocol, ProviderRequestKind,
+    ProviderResponseState, ProviderTransport, RawProviderUsage, USAGE_NORMALIZER_VERSION,
+    UsageError, UsageStatus,
 };
 pub use observer::{ObservationResult, OpenAiResponsesV1Observer, ProviderObserver};
 pub use request::{OpenAiResponsesRequestObservation, RequestObservation, parse_request};

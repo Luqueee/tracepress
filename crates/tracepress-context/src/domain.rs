@@ -395,6 +395,10 @@ pub struct ContextSnapshot {
     pub analysis_version: u32,
     /// Outcome of the analysis.
     pub status: ContextAnalysisStatus,
+    /// Number of fully delimited blocks whose semantic type this version did not recognize.
+    pub unknown_block_count: u32,
+    /// Recognized-block coverage in basis points (`10_000` = 100%), when the denominator exists.
+    pub semantic_coverage_basis_points: Option<u16>,
     /// Per-signal visibility of the analyzed request.
     pub visibility: ContextVisibility,
     /// Digest over the exact JSON bytes supplied to the analyzer.
@@ -488,6 +492,8 @@ mod tests {
             inference_operation_id: OperationId::generate(&generator),
             analysis_version: CONTEXT_ANALYSIS_VERSION,
             status: ContextAnalysisStatus::Partial,
+            unknown_block_count: 0,
+            semantic_coverage_basis_points: None,
             visibility: ContextVisibility {
                 explicit_request_complete: false,
                 uses_previous_response: true,

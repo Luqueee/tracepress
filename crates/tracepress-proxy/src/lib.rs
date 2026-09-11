@@ -1167,6 +1167,10 @@ impl ContextAnalysisTrigger {
         drop(tokio::spawn(async move {
             let _task_guard = task_guard;
             let Ok((analysis_body, decode_status, wire_content_hash)) = analysis_body.await else {
+                let _accepted = sink.try_record_context_analysis(ContextAnalysisObservation {
+                    forward,
+                    outcome: ContextAnalysisOutcome::Dropped(ContextAnalysisDropReason::Cancelled),
+                });
                 drop(permit);
                 return;
             };

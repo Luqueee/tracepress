@@ -238,6 +238,8 @@ fn insert(
             decode_duration_us,
             decoder_version,
             parser_version,
+            request_kind: request_kind_value,
+            compaction_trigger,
             observation_status,
             model,
             stream,
@@ -252,9 +254,18 @@ fn insert(
             text_input_block_count,
             image_input_block_count,
             file_input_block_count,
-        } => committed(sqlite(transaction.execute(
-            "INSERT INTO provider_requests(request_id, operation_id, route, method, request_bytes, provider, protocol, parser_version, observation_status, model, stream, background, store, reasoning_effort, text_verbosity, truncation, previous_response_id_present, input_item_count, tool_count, text_input_block_count, image_input_block_count, file_input_block_count, transport, endpoint_profile_version, usage_source, billing_model, content_encoding, analysis_decode_status, wire_bytes, wire_sha256, decoded_bytes, decode_duration_us, decoder_version, request_kind) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34)",
-            params![
+        } => {
+            let durable_request_kind = request_kind_value
+                .as_deref()
+                .unwrap_or_else(|| request_kind(metadata.route()));
+            let legacy_request_kind = if durable_request_kind == "compaction_legacy" {
+                "compaction"
+            } else {
+                "turn"
+            };
+            committed(sqlite(transaction.execute(
+                "INSERT INTO provider_requests(request_id, operation_id, route, method, request_bytes, provider, protocol, parser_version, observation_status, model, stream, background, store, reasoning_effort, text_verbosity, truncation, previous_response_id_present, input_item_count, tool_count, text_input_block_count, image_input_block_count, file_input_block_count, transport, endpoint_profile_version, usage_source, billing_model, content_encoding, analysis_decode_status, wire_bytes, wire_sha256, decoded_bytes, decode_duration_us, decoder_version, legacy_request_kind, request_kind, compaction_trigger) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36)",
+                params![
                 metadata.request_id().to_string(),
                 operation_id.to_string(),
                 request_route(metadata.route()),
@@ -291,9 +302,12 @@ fn insert(
                 (*decoded_bytes).map(|value| sqlite_u64(value, "decoded_bytes")).transpose()?,
                 (*decode_duration_us).map(|value| sqlite_u64(value, "decode_duration_us")).transpose()?,
                 (*decoder_version).map(|value| sqlite_u64(u64::from(value), "decoder_version")).transpose()?,
-                request_kind(metadata.route()),
+                legacy_request_kind,
+                durable_request_kind,
+                compaction_trigger.as_deref(),
             ],
-        ))?),
+        ))?)
+        }
         WriteCommand::ProviderAttempt {
             attempt_id,
             request_id,
@@ -316,9 +330,10 @@ fn insert(
             ttfb_us,
             ttft_us,
             duration_us,
+            compaction_output_seen,
             anomaly_metadata,
         } => committed(sqlite(transaction.execute(
-            "INSERT INTO provider_attempts(attempt_id, request_id, ordinal, status_code, started_at, ended_at, status, provider_response_id, response_model, response_state, provider_created_at, incomplete_reason, error_code, transport_error, observation_status, streaming, chunk_count, byte_count, ttfb_us, ttft_us, duration_us, anomaly_metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22)",
+            "INSERT INTO provider_attempts(attempt_id, request_id, ordinal, status_code, started_at, ended_at, status, provider_response_id, response_model, response_state, provider_created_at, incomplete_reason, error_code, transport_error, observation_status, streaming, chunk_count, byte_count, ttfb_us, ttft_us, duration_us, compaction_output_seen, anomaly_metadata) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23)",
             params![
                 attempt_id.to_string(),
                 request_id.to_string(),
@@ -341,6 +356,7 @@ fn insert(
                 (*ttfb_us).map(|value| sqlite_u64(value, "ttfb_us")).transpose()?,
                 (*ttft_us).map(|value| sqlite_u64(value, "ttft_us")).transpose()?,
                 (*duration_us).map(|value| sqlite_u64(value, "duration_us")).transpose()?,
+                compaction_output_seen,
                 anomaly_metadata.as_deref(),
             ],
         ))?),
@@ -642,6 +658,8 @@ fn insert(
         WriteCommand::ContextAnalysisMetrics {
             snapshot_id,
             explicit_bytes,
+            unknown_block_count,
+            semantic_coverage_basis_points,
             estimated_tokens,
             estimated_tool_definition_share,
             estimated_tool_result_share,
@@ -667,10 +685,12 @@ fn insert(
             let roles = estimated_tokens.by_role();
             let origins = estimated_tokens.by_origin();
             committed(sqlite(transaction.execute(
-                "INSERT INTO context_analysis_metrics(snapshot_id, explicit_bytes, estimated_tokens_kind_instructions, estimated_tokens_kind_message, estimated_tokens_kind_text, estimated_tokens_kind_image_reference, estimated_tokens_kind_file_reference, estimated_tokens_kind_tool_definition, estimated_tokens_kind_tool_call, estimated_tokens_kind_tool_result, estimated_tokens_kind_item_reference, estimated_tokens_kind_prompt_reference, estimated_tokens_kind_provider_state_reference, estimated_tokens_kind_assistant_history, estimated_tokens_kind_opaque_reasoning, estimated_tokens_kind_opaque, estimated_tokens_kind_unknown, estimated_tokens_role_system, estimated_tokens_role_developer, estimated_tokens_role_user, estimated_tokens_role_assistant, estimated_tokens_role_tool, estimated_tokens_role_unknown, estimated_tokens_origin_human_authored, estimated_tokens_origin_agent_generated, estimated_tokens_origin_tool_generated, estimated_tokens_origin_tool_schema, estimated_tokens_origin_provider_managed, estimated_tokens_origin_external_reference, estimated_tokens_origin_tracepress_generated, estimated_tokens_origin_unknown, estimated_tool_definition_share, estimated_tool_result_share, estimated_human_text_share, estimated_assistant_history_share, estimated_unique_content_share, estimated_repeated_content_share, tool_count, schema_bytes, estimated_schema_tokens, largest_tool_schema, repeated_schema_tokens, stable_explicit_prefix_estimate, estimator, estimator_version, estimate_confidence, opportunity_signals) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47)",
+                "INSERT INTO context_analysis_metrics(snapshot_id, explicit_bytes, unknown_block_count, semantic_coverage_basis_points, estimated_tokens_kind_instructions, estimated_tokens_kind_message, estimated_tokens_kind_text, estimated_tokens_kind_image_reference, estimated_tokens_kind_file_reference, estimated_tokens_kind_tool_definition, estimated_tokens_kind_tool_call, estimated_tokens_kind_tool_result, estimated_tokens_kind_item_reference, estimated_tokens_kind_prompt_reference, estimated_tokens_kind_provider_state_reference, estimated_tokens_kind_assistant_history, estimated_tokens_kind_opaque_reasoning, estimated_tokens_kind_opaque, estimated_tokens_kind_unknown, estimated_tokens_role_system, estimated_tokens_role_developer, estimated_tokens_role_user, estimated_tokens_role_assistant, estimated_tokens_role_tool, estimated_tokens_role_unknown, estimated_tokens_origin_human_authored, estimated_tokens_origin_agent_generated, estimated_tokens_origin_tool_generated, estimated_tokens_origin_tool_schema, estimated_tokens_origin_provider_managed, estimated_tokens_origin_external_reference, estimated_tokens_origin_tracepress_generated, estimated_tokens_origin_unknown, estimated_tool_definition_share, estimated_tool_result_share, estimated_human_text_share, estimated_assistant_history_share, estimated_unique_content_share, estimated_repeated_content_share, tool_count, schema_bytes, estimated_schema_tokens, largest_tool_schema, repeated_schema_tokens, stable_explicit_prefix_estimate, estimator, estimator_version, estimate_confidence, opportunity_signals) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20, ?21, ?22, ?23, ?24, ?25, ?26, ?27, ?28, ?29, ?30, ?31, ?32, ?33, ?34, ?35, ?36, ?37, ?38, ?39, ?40, ?41, ?42, ?43, ?44, ?45, ?46, ?47, ?48, ?49)",
                 params![
                     snapshot_id.to_string(),
                     sqlite_optional(*explicit_bytes, "explicit_bytes")?,
+                    sqlite_optional(*unknown_block_count, "unknown_block_count")?,
+                    semantic_coverage_basis_points.map(i64::from),
                     sqlite_optional(kinds.get(ContextBlockKind::Instructions), "estimated_tokens_kind_instructions")?,
                     sqlite_optional(kinds.get(ContextBlockKind::Message), "estimated_tokens_kind_message")?,
                     sqlite_optional(kinds.get(ContextBlockKind::Text), "estimated_tokens_kind_text")?,

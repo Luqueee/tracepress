@@ -100,6 +100,8 @@ fn ancestry(generator: &UuidV7Generator) -> (Fixture, WriteBatch) {
         decode_duration_us: None,
         decoder_version: None,
         parser_version: None,
+        request_kind: None,
+        compaction_trigger: None,
         observation_status: None,
         model: None,
         stream: None,
@@ -137,6 +139,7 @@ fn ancestry(generator: &UuidV7Generator) -> (Fixture, WriteBatch) {
         ttfb_us: None,
         ttft_us: None,
         duration_us: None,
+        compaction_output_seen: None,
         anomaly_metadata: None,
     })
     .and(WriteCommand::ProviderUsage {
@@ -224,6 +227,8 @@ fn unknown_metrics(snapshot_id: ContextSnapshotId) -> WriteCommand {
     WriteCommand::ContextAnalysisMetrics {
         snapshot_id,
         explicit_bytes: None,
+        unknown_block_count: None,
+        semantic_coverage_basis_points: None,
         estimated_tokens: Box::new(EstimatedTokenComposition::default()),
         estimated_tool_definition_share: None,
         estimated_tool_result_share: None,
@@ -674,6 +679,8 @@ async fn every_composition_bucket_persists_in_its_own_column() -> TestResult {
         .submit(WriteCommand::ContextAnalysisMetrics {
             snapshot_id: fixture.snapshot,
             explicit_bytes: Some(4_096),
+            unknown_block_count: Some(2),
+            semantic_coverage_basis_points: Some(9_800),
             estimated_tokens: Box::new(EstimatedTokenComposition::new(by_kind, by_role, by_origin)),
             estimated_tool_definition_share: Some(0.25),
             estimated_tool_result_share: Some(0.5),
@@ -730,6 +737,12 @@ async fn every_composition_bucket_persists_in_its_own_column() -> TestResult {
         observed.len(),
         "two composition buckets collided into one column: {observed:?}"
     );
+    let coverage: (i64, i64) = connection.query_row(
+        "SELECT unknown_block_count, semantic_coverage_basis_points FROM context_analysis_metrics",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(coverage, (2, 9_800));
     Ok(())
 }
 

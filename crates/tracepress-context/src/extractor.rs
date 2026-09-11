@@ -184,6 +184,12 @@ impl fmt::Debug for ContextBlockDraft {
 pub struct ContextAnalysis {
     /// Terminal analysis status.
     pub status: ContextAnalysisStatus,
+    /// Whether the request contained a Responses V2 compaction lifecycle marker.
+    pub compaction_trigger_seen: bool,
+    /// Number of structurally complete blocks whose semantic type was unknown to this version.
+    pub unknown_block_count: u32,
+    /// Recognized-block coverage in basis points. This is separate from structural completion.
+    pub semantic_coverage_basis_points: Option<u16>,
     /// Independent visibility signals; logical status is derived from these signals.
     pub visibility: crate::ContextVisibility,
     /// Whether any duplicate object key was observed.
@@ -209,6 +215,12 @@ impl fmt::Debug for ContextAnalysis {
         formatter
             .debug_struct("ContextAnalysis")
             .field("status", &self.status)
+            .field("compaction_trigger_seen", &self.compaction_trigger_seen)
+            .field("unknown_block_count", &self.unknown_block_count)
+            .field(
+                "semantic_coverage_basis_points",
+                &self.semantic_coverage_basis_points,
+            )
             .field("visibility", &self.visibility)
             .field("duplicate_key_detected", &self.duplicate_key_detected)
             .field("request_content_hash", &self.request_content_hash)
@@ -310,6 +322,7 @@ struct ExtractionState {
     uses_external_files: bool,
     uses_external_images: bool,
     contains_opaque_items: bool,
+    compaction_trigger_seen: bool,
     facts: ContextVisibilityFacts,
 }
 
@@ -598,6 +611,26 @@ where
         lookup,
     );
 
+    let unknown_block_count = blocks
+        .iter()
+        .filter(|block| block.kind == ContextBlockKind::Unknown)
+        .count()
+        .try_into()
+        .unwrap_or(u32::MAX);
+    let semantic_coverage_basis_points =
+        if status == ContextAnalysisStatus::Complete && !blocks.is_empty() {
+            let known = blocks
+                .len()
+                .saturating_sub(usize::try_from(unknown_block_count).unwrap_or(usize::MAX));
+            #[allow(
+                clippy::arithmetic_side_effects,
+                reason = "the bounded block count makes this basis-point projection intentional"
+            )]
+            let basis_points = known.saturating_mul(10_000) / blocks.len();
+            u16::try_from(basis_points).ok()
+        } else {
+            None
+        };
     let reason = if matches!(status, ContextAnalysisStatus::Malformed) {
         Some(ContextAnalysisReason::Malformed)
     } else if let Some(limit) = index.limit_reached() {
@@ -612,6 +645,9 @@ where
 
     ContextAnalysis {
         status,
+        compaction_trigger_seen: state.compaction_trigger_seen,
+        unknown_block_count,
+        semantic_coverage_basis_points,
         visibility: visibility.visibility,
         duplicate_key_detected: index.duplicate_key_detected(),
         request_content_hash,
@@ -778,7 +814,6 @@ fn collect_item(
     state: &mut ExtractionState,
 ) {
     if item.kind() != JsonValueKind::Object {
-        state.mark_partial(ContextAnalysisReason::UnknownContextItem);
         state.add(simple_candidate(
             item,
             ContextBlockKind::Unknown,
@@ -818,7 +853,11 @@ fn collect_item(
             | "computer_call"
             | "web_search_call"
             | "web_search_preview_call"
-            | "code_interpreter_call",
+            | "code_interpreter_call"
+            | "custom_tool_call"
+            | "tool_search_call"
+            | "local_shell_call"
+            | "shell_call",
         ) => {
             collect_tool_call(request, index, item, state);
         }
@@ -826,7 +865,11 @@ fn collect_item(
             "function_call_output"
             | "computer_call_output"
             | "web_search_call_output"
-            | "code_interpreter_call_output",
+            | "code_interpreter_call_output"
+            | "custom_tool_call_output"
+            | "tool_search_output"
+            | "local_shell_call_output"
+            | "shell_call_output",
         ) => {
             collect_tool_result(request, index, item, state);
         }
@@ -863,6 +906,9 @@ fn collect_item(
                 item.parent().unwrap_or_else(|| item.id()),
             ));
         }
+        Some("compaction_trigger") => {
+            state.compaction_trigger_seen = true;
+        }
         Some("input_text" | "output_text") => {
             collect_text_part(
                 request,
@@ -875,7 +921,6 @@ fn collect_item(
             );
         }
         Some(_) | None => {
-            state.mark_partial(ContextAnalysisReason::UnknownContextItem);
             state.add(simple_candidate(
                 item,
                 ContextBlockKind::Unknown,
@@ -980,7 +1025,6 @@ fn collect_content_part(
     state: &mut ExtractionState,
 ) {
     if part.kind() != JsonValueKind::Object {
-        state.mark_partial(ContextAnalysisReason::UnknownContextItem);
         state.add(Candidate {
             source: part.id(),
             payload: part.id(),
@@ -1078,7 +1122,6 @@ fn collect_content_part(
             });
         }
         Some(_) | None => {
-            state.mark_partial(ContextAnalysisReason::UnknownContextItem);
             state.add(Candidate {
                 source: part.id(),
                 payload: part.id(),

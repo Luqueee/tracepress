@@ -44,6 +44,9 @@ pub struct ResponseObservation {
     pub error_code: Option<String>,
     /// Exact bounded usage object, if present and valid.
     pub raw_usage: Option<RawProviderUsage>,
+    /// Whether a streamed or document response contained a compaction output item.
+    #[serde(default)]
+    pub compaction_output_seen: bool,
     /// Checked canonical usage values.
     pub normalized_usage: Option<NormalizedUsage>,
     /// Number of upstream chunks observed by a stream adapter.
@@ -74,6 +77,7 @@ impl ResponseObservation {
             incomplete_reason: None,
             error_code: None,
             raw_usage: None,
+            compaction_output_seen: false,
             normalized_usage: None,
             chunk_count: None,
             byte_count: None,
@@ -145,7 +149,22 @@ pub fn parse_response(input: ObservationInput<'_>) -> ResponseObservation {
     if matches!(usage.outcome, UsageOutcome::Oversized) {
         result.status = ObservationStatus::ResourceLimit;
     }
+    result.compaction_output_seen = contains_compaction_item_object(object);
     result
+}
+
+/// Detects the provider's compaction output item without retaining its content.
+pub(crate) fn contains_compaction_item(value: &Value) -> bool {
+    match value {
+        Value::Object(object) => contains_compaction_item_object(object),
+        Value::Array(values) => values.iter().any(contains_compaction_item),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => false,
+    }
+}
+
+fn contains_compaction_item_object(object: &Map<String, Value>) -> bool {
+    (object.get("type").and_then(Value::as_str) == Some("compaction"))
+        || object.values().any(contains_compaction_item)
 }
 
 /// What the top-level `usage` member of one provider response object yielded.
@@ -568,6 +587,17 @@ mod tests {
         assert_eq!(observation.provider_response_id, None);
         assert_eq!(observation.status, ObservationStatus::Partial);
         assert_eq!(observation.model.as_deref(), Some("gpt-5.6-sol"));
+    }
+
+    #[test]
+    fn a_compaction_output_item_is_detected_without_retaining_its_content() {
+        let observation = parse(
+            br#"{"id":"resp_compact","status":"completed","output":[{"type":"compaction","encrypted_content":"PRIVATE"}],"usage":{"input_tokens":10,"output_tokens":2,"total_tokens":12}}"#,
+        );
+
+        assert!(observation.compaction_output_seen);
+        let debug = format!("{observation:?}");
+        assert!(!debug.contains("PRIVATE"));
     }
 
     #[test]

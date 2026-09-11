@@ -40,6 +40,7 @@ struct Arrival {
 struct Sink {
     requests: Arc<Mutex<Vec<RequestObservation>>>,
     contexts: Arc<Mutex<Vec<ContextAnalysisOutcome>>>,
+    responses: Arc<Mutex<Vec<ResponseObservation>>>,
     compactions: Arc<Mutex<Vec<CompactionObservation>>>,
 }
 
@@ -69,8 +70,12 @@ impl ProviderObservationSink for Sink {
     fn try_record_response(
         &self,
         _forward: ForwardId,
-        _observation: ResponseObservation,
+        observation: ResponseObservation,
     ) -> Result<(), ObservationSinkError> {
+        self.responses
+            .lock()
+            .map_err(|_error| ObservationSinkError::rejected())?
+            .push(observation);
         Ok(())
     }
 
@@ -285,6 +290,165 @@ async fn zstd_forwarding_is_wire_exact_while_analysis_uses_json() -> TestResult 
         context.analysis_content_hash.as_bytes().as_slice(),
         wire_sha256
     );
+
+    proxy_task.abort();
+    upstream_task.abort();
+    Ok(())
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "the test keeps the V2 request, response, and analysis assertions together"
+)]
+#[tokio::test]
+async fn responses_v2_compaction_is_wire_exact_and_structurally_observed() -> TestResult {
+    let arrivals = Arc::new(Mutex::new(Vec::<Arrival>::new()));
+    let upstream_arrivals = Arc::clone(&arrivals);
+    let upstream_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let upstream_address = upstream_listener.local_addr()?;
+    let upstream_task = tokio::spawn(async move {
+        let app = Router::new().route(
+            "/v1/responses",
+            post(move |request: Request| {
+                let upstream_arrivals = Arc::clone(&upstream_arrivals);
+                async move {
+                    let (parts, body) = request.into_parts();
+                    let body = to_bytes(body, 8 * 1024 * 1024).await.unwrap_or_default();
+                    if let Ok(mut arrivals) = upstream_arrivals.lock() {
+                        arrivals.push(Arrival {
+                            path: parts.uri.path().to_owned(),
+                            body,
+                            authorization: parts
+                                .headers
+                                .get("authorization")
+                                .and_then(|value| value.to_str().ok())
+                                .map(str::to_owned),
+                            content_encoding: parts
+                                .headers
+                                .get("content-encoding")
+                                .and_then(|value| value.to_str().ok())
+                                .map(str::to_owned),
+                            content_length: parts
+                                .headers
+                                .get("content-length")
+                                .and_then(|value| value.to_str().ok())
+                                .map(str::to_owned),
+                        });
+                    }
+                    let body = concat!(
+                        "event: response.output_item.done\n",
+                        "data: {\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"private-compaction-output\"}}\n\n",
+                        "event: response.completed\n",
+                        "data: {\"response\":{\"id\":\"resp-v2\",\"model\":\"gpt-5\",\"status\":\"completed\",\"usage\":{\"input_tokens\":320,\"output_tokens\":12,\"total_tokens\":332}}}\n\n"
+                    );
+                    Response::builder()
+                        .status(StatusCode::OK)
+                        .header("content-type", "text/event-stream")
+                        .body(Body::from(body))
+                        .unwrap_or_else(|_error| Response::new(Body::empty()))
+                }
+            }),
+        );
+        let _result = axum::serve(upstream_listener, app).await;
+    });
+
+    let sink = Arc::new(Sink::default());
+    let proxy = TransparentProxy::new(ProxyConfig::new(
+        ProviderEndpoint::new(&format!("http://{upstream_address}/v1/responses"))?,
+        limits()?,
+        ContextAnalysisMode::Shadow,
+    )?)?
+    .with_observation_sink(Arc::<Sink>::clone(&sink));
+    let proxy_listener = TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_address = proxy_listener.local_addr()?;
+    let proxy_task = tokio::spawn(async move {
+        let _result = axum::serve(proxy_listener, proxy.router()).await;
+    });
+
+    let json = br#"{"model":"gpt-5","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"compact now"}]},{"type":"compaction_trigger"}]}"#;
+    let wire = zstd::stream::encode_all(std::io::Cursor::new(json), 1)?;
+    let response = reqwest::Client::new()
+        .post(format!("http://{proxy_address}/v1/responses"))
+        .header("content-type", "application/json")
+        .header("content-encoding", "zStD")
+        .header(
+            "authorization",
+            "Bearer TRACEPRESS_SUBSCRIPTION_SECRET_CANARY",
+        )
+        .body(wire.clone())
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let response_body = response.bytes().await?;
+    assert!(response_body.starts_with(b"event: response.output_item.done"));
+    wait_for(&sink).await?;
+
+    let arrival = arrivals
+        .lock()
+        .map_err(|_error| "upstream lock poisoned")?
+        .first()
+        .cloned()
+        .ok_or("upstream did not receive V2 compaction")?;
+    assert_eq!(arrival.path, "/v1/responses");
+    assert_eq!(arrival.body.as_ref(), wire.as_slice());
+    assert_eq!(arrival.content_encoding.as_deref(), Some("zStD"));
+    assert_eq!(
+        arrival.authorization.as_deref(),
+        Some("Bearer TRACEPRESS_SUBSCRIPTION_SECRET_CANARY")
+    );
+
+    let request = sink
+        .requests
+        .lock()
+        .map_err(|_error| "request lock poisoned")?
+        .first()
+        .cloned()
+        .ok_or("V2 request observation missing")?;
+    assert_eq!(request.request_kind.as_wire_str(), "compaction_v2");
+    assert_eq!(
+        request.compaction_trigger,
+        Some(tracepress_provider::CompactionTrigger::Unknown)
+    );
+    assert_eq!(
+        request.analysis_decode_status,
+        AnalysisDecodeStatus::Decoded
+    );
+
+    let context = sink
+        .contexts
+        .lock()
+        .map_err(|_error| "context lock poisoned")?
+        .pop()
+        .ok_or("V2 context analysis missing")?;
+    let ContextAnalysisOutcome::Analyzed(context) = context else {
+        return Err("V2 compaction request was not structurally analyzed".into());
+    };
+    assert_eq!(
+        context.status,
+        tracepress_context::ContextAnalysisStatus::Complete
+    );
+    assert!(context.compaction_trigger_seen);
+    assert_eq!(context.unknown_block_count, 0);
+    assert_eq!(context.semantic_coverage_basis_points, Some(10_000));
+    assert!(
+        context
+            .blocks
+            .iter()
+            .all(|block| block.kind != tracepress_context::ContextBlockKind::Unknown)
+    );
+
+    let response_observation = sink
+        .responses
+        .lock()
+        .map_err(|_error| "response lock poisoned")?
+        .first()
+        .cloned()
+        .ok_or("V2 response observation missing")?;
+    assert_eq!(
+        response_observation.provider_response_id.as_deref(),
+        Some("resp-v2")
+    );
+    assert!(response_observation.compaction_output_seen);
 
     proxy_task.abort();
     upstream_task.abort();

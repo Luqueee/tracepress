@@ -28,8 +28,8 @@ use tracepress_provider::{
     AnalysisDecodeStatus as ProviderAnalysisDecodeStatus, AnomalyFlags,
     ContentEncoding as ProviderContentEncoding, ObservationStatus as ProviderObservationStatus,
     ProviderKind as CanonicalProviderKind, ProviderProtocol as CanonicalProviderProtocol,
-    ProviderRequestKind, ProviderResponseState, ProviderTransport as CanonicalProviderTransport,
-    RequestObservation, ResponseObservation, UsageStatus as ProviderUsageStatus,
+    ProviderResponseState, ProviderTransport as CanonicalProviderTransport, RequestObservation,
+    ResponseObservation, UsageStatus as ProviderUsageStatus,
 };
 use tracepress_storage::{
     AnalysisDecodeStatus, ContentEncoding, ContextInspection, ContextSnapshotStatus,
@@ -943,9 +943,10 @@ impl DaemonService {
             parent_operation_id,
             observation,
         } = input;
-        let operation_kind = match observation.request.request_kind {
-            ProviderRequestKind::Compaction => OperationKind::ContextCompaction,
-            _ => OperationKind::LlmInference,
+        let operation_kind = if observation.request.request_kind.is_compaction() {
+            OperationKind::ContextCompaction
+        } else {
+            OperationKind::LlmInference
         };
         let operation_id = self
             .create_operation(
@@ -1493,10 +1494,7 @@ fn errored_upstream_status(status_code: Option<HttpStatusCode>) -> bool {
 /// `Completed` is reported only when the provider itself reported a completed response with no
 /// error evidence beside it.
 fn inference_status(observation: &ProviderObservation) -> InferenceStatus {
-    if matches!(
-        observation.request.request_kind,
-        ProviderRequestKind::Compaction
-    ) {
+    if observation.request.request_kind.is_compaction() {
         if observation.transport_error.is_some()
             || errored_upstream_status(observation.status_code)
             || observation.outcome == ProviderObservationOutcome::Failed
@@ -1687,8 +1685,14 @@ fn provider_request_command(
     observation: &ProviderObservation,
 ) -> WriteCommand {
     let request = &observation.request;
-    let compaction = matches!(request.request_kind, ProviderRequestKind::Compaction);
-    let metadata = if matches!(request.request_kind, ProviderRequestKind::Compaction) {
+    let dedicated_compaction = matches!(
+        request.request_kind.compaction_protocol(),
+        Some(tracepress_provider::CompactionProtocol::DedicatedEndpointLegacy)
+    );
+    let metadata = if matches!(
+        request.request_kind.compaction_protocol(),
+        Some(tracepress_provider::CompactionProtocol::DedicatedEndpointLegacy)
+    ) {
         RequestMetadata::responses_compact(request_id, observation.request_bytes)
     } else {
         RequestMetadata::responses(request_id, observation.request_bytes)
@@ -1701,17 +1705,26 @@ fn provider_request_command(
         transport: storage_transport(request.transport),
         endpoint_profile_version: request.endpoint_profile_version,
         content_encoding: storage_content_encoding(request.content_encoding),
-        analysis_decode_status: (!compaction)
+        analysis_decode_status: (!dedicated_compaction)
             .then(|| storage_decode_status(request.analysis_decode_status))
             .flatten(),
         wire_bytes: request.wire_bytes,
         wire_sha256: request.wire_sha256.clone(),
-        decoded_bytes: (!compaction).then_some(request.decoded_bytes).flatten(),
-        decode_duration_us: (!compaction)
+        decoded_bytes: (!dedicated_compaction)
+            .then_some(request.decoded_bytes)
+            .flatten(),
+        decode_duration_us: (!dedicated_compaction)
             .then_some(request.decode_duration_us)
             .flatten(),
-        decoder_version: (!compaction).then_some(request.decoder_version).flatten(),
-        parser_version: (!compaction).then_some(request.parser_version),
+        decoder_version: (!dedicated_compaction)
+            .then_some(request.decoder_version)
+            .flatten(),
+        parser_version: (!dedicated_compaction).then_some(request.parser_version),
+        request_kind: Some(request.request_kind.as_wire_str().to_owned()),
+        compaction_trigger: request
+            .compaction_trigger
+            .map(tracepress_provider::CompactionTrigger::as_wire_str)
+            .map(str::to_owned),
         observation_status: storage_observation_status(request.status),
         model: request.model.clone(),
         stream: request.stream,
@@ -1720,9 +1733,11 @@ fn provider_request_command(
         reasoning_effort: request.reasoning_effort.clone(),
         text_verbosity: request.verbosity.clone(),
         truncation: request.truncation.clone(),
-        // Compaction is intentionally transport-only: its semantic request fields were never
-        // parsed, so false would incorrectly turn "unknown" into a factual absence.
-        previous_response_id_present: (!compaction).then_some(request.has_previous_response_id),
+        // The legacy dedicated endpoint is transport-only: its semantic request fields were
+        // never parsed, so false would incorrectly turn "unknown" into a factual absence. V2
+        // compaction uses the ordinary Responses request parser and keeps these fields.
+        previous_response_id_present: (!dedicated_compaction)
+            .then_some(request.has_previous_response_id),
         input_item_count: request.input_item_count,
         tool_count: request.tool_count,
         text_input_block_count: request.text_input_blocks,
@@ -1768,6 +1783,7 @@ fn provider_attempt_command(evidence: ObservedAttempt<'_>) -> WriteCommand {
         duration_us: response
             .and_then(|value| value.duration_us)
             .or(observation.duration_us),
+        compaction_output_seen: response.map(|value| value.compaction_output_seen),
         anomaly_metadata: response.and_then(|value| {
             value
                 .normalized_usage
@@ -1872,23 +1888,33 @@ fn provider_events(
         commands: Vec::new(),
     };
     let request = &observation.request;
-    let compaction = matches!(request.request_kind, ProviderRequestKind::Compaction);
+    let dedicated_compaction = matches!(
+        request.request_kind.compaction_protocol(),
+        Some(tracepress_provider::CompactionProtocol::DedicatedEndpointLegacy)
+    );
     events.push(
         EVENT_REQUEST_OBSERVED,
         serde_json::json!({
             "provider": request.provider,
             "protocol": request.protocol,
             "transport": request.transport,
-            "request_kind": request.request_kind,
+            "request_kind": request.request_kind.as_wire_str(),
+            "compaction_protocol": request.request_kind.compaction_protocol(),
+            "compaction_trigger": request
+                .compaction_trigger
+                .map(tracepress_provider::CompactionTrigger::as_wire_str),
             "endpoint_profile_version": request.endpoint_profile_version,
-            "parser_version": (!compaction).then_some(request.parser_version),
+            "parser_version": (!dedicated_compaction).then_some(request.parser_version),
             "observation_status": request.status,
             "content_encoding": request.content_encoding,
-            "analysis_decode_status": (!compaction).then_some(request.analysis_decode_status),
+            "analysis_decode_status": (!dedicated_compaction)
+                .then_some(request.analysis_decode_status),
             "wire_bytes": request.wire_bytes,
-            "decoded_bytes": (!compaction).then_some(request.decoded_bytes).flatten(),
-            "decode_duration_us": (!compaction).then_some(request.decode_duration_us).flatten(),
-            "decoder_version": (!compaction).then_some(request.decoder_version).flatten(),
+            "decoded_bytes": (!dedicated_compaction).then_some(request.decoded_bytes).flatten(),
+            "decode_duration_us": (!dedicated_compaction)
+                .then_some(request.decode_duration_us)
+                .flatten(),
+            "decoder_version": (!dedicated_compaction).then_some(request.decoder_version).flatten(),
             "model": request.model,
             "stream": request.stream,
             "request_bytes": observation.request_bytes,
@@ -1906,6 +1932,7 @@ fn provider_events(
                 "provider_response_id": response.and_then(|value| value.provider_response_id.as_deref()),
                 "response_state": response.map(|value| value.response_state),
                 "ttfb_us": response.and_then(|value| value.ttfb_us),
+                "compaction_output_seen": response.map(|value| value.compaction_output_seen),
             }),
         );
     }
@@ -1923,6 +1950,7 @@ fn provider_events(
                 "ttfb_us": response.and_then(|value| value.ttfb_us),
                 "ttft_us": response.and_then(|value| value.ttft_us),
                 "duration_us": response.and_then(|value| value.duration_us),
+                "compaction_output_seen": response.map(|value| value.compaction_output_seen),
             }),
         );
     }

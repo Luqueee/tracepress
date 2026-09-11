@@ -158,6 +158,7 @@ def create_fixture() -> sqlite3.Connection:
         INSERT INTO events VALUES (3, 'provider.request.observed', '{}');
         INSERT INTO events VALUES (4, 'provider.response.completed', '{}');
         INSERT INTO events VALUES (5, 'provider.usage.observed', '{}');
+        INSERT INTO events VALUES (6, 'context.analysis.dropped', '{"reason":"observer_backpressure","dropped_count":2}');
         """
     )
     return connection
@@ -176,8 +177,11 @@ class BaselineAnalysisContractTests(unittest.TestCase):
 
         self.assertEqual(report["dataset"]["sessions_total"], 1)
         self.assertEqual(report["dataset"]["requests_total"], 1)
-        self.assertEqual(report["quality"]["analysis_coverage"], 1.0)
+        self.assertEqual(report["quality"]["analysis_requests_seen"], 3)
+        self.assertEqual(report["quality"]["analysis_dropped"], 2)
+        self.assertEqual(report["quality"]["analysis_coverage"], 1 / 3)
         self.assertEqual(report["quality"]["correlation_coverage"], 1.0)
+        self.assertEqual(report["quality"]["event_drop_work"]["observer_backpressure"], 2)
         self.assertEqual(report["quality"]["semantic_coverage"]["mean"], 0.9)
         self.assertFalse(report["provider_usage"]["token_reconciliation_available"])
         self.assertEqual(report["provider_usage"]["reconciliation_unavailable"]["missing_local_estimate"], 1)

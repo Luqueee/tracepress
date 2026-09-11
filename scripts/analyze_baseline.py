@@ -208,9 +208,12 @@ def block_distribution(records: Iterable[dict[str, Any]], key: str) -> dict[str,
     return {name: distribution(values) for name, values in sorted(grouped.items())}
 
 
-def event_counts(connection: sqlite3.Connection) -> tuple[Counter[str], Counter[str]]:
+def event_counts(
+    connection: sqlite3.Connection,
+) -> tuple[Counter[str], Counter[str], Counter[str]]:
     counts: Counter[str] = Counter()
     drop_reasons: Counter[str] = Counter()
+    drop_work: Counter[str] = Counter()
     event_rows = rows(connection, "events", ("event_type", "payload"))
     for event in event_rows:
         event_type = safe_name(event.get("event_type"))
@@ -219,6 +222,8 @@ def event_counts(connection: sqlite3.Connection) -> tuple[Counter[str], Counter[
             payload = event.get("payload")
             if isinstance(payload, memoryview):
                 payload = payload.tobytes()
+            if isinstance(payload, str):
+                payload = payload.encode("utf-8")
             if isinstance(payload, bytes):
                 try:
                     decoded = json.loads(payload.decode("utf-8"))
@@ -227,7 +232,15 @@ def event_counts(connection: sqlite3.Connection) -> tuple[Counter[str], Counter[
                 reason = decoded.get("reason") if isinstance(decoded, dict) else None
                 if reason:
                     drop_reasons[str(reason)] += 1
-    return counts, drop_reasons
+                if event_type == "context.analysis.dropped":
+                    dropped_count = 1
+                    if isinstance(decoded, dict):
+                        try:
+                            dropped_count = max(int(decoded.get("dropped_count", 1)), 0)
+                        except (TypeError, ValueError):
+                            dropped_count = 1
+                    drop_work[str(reason or "unknown")] += dropped_count
+    return counts, drop_reasons, drop_work
 
 
 def request_attempts(
@@ -798,7 +811,7 @@ def analyze_connection(
         "token_reconciliations",
         ("snapshot_id", "visible_estimated_tokens", "provider_input_tokens", "residual_tokens", "comparability"),
     )
-    counts, drop_reasons = event_counts(connection)
+    counts, drop_reasons, drop_work = event_counts(connection)
     attempts_by_request, forwarding_errors = request_attempts(request_rows, attempt_rows)
 
     operation_session = {safe_name(row.get("operation_id")): safe_name(row.get("session_id")) for row in operation_rows}
@@ -832,12 +845,15 @@ def analyze_connection(
     estimated_token_total = sum(estimated_block_values)
     raw_token_total = sum(int_value(block, "raw_bytes") or 0 for block in block_rows)
 
-    analysis_seen = counts.get("context.analysis.started", len(snapshot_rows))
+    analysis_started = counts.get("context.analysis.started", len(snapshot_rows))
     analysis_complete = sum(1 for row in snapshot_rows if row.get("status") == "complete")
     analysis_partial = sum(1 for row in snapshot_rows if row.get("status") == "partial")
-    analysis_dropped = counts.get("context.analysis.dropped", 0)
-    if analysis_seen:
-        analysis_dropped = max(analysis_dropped, analysis_seen - analysis_complete - analysis_partial)
+    analysis_dropped = sum(drop_work.values())
+    if not analysis_dropped:
+        analysis_dropped = counts.get("context.analysis.dropped", 0)
+    analysis_seen = analysis_started + analysis_dropped
+    if analysis_seen < analysis_complete + analysis_partial + analysis_dropped:
+        analysis_seen = analysis_complete + analysis_partial + analysis_dropped
     correlation_eligible = sum(1 for row in snapshot_rows if row.get("correlation_status") is not None)
     correlation_correlated = sum(1 for row in snapshot_rows if row.get("correlation_status") == "correlated")
     semantic_values = [int_value(row, "semantic_coverage_basis_points") for row in metric_rows]
@@ -961,6 +977,7 @@ def analyze_connection(
             "provider_observation_partial": counts.get("provider.observation.partial", 0),
             "snapshot_statuses": dict(distinct_statuses),
             "event_drop_reasons": dict(drop_reasons),
+            "event_drop_work": dict(drop_work),
         },
         "provider_usage": {
             "rows": len(usage_rows),

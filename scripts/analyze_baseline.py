@@ -2,9 +2,10 @@
 """Build metadata-only, token-weighted Tracepress baseline reports.
 
 The analyzer reads an existing Tracepress SQLite database and produces a JSON report plus a
-compact Markdown rendering. It never emits request/response payloads, identifiers, paths,
-fingerprints, headers, or prices. A missing estimate remains missing; it is never converted to
-zero and never used to manufacture a reconciliation residual.
+compact Markdown rendering. It never emits request/response payloads, raw fingerprints, headers,
+or prices. The accounting ledger may contain opaque durable IDs so outcomes can be audited by
+request. A missing estimate remains missing; it is never converted to zero and never used to
+manufacture a reconciliation residual.
 """
 
 from __future__ import annotations
@@ -25,6 +26,7 @@ from typing import Any, Iterable
 REPORT_VERSION = 1
 DEFAULT_MEASUREMENT_ID = "baseline-001"
 DEFAULT_COHORT_KIND = "naturalistic"
+DEFAULT_MEASUREMENT_INSTRUMENT_VERSION = 2
 COHORT_KINDS = ("naturalistic", "compaction_calibration", "mixed")
 
 
@@ -241,6 +243,467 @@ def event_counts(
                             dropped_count = 1
                     drop_work[str(reason or "unknown")] += dropped_count
     return counts, drop_reasons, drop_work
+
+
+# Context snapshots are produced for normal Responses turns. Compaction transports are tracked
+# as provider observations by Phase 3.1.2, but are intentionally not interpreted as ordinary
+# context-analysis requests until a dedicated compaction snapshot contract exists.
+ELIGIBLE_REQUEST_KINDS = {"turn"}
+def _nullable_name(value: Any) -> str | None:
+    if value is None or value == "":
+        return None
+    return str(value)
+
+
+def _payload_object(value: Any) -> dict[str, Any]:
+    if isinstance(value, memoryview):
+        value = value.tobytes()
+    if isinstance(value, bytes):
+        try:
+            value = value.decode("utf-8")
+        except UnicodeDecodeError:
+            return {}
+    if isinstance(value, str):
+        try:
+            value = json.loads(value)
+        except json.JSONDecodeError:
+            return {}
+    return value if isinstance(value, dict) else {}
+
+
+def _payload_ids(payload: dict[str, Any], *keys: str) -> list[str]:
+    values: list[str] = []
+    for key in keys:
+        value = payload.get(key)
+        candidates = value if isinstance(value, list) else [value]
+        for candidate in candidates:
+            name = _nullable_name(candidate)
+            if name is not None and name not in values:
+                values.append(name)
+    nested_request = payload.get("request")
+    if isinstance(nested_request, dict):
+        for key in ("request_id", "provider_request_id"):
+            name = _nullable_name(nested_request.get(key))
+            if name is not None and name not in values:
+                values.append(name)
+    return values
+
+
+def _payload_bool(value: Any) -> bool:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        return value.strip().lower() in {"1", "true", "yes", "terminal"}
+    return value == 1
+
+
+def _drop_event_records(connection: sqlite3.Connection) -> list[dict[str, Any]]:
+    """Read only bounded metadata for context drop events, never their raw payload."""
+
+    records: list[dict[str, Any]] = []
+    for event in rows(
+        connection,
+        "events",
+        ("seq", "session_id", "operation_id", "timestamp", "event_type", "payload"),
+    ):
+        event_type = safe_name(event.get("event_type"))
+        if not (event_type.startswith("context.analysis.") and event_type.endswith(".dropped")):
+            continue
+        payload = _payload_object(event.get("payload"))
+        try:
+            dropped_work = max(int(payload.get("dropped_count", 1)), 0)
+        except (TypeError, ValueError):
+            dropped_work = 1
+        reason = _nullable_name(payload.get("reason")) or "unknown"
+        terminal = _payload_bool(payload.get("terminal")) or payload.get("outcome") in {"drop", "dropped"}
+        request_ids = _payload_ids(
+            payload,
+            "provider_request_id",
+            "request_id",
+            "provider_request_ids",
+            "request_ids",
+        )
+        forward_id = _nullable_name(payload.get("forward_id"))
+        records.append(
+            {
+                "event_seq": int_value(event, "seq"),
+                "session_id": _nullable_name(payload.get("session_id"))
+                or _nullable_name(event.get("session_id")),
+                "operation_id": _nullable_name(payload.get("operation_id"))
+                or _nullable_name(event.get("operation_id")),
+                "timestamp": _nullable_name(event.get("timestamp")),
+                "reason": reason,
+                "dropped_work": dropped_work,
+                "request_ids": request_ids,
+                "forward_id": forward_id,
+                "terminal": terminal,
+                "active_forwards": payload.get("active_forwards"),
+                "queue_state": _nullable_name(payload.get("queue_state")),
+                "analysis_slot_state": _nullable_name(payload.get("analysis_slot_state")),
+            }
+        )
+    return records
+
+
+def _request_is_analysis_eligible(request: dict[str, Any]) -> bool:
+    request_kind = _nullable_name(request.get("request_kind"))
+    if request_kind in ELIGIBLE_REQUEST_KINDS:
+        return True
+    method = safe_name(request.get("method"), "").lower()
+    route = safe_name(request.get("route"), "").strip("/").lower()
+    return method == "post" and route in {
+        "responses",
+        "v1/responses",
+        "backend-api/codex/responses",
+    }
+
+
+def request_analysis_ledger(
+    requests: list[dict[str, Any]],
+    snapshots: list[dict[str, Any]],
+    drop_events: list[dict[str, Any]],
+    operation_session: dict[str, str],
+) -> tuple[list[dict[str, Any]], dict[str, Any]]:
+    """Build one exclusive analysis outcome for every distinct provider request.
+
+    Durable snapshots are authoritative for request outcomes. Drop events are retained as
+    operational evidence and only affect an outcome when they explicitly declare a terminal
+    classification. An aggregate event without a request identity is never assigned by
+    inference; it makes measurement integrity fail instead.
+    """
+
+    ledger_by_request: dict[str, dict[str, Any]] = {}
+    conflict_counts: Counter[str] = Counter()
+    conflict_requests: dict[str, set[str]] = defaultdict(set)
+
+    def conflict(kind: str, request_id: str | None = None) -> None:
+        conflict_counts[kind] += 1
+        if request_id is not None:
+            conflict_requests[kind].add(request_id)
+
+    for request in requests:
+        request_id = _nullable_name(request.get("request_id"))
+        if request_id is None:
+            conflict("provider_request_without_id")
+            continue
+        if request_id in ledger_by_request:
+            conflict("duplicate_provider_request", request_id)
+            continue
+        operation_id = _nullable_name(request.get("operation_id"))
+        ledger_by_request[request_id] = {
+            "session_id": operation_session.get(operation_id or ""),
+            "provider_request_id": request_id,
+            "forward_id": None,
+            "eligible": _request_is_analysis_eligible(request),
+            "snapshot_id": None,
+            "snapshot_status": None,
+            "terminal_snapshot_count": 0,
+            "durable_drop_events": 0,
+            "auxiliary_drop_work": 0,
+            "drop_reasons": [],
+            "correlation_status": None,
+            "request_kind": _nullable_name(request.get("request_kind")),
+            "request_bytes": int_value(request, "request_bytes"),
+            "outcome": "Ineligible",
+            "outcome_notes": [],
+            "observation_status": _nullable_name(request.get("observation_status")),
+        }
+
+    snapshots_by_request: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for snapshot in snapshots:
+        request_id = _nullable_name(snapshot.get("provider_request_id"))
+        if request_id is None or request_id not in ledger_by_request:
+            conflict("snapshot_without_provider_request", request_id)
+            continue
+        if not ledger_by_request[request_id]["eligible"]:
+            conflict("snapshot_for_ineligible_request", request_id)
+            continue
+        snapshots_by_request[request_id].append(snapshot)
+
+    for request_id, record in ledger_by_request.items():
+        if not record["eligible"]:
+            continue
+        request_snapshots = snapshots_by_request.get(request_id, [])
+        terminal_snapshots = [
+            snapshot
+            for snapshot in request_snapshots
+            if int_value(snapshot, "completed_at_us") is not None
+            or int_value(snapshot, "recovered_at_us") is not None
+        ]
+        record["terminal_snapshot_count"] = len(terminal_snapshots)
+        if len(terminal_snapshots) > 1:
+            conflict("multiple_terminal_snapshots", request_id)
+        selected = sorted(
+            terminal_snapshots or request_snapshots,
+            key=lambda snapshot: (
+                int_value(snapshot, "completed_at_us") is None,
+                int_value(snapshot, "completed_at_us") or 0,
+                _nullable_name(snapshot.get("snapshot_id")) or "",
+            ),
+        )[-1:] or []
+        if selected:
+            snapshot = selected[0]
+            record["snapshot_id"] = _nullable_name(snapshot.get("snapshot_id"))
+            record["snapshot_status"] = _nullable_name(snapshot.get("status"))
+            record["correlation_status"] = _nullable_name(snapshot.get("correlation_status"))
+            if (
+                safe_name(snapshot.get("status")) == "complete"
+                and int_value(snapshot, "completed_at_us") is None
+            ):
+                conflict("complete_snapshot_without_completion_timestamp", request_id)
+            if terminal_snapshots:
+                record["outcome"] = (
+                    "Complete" if safe_name(snapshot.get("status")) == "complete" else "Partial"
+                )
+            else:
+                record["outcome"] = "Dropped"
+                record["outcome_notes"].append("non_terminal_snapshot")
+                conflict("non_terminal_snapshot", request_id)
+        else:
+            record["outcome"] = "Dropped"
+            record["outcome_notes"].append("missing_snapshot")
+
+    auxiliary_drop_events = 0
+    auxiliary_drop_work = 0
+    unmatched_events = 0
+    unmatched_drop_work = 0
+    drop_diagnostics: list[dict[str, Any]] = []
+
+    def diagnostic(
+        event: dict[str, Any],
+        request_id: str | None,
+        record: dict[str, Any] | None,
+    ) -> None:
+        drop_diagnostics.append(
+            {
+                "event_seq": event.get("event_seq"),
+                "provider_request_id": request_id,
+                "forward_id": event.get("forward_id") or (record or {}).get("forward_id"),
+                "session_id": event.get("session_id") or (record or {}).get("session_id"),
+                "request_kind": (record or {}).get("request_kind"),
+                "request_bytes": (record or {}).get("request_bytes"),
+                "timestamp": event.get("timestamp"),
+                "reason": event.get("reason"),
+                "active_forwards": event.get("active_forwards"),
+                "queue_state": event.get("queue_state"),
+                "analysis_slot_state": event.get("analysis_slot_state"),
+                "classification": "terminal" if event.get("terminal") else "auxiliary",
+                "dropped_work": event.get("dropped_work"),
+            }
+        )
+
+    for event in drop_events:
+        auxiliary_drop_events += 1
+        dropped_work = int_value(event, "dropped_work") or 0
+        auxiliary_drop_work += dropped_work
+        request_ids = list(event.get("request_ids") or [])
+        matched_ids = [
+            request_id
+            for request_id in request_ids
+            if request_id in ledger_by_request and ledger_by_request[request_id]["eligible"]
+        ]
+        if not matched_ids:
+            unmatched_events += 1
+            unmatched_drop_work += dropped_work
+            conflict("drop_without_identifiable_eligible_request")
+            diagnostic(event, None, None)
+            continue
+        if len(matched_ids) != len(request_ids):
+            unmatched_events += 1
+            unmatched_drop_work += dropped_work
+            conflict("drop_references_unknown_or_ineligible_request")
+        for request_id in matched_ids:
+            record = ledger_by_request[request_id]
+            record["durable_drop_events"] += 1
+            record["auxiliary_drop_work"] += dropped_work
+            reason = event["reason"]
+            if reason not in record["drop_reasons"]:
+                record["drop_reasons"].append(reason)
+            if event.get("forward_id") is not None:
+                record["forward_id"] = event["forward_id"]
+            if event.get("terminal"):
+                if record["outcome"] != "Dropped":
+                    conflict("terminal_drop_conflicts_with_snapshot", request_id)
+                    record["outcome_notes"].append("terminal_drop_conflicts_with_snapshot")
+                else:
+                    record["outcome_notes"].append("terminal_drop_confirmed")
+            diagnostic(event, request_id, record)
+
+    diagnosed_request_ids = {
+        row["provider_request_id"]
+        for row in drop_diagnostics
+        if row.get("provider_request_id") is not None
+    }
+    for record in ledger_by_request.values():
+        if not record["eligible"] or record["outcome"] != "Dropped":
+            continue
+        request_id = record["provider_request_id"]
+        if request_id in diagnosed_request_ids:
+            continue
+        drop_diagnostics.append(
+            {
+                "event_seq": None,
+                "provider_request_id": request_id,
+                "forward_id": record["forward_id"],
+                "session_id": record["session_id"],
+                "request_kind": record["request_kind"],
+                "request_bytes": record["request_bytes"],
+                "timestamp": None,
+                "reason": "missing_durable_snapshot",
+                "active_forwards": None,
+                "queue_state": None,
+                "analysis_slot_state": None,
+                "classification": "request_outcome",
+                "dropped_work": 1,
+            }
+        )
+
+    complete_ids = {
+        request_id
+        for request_id, record in ledger_by_request.items()
+        if record["eligible"] and record["outcome"] == "Complete"
+    }
+    partial_ids = {
+        request_id
+        for request_id, record in ledger_by_request.items()
+        if record["eligible"] and record["outcome"] == "Partial"
+    }
+    dropped_ids = {
+        request_id
+        for request_id, record in ledger_by_request.items()
+        if record["eligible"] and record["outcome"] == "Dropped"
+    }
+    eligible_ids = {
+        request_id for request_id, record in ledger_by_request.items() if record["eligible"]
+    }
+    outcome_partition_valid = (
+        len(eligible_ids) == len(complete_ids) + len(partial_ids) + len(dropped_ids)
+        and complete_ids.isdisjoint(partial_ids)
+        and complete_ids.isdisjoint(dropped_ids)
+        and partial_ids.isdisjoint(dropped_ids)
+        and all(
+            len(outcome_ids) <= len(eligible_ids)
+            for outcome_ids in (complete_ids, partial_ids, dropped_ids)
+        )
+    )
+    if not outcome_partition_valid:
+        conflict("invalid_outcome_partition")
+
+    integrity_reasons: list[str] = []
+    if conflict_counts:
+        integrity_reasons.append("analysis_outcome_conflicts")
+    if unmatched_events:
+        integrity_reasons.append("unmatched_drop_events")
+    if not outcome_partition_valid:
+        integrity_reasons.append("invalid_outcome_partition")
+    summary = {
+        "ledger_rows": len(ledger_by_request),
+        "provider_requests": len(ledger_by_request),
+        "eligible_requests": len(eligible_ids),
+        "complete_requests": len(complete_ids),
+        "partial_requests": len(partial_ids),
+        "dropped_requests": len(dropped_ids),
+        "ineligible_requests": len(ledger_by_request) - len(eligible_ids),
+        "auxiliary_drop_events": auxiliary_drop_events,
+        "auxiliary_drop_work": auxiliary_drop_work,
+        "unmatched_events": unmatched_events,
+        "unmatched_drop_work": unmatched_drop_work,
+        "request_coverage": ratio(len(complete_ids), len(eligible_ids)),
+        "analysis_outcome_conflicts": sum(conflict_counts.values()),
+        "conflict_types": dict(conflict_counts),
+        "conflict_request_counts": {
+            kind: len(request_ids) for kind, request_ids in conflict_requests.items()
+        },
+        "outcome_partition_valid": outcome_partition_valid,
+        "measurement_integrity": "passed" if not integrity_reasons else "failed",
+        "integrity_reasons": integrity_reasons,
+        "drop_diagnostics": drop_diagnostics,
+    }
+    return list(ledger_by_request.values()), summary
+
+
+def _quartile_label(value: int | None, boundaries: tuple[float | None, ...]) -> str:
+    if value is None or not boundaries or boundaries[0] is None:
+        return "unknown"
+    if value <= boundaries[0]:
+        return "q1"
+    if len(boundaries) > 1 and boundaries[1] is not None and value <= boundaries[1]:
+        return "q2"
+    if len(boundaries) > 2 and boundaries[2] is not None and value <= boundaries[2]:
+        return "q3"
+    return "q4"
+
+
+def _outcome_group(records: Iterable[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
+    for record in records:
+        if record.get("eligible"):
+            groups[safe_name(record.get(key))].append(record)
+    result = []
+    for name, group in sorted(groups.items()):
+        complete = sum(row.get("outcome") == "Complete" for row in group)
+        partial = sum(row.get("outcome") == "Partial" for row in group)
+        dropped = sum(row.get("outcome") == "Dropped" for row in group)
+        result.append(
+            {
+                "name": name,
+                "eligible_requests": len(group),
+                "complete_requests": complete,
+                "partial_requests": partial,
+                "dropped_requests": dropped,
+                "request_coverage": ratio(complete, len(group)),
+                "drop_rate": ratio(dropped, len(group)),
+            }
+        )
+    return result
+
+
+def missingness_report(
+    ledger: list[dict[str, Any]],
+    snapshot_visible_tokens: dict[str, int],
+    cohort_kind: str,
+) -> dict[str, Any]:
+    """Describe whether missing analysis is concentrated in observable request strata."""
+
+    eligible = [row for row in ledger if row.get("eligible")]
+    request_sizes = [int_value(row, "request_bytes") for row in eligible]
+    request_sizes = [value for value in request_sizes if value is not None]
+    request_boundaries = tuple(percentile(request_sizes, value) for value in (25, 50, 75))
+    context_sizes = [
+        snapshot_visible_tokens.get(safe_name(row.get("snapshot_id")))
+        for row in eligible
+        if row.get("snapshot_id") is not None
+    ]
+    context_sizes = [value for value in context_sizes if value is not None]
+    context_boundaries = tuple(percentile(context_sizes, value) for value in (25, 50, 75))
+
+    session_counts: Counter[str] = Counter(safe_name(row.get("session_id")) for row in eligible)
+    session_indexes: Counter[str] = Counter()
+    for row in ledger:
+        if not row.get("eligible"):
+            continue
+        session_id = safe_name(row.get("session_id"))
+        session_indexes[session_id] += 1
+        row["turn_index"] = session_indexes[session_id]
+        row["session_request_count"] = session_counts[session_id]
+        request_size = int_value(row, "request_bytes")
+        row["request_size_quartile"] = _quartile_label(request_size, request_boundaries)
+        context_size = snapshot_visible_tokens.get(safe_name(row.get("snapshot_id")))
+        row["context_size_quartile"] = _quartile_label(context_size, context_boundaries)
+
+    return {
+        "cohort_kind": cohort_kind,
+        "eligible_requests": len(eligible),
+        "request_size_boundaries": request_boundaries,
+        "context_size_boundaries": context_boundaries,
+        "by_request_kind": _outcome_group(eligible, "request_kind"),
+        "by_request_size_quartile": _outcome_group(eligible, "request_size_quartile"),
+        "by_context_size_quartile": _outcome_group(eligible, "context_size_quartile"),
+        "by_turn_index": _outcome_group(eligible, "turn_index"),
+        "by_session_request_count": _outcome_group(eligible, "session_request_count"),
+        "by_observation_status": _outcome_group(eligible, "observation_status"),
+        "unavailable_dimensions": ["workload", "concurrency_mode"],
+    }
 
 
 def request_attempts(
@@ -692,6 +1155,7 @@ def analyze_connection(
     cohort_kind: str = DEFAULT_COHORT_KIND,
     tracepress_commit: str = "unknown",
     codex_version: str = "unknown",
+    measurement_instrument_version: int = DEFAULT_MEASUREMENT_INSTRUMENT_VERSION,
 ) -> dict[str, Any]:
     connection.row_factory = sqlite3.Row
     session_rows = rows(connection, "sessions", ("session_id", "state", "ended_at"))
@@ -702,6 +1166,9 @@ def analyze_connection(
         (
             "request_id",
             "operation_id",
+            "route",
+            "method",
+            "request_bytes",
             "request_kind",
             "transport",
             "model",
@@ -752,6 +1219,7 @@ def analyze_connection(
             "status",
             "started_at_us",
             "completed_at_us",
+            "recovered_at_us",
             "correlation_status",
             "explicit_request_complete",
         ),
@@ -812,10 +1280,17 @@ def analyze_connection(
         ("snapshot_id", "visible_estimated_tokens", "provider_input_tokens", "residual_tokens", "comparability"),
     )
     counts, drop_reasons, drop_work = event_counts(connection)
+    drop_events = _drop_event_records(connection)
     attempts_by_request, forwarding_errors = request_attempts(request_rows, attempt_rows)
 
     operation_session = {safe_name(row.get("operation_id")): safe_name(row.get("session_id")) for row in operation_rows}
     request_session = {safe_name(row.get("request_id")): operation_session.get(safe_name(row.get("operation_id")), "unknown") for row in request_rows}
+    ledger_rows, analysis_integrity = request_analysis_ledger(
+        request_rows,
+        snapshot_rows,
+        drop_events,
+        operation_session,
+    )
     snapshot_context: dict[str, dict[str, Any]] = {}
     snapshots_by_session: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for snapshot in snapshot_rows:
@@ -840,20 +1315,21 @@ def analyze_connection(
     by_snapshot_blocks: dict[str, list[dict[str, Any]]] = defaultdict(list)
     for block in block_rows:
         by_snapshot_blocks[safe_name(block.get("snapshot_id"))].append(block)
+    snapshot_visible_tokens: dict[str, int] = {}
+    for snapshot_id, blocks in by_snapshot_blocks.items():
+        estimates = [int_value(block, "estimated_tokens") for block in blocks]
+        estimates = [value for value in estimates if value is not None]
+        if estimates:
+            snapshot_visible_tokens[snapshot_id] = sum(estimates)
     block_estimates = [int_value(block, "estimated_tokens") for block in block_rows]
     estimated_block_values = [value for value in block_estimates if value is not None]
     estimated_token_total = sum(estimated_block_values)
     raw_token_total = sum(int_value(block, "raw_bytes") or 0 for block in block_rows)
 
-    analysis_started = counts.get("context.analysis.started", len(snapshot_rows))
-    analysis_complete = sum(1 for row in snapshot_rows if row.get("status") == "complete")
-    analysis_partial = sum(1 for row in snapshot_rows if row.get("status") == "partial")
-    analysis_dropped = sum(drop_work.values())
-    if not analysis_dropped:
-        analysis_dropped = counts.get("context.analysis.dropped", 0)
-    analysis_seen = analysis_started + analysis_dropped
-    if analysis_seen < analysis_complete + analysis_partial + analysis_dropped:
-        analysis_seen = analysis_complete + analysis_partial + analysis_dropped
+    analysis_seen = analysis_integrity["eligible_requests"]
+    analysis_complete = analysis_integrity["complete_requests"]
+    analysis_partial = analysis_integrity["partial_requests"]
+    analysis_dropped = analysis_integrity["dropped_requests"]
     correlation_eligible = sum(1 for row in snapshot_rows if row.get("correlation_status") is not None)
     correlation_correlated = sum(1 for row in snapshot_rows if row.get("correlation_status") == "correlated")
     semantic_values = [int_value(row, "semantic_coverage_basis_points") for row in metric_rows]
@@ -897,6 +1373,7 @@ def analyze_connection(
         "provider_cache_comparison": "descriptive_only",
     }
     unknown = unknown_report(block_rows, snapshot_context)
+    missingness = missingness_report(ledger_rows, snapshot_visible_tokens, cohort_kind)
     estimator_coverage = ratio(len(estimated_block_values), len(block_rows))
     semantic_coverage = ratio(sum(semantic_values), len(semantic_values) * 10_000) if semantic_values else None
     ranking = opportunity_ranking(detected_content, category_details, estimator_coverage, semantic_coverage)
@@ -924,6 +1401,7 @@ def analyze_connection(
         "cohort_label": cohort_label,
         "manifest": {
             "tracepress_commit": tracepress_commit,
+            "measurement_instrument_version": measurement_instrument_version,
             "codex_version": codex_version,
             "model": distinct_values(request_rows, "model"),
             "reasoning_effort": distinct_values(request_rows, "reasoning_effort"),
@@ -952,7 +1430,13 @@ def analyze_connection(
             "analysis_complete": analysis_complete,
             "analysis_partial": analysis_partial,
             "analysis_dropped": analysis_dropped,
-            "analysis_coverage": ratio(analysis_complete, analysis_seen),
+            "analysis_coverage": analysis_integrity["request_coverage"],
+            "analysis_auxiliary_drop_events": analysis_integrity["auxiliary_drop_events"],
+            "analysis_auxiliary_drop_work": analysis_integrity["auxiliary_drop_work"],
+            "analysis_unmatched_events": analysis_integrity["unmatched_events"],
+            "analysis_unmatched_drop_work": analysis_integrity["unmatched_drop_work"],
+            "analysis_outcome_conflicts": analysis_integrity["analysis_outcome_conflicts"],
+            "measurement_integrity": analysis_integrity["measurement_integrity"],
             "correlation_eligible": correlation_eligible,
             "correlation_correlated": correlation_correlated,
             "correlation_coverage": ratio(correlation_correlated, correlation_eligible),
@@ -1055,6 +1539,9 @@ def analyze_connection(
             "candidate exposure is not saveable tokens",
             "cost is intentionally unavailable",
         ],
+        "analysis_integrity": analysis_integrity,
+        "request_analysis_ledger": ledger_rows,
+        "missingness": missingness,
     }
     return json.loads(json.dumps(report, default=jsonable))
 
@@ -1079,7 +1566,7 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines = [
         f"# Tracepress Baseline {report['cohort_label']}",
         "",
-        "Metadata-only report. No request/response payloads, identifiers, fingerprints, headers, or prices are included.",
+        "Metadata-only report. No request/response payloads, raw fingerprints, headers, or prices are included; the ledger contains opaque storage identities for accounting.",
         "",
         "## Manifest",
         "",
@@ -1094,6 +1581,9 @@ def render_markdown(report: dict[str, Any]) -> str:
         "## Measurement quality",
         "",
         f"- Analysis: {format_pct(quality['analysis_coverage'])} ({quality['analysis_complete']}/{quality['analysis_requests_seen']}).",
+        f"- Request ledger: {format_number(report['analysis_integrity']['eligible_requests'])} eligible; {format_number(report['analysis_integrity']['complete_requests'])} complete; {format_number(report['analysis_integrity']['partial_requests'])} partial; {format_number(report['analysis_integrity']['dropped_requests'])} dropped.",
+        f"- Measurement integrity: `{report['analysis_integrity']['measurement_integrity']}`; conflicts: {format_number(report['analysis_integrity']['analysis_outcome_conflicts'])}; unmatched drop events: {format_number(report['analysis_integrity']['unmatched_events'])}.",
+        f"- Auxiliary drops: {format_number(report['analysis_integrity']['auxiliary_drop_events'])} events / {format_number(report['analysis_integrity']['auxiliary_drop_work'])} work units.",
         f"- Correlation: {format_pct(quality['correlation_coverage'])} ({quality['correlation_correlated']}/{quality['correlation_eligible']}).",
         f"- Forwarding errors: {format_number(quality['forwarding_errors'])}.",
         f"- Context malformed: {format_number(quality['context_malformed'])}.",
@@ -1125,6 +1615,13 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- Stable explicit-prefix estimate: {format_number(report['stable_prefix']['estimated_tokens'])}; share: {format_pct(report['stable_prefix']['share'])}.",
             f"- Unknown detected content: {format_number(report['unknown']['estimated_tokens'])} estimated tokens ({format_pct(report['unknown']['token_share'])}).",
             "",
+            "## Missingness",
+            "",
+            "Drop rate is based on exclusive request outcomes, never on event count.",
+            f"- Request-size quartile boundaries: `{json.dumps(report['missingness']['request_size_boundaries'])}`.",
+            f"- Context-size quartile boundaries: `{json.dumps(report['missingness']['context_size_boundaries'])}`.",
+            f"- Unavailable dimensions: `{json.dumps(report['missingness']['unavailable_dimensions'])}`.",
+            "",
             "## Compaction",
             "",
             f"- Cohort: `{report['compaction']['cohort_kind']}`; requests: {report['compaction']['requests']}; V2: {report['compaction']['v2_requests']}; legacy: {report['compaction']['legacy_requests']}.",
@@ -1143,6 +1640,35 @@ def render_markdown(report: dict[str, Any]) -> str:
         persistence = format_number(row["average_persistence"])
         lines.append(f"| {index} | {row['name']} | {row['phase_4_candidate_priority_score']:.6f} | {format_pct(row['token_share'])} | {redundancy} | {persistence} |")
     lines.extend(["", "## Limitations", "", *[f"- {item}." for item in report["limitations"]], ""])
+    if report["analysis_integrity"]["drop_diagnostics"]:
+        lines.extend(
+            [
+                "## Drop diagnostics",
+                "",
+                "Metadata-only diagnostics; unavailable request/forward identities remain `unknown`.",
+                "",
+                "| Event | Provider request | Forward | Session | Kind | Bytes | Reason | Classification | Work |",
+                "| ---: | --- | --- | --- | --- | ---: | --- | --- | ---: |",
+            ]
+        )
+        for row in report["analysis_integrity"]["drop_diagnostics"]:
+            lines.append(
+                f"| {format_number(row['event_seq'])} | {row['provider_request_id'] or 'unknown'} | {row['forward_id'] or 'unknown'} | {row['session_id'] or 'unknown'} | {row['request_kind'] or 'unknown'} | {format_number(row['request_bytes'])} | {row['reason']} | {row['classification']} | {format_number(row['dropped_work'])} |"
+            )
+        lines.append("")
+    lines.extend(
+        [
+            "## Missingness strata",
+            "",
+            "| Request-size stratum | Eligible | Complete | Partial | Dropped | Coverage | Drop rate |",
+            "| --- | ---: | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in report["missingness"]["by_request_size_quartile"]:
+        lines.append(
+            f"| {row['name']} | {row['eligible_requests']} | {row['complete_requests']} | {row['partial_requests']} | {row['dropped_requests']} | {format_pct(row['request_coverage'])} | {format_pct(row['drop_rate'])} |"
+        )
+    lines.append("")
     return "\n".join(lines)
 
 
@@ -1183,6 +1709,16 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cohort-kind", choices=COHORT_KINDS, default=DEFAULT_COHORT_KIND)
     parser.add_argument("--tracepress-commit", default=os.environ.get("TRACEPRESS_COMMIT", "unknown"))
     parser.add_argument("--codex-version", default=os.environ.get("CODEX_VERSION", "unknown"))
+    parser.add_argument(
+        "--measurement-instrument-version",
+        type=int,
+        default=int(
+            os.environ.get(
+                "TRACEPRESS_MEASUREMENT_INSTRUMENT_VERSION",
+                str(DEFAULT_MEASUREMENT_INSTRUMENT_VERSION),
+            )
+        ),
+    )
     return parser
 
 
@@ -1201,6 +1737,7 @@ def main(arguments: list[str] | None = None) -> int:
             cohort_kind=options.cohort_kind,
             tracepress_commit=options.tracepress_commit,
             codex_version=options.codex_version,
+            measurement_instrument_version=options.measurement_instrument_version,
         )
     except sqlite3.DatabaseError as error:
         print(f"baseline analysis failed: {error}", file=sys.stderr)
@@ -1216,9 +1753,10 @@ def main(arguments: list[str] | None = None) -> int:
         "quality: "
         f"analysis={format_pct(report['quality']['analysis_coverage'])} "
         f"correlation={format_pct(report['quality']['correlation_coverage'])} "
-        f"forwarding_errors={report['quality']['forwarding_errors']}"
+        f"forwarding_errors={report['quality']['forwarding_errors']} "
+        f"measurement_integrity={report['analysis_integrity']['measurement_integrity']}"
     )
-    return 0
+    return 0 if report["analysis_integrity"]["measurement_integrity"] == "passed" else 2
 
 
 if __name__ == "__main__":

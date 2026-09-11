@@ -48,6 +48,7 @@ def create_fixture() -> sqlite3.Connection:
         CREATE TABLE provider_requests (
             request_id TEXT PRIMARY KEY,
             operation_id TEXT NOT NULL,
+            request_bytes INTEGER,
             request_kind TEXT NOT NULL,
             transport TEXT,
             model TEXT,
@@ -83,6 +84,8 @@ def create_fixture() -> sqlite3.Connection:
             inference_operation_id TEXT NOT NULL,
             analysis_version INTEGER,
             status TEXT NOT NULL,
+            completed_at_us INTEGER,
+            recovered_at_us INTEGER,
             correlation_status TEXT,
             explicit_request_complete INTEGER
         );
@@ -143,10 +146,10 @@ def create_fixture() -> sqlite3.Connection:
         INSERT INTO sessions VALUES ('s1', 'closed', 'done');
         INSERT INTO operations VALUES ('op1', 's1', 'llm_inference', 'completed');
         INSERT INTO provider_requests VALUES
-            ('r1', 'op1', 'turn', 'chatgpt_codex_subscription', 'gpt-5.6-luna', 'xhigh', 1, 'complete', 'zstd', 'decoded', 100, 300);
+            ('r1', 'op1', 100, 'turn', 'chatgpt_codex_subscription', 'gpt-5.6-luna', 'xhigh', 1, 'complete', 'zstd', 'decoded', 100, 300);
         INSERT INTO provider_attempts VALUES ('a1', 'r1', 200, 'completed', 'complete', NULL);
         INSERT INTO provider_usage VALUES ('a1', 100, 60, 10, 4, 'final', 1);
-        INSERT INTO context_snapshots VALUES ('snap1', 's1', 'r1', 'op1', 1, 'complete', 'correlated', 1);
+        INSERT INTO context_snapshots VALUES ('snap1', 's1', 'r1', 'op1', 1, 'complete', 10, NULL, 'correlated', 1);
         INSERT INTO context_analysis_metrics VALUES ('snap1', 300, 1, 9000, 0.2, 0.6, 40, 'structural-heuristic', 1, 'heuristic');
         INSERT INTO context_block_occurrences VALUES
             ('b1', 'snap1', 0, 'text', 'user', 'human_authored', 100, X'01', X'11', 1, 10, 'structural-heuristic', 1, 'heuristic', 'plain_text', 1, 0.1),
@@ -158,7 +161,6 @@ def create_fixture() -> sqlite3.Connection:
         INSERT INTO events VALUES (3, 'provider.request.observed', '{}');
         INSERT INTO events VALUES (4, 'provider.response.completed', '{}');
         INSERT INTO events VALUES (5, 'provider.usage.observed', '{}');
-        INSERT INTO events VALUES (6, 'context.analysis.dropped', '{"reason":"observer_backpressure","dropped_count":2}');
         """
     )
     return connection
@@ -166,8 +168,13 @@ def create_fixture() -> sqlite3.Connection:
 
 class BaselineAnalysisContractTests(unittest.TestCase):
     def test_report_is_token_weighted_and_keeps_missing_reconciliation_unknown(self) -> None:
+        connection = create_fixture()
+        connection.execute(
+            "INSERT INTO events VALUES (?, ?, ?)",
+            (6, "context.analysis.dropped", '{"reason":"observer_backpressure","dropped_count":2}'),
+        )
         report = ANALYZER.analyze_connection(
-            create_fixture(),
+            connection,
             measurement_id="baseline-001",
             cohort_label="n20",
             cohort_kind="naturalistic",
@@ -177,9 +184,16 @@ class BaselineAnalysisContractTests(unittest.TestCase):
 
         self.assertEqual(report["dataset"]["sessions_total"], 1)
         self.assertEqual(report["dataset"]["requests_total"], 1)
-        self.assertEqual(report["quality"]["analysis_requests_seen"], 3)
-        self.assertEqual(report["quality"]["analysis_dropped"], 2)
-        self.assertEqual(report["quality"]["analysis_coverage"], 1 / 3)
+        self.assertEqual(report["quality"]["analysis_requests_seen"], 1)
+        self.assertEqual(report["quality"]["analysis_complete"], 1)
+        self.assertEqual(report["quality"]["analysis_dropped"], 0)
+        self.assertEqual(report["quality"]["analysis_coverage"], 1.0)
+        self.assertEqual(report["quality"]["analysis_auxiliary_drop_events"], 1)
+        self.assertEqual(report["quality"]["analysis_auxiliary_drop_work"], 2)
+        self.assertEqual(report["quality"]["analysis_unmatched_events"], 1)
+        self.assertEqual(report["analysis_integrity"]["measurement_integrity"], "failed")
+        self.assertEqual(report["analysis_integrity"]["request_coverage"], 1.0)
+        self.assertEqual(report["request_analysis_ledger"][0]["outcome"], "Complete")
         self.assertEqual(report["quality"]["correlation_coverage"], 1.0)
         self.assertEqual(report["quality"]["event_drop_work"]["observer_backpressure"], 2)
         self.assertEqual(report["quality"]["semantic_coverage"]["mean"], 0.9)
@@ -190,6 +204,110 @@ class BaselineAnalysisContractTests(unittest.TestCase):
         self.assertGreater(content["json"]["token_share"], content["plain_text"]["token_share"])
         self.assertEqual(report["unknown"]["estimated_tokens"], 0)
         self.assertEqual(report["unknown"]["block_count"], 1)
+
+    def test_ledger_partitions_eligible_requests_and_attaches_identified_drop(self) -> None:
+        connection = create_fixture()
+        connection.executescript(
+            """
+            INSERT INTO operations VALUES ('op2', 's1', 'llm_inference', 'completed');
+            INSERT INTO provider_requests VALUES
+                ('r2', 'op2', 80, 'turn', 'chatgpt_codex_subscription', 'gpt-5.6-luna', 'xhigh', 1, 'complete', 'zstd', 'decoded', 80, 240);
+            INSERT INTO provider_requests VALUES
+                ('r3', 'op2', 70, 'turn', 'chatgpt_codex_subscription', 'gpt-5.6-luna', 'xhigh', 1, 'partial', 'zstd', 'decoded', 70, 210);
+            INSERT INTO context_snapshots VALUES ('snap2', 's1', 'r2', 'op2', 1, 'partial', 11, NULL, 'degraded', 1);
+            INSERT INTO events VALUES
+                (7, 'context.analysis.dropped', '{"request_id":"r3","forward_id":"f3","reason":"deferred_backlog_capacity","dropped_count":1,"terminal":true}');
+            """
+        )
+
+        report = ANALYZER.analyze_connection(
+            connection,
+            measurement_id="baseline-001",
+            cohort_label="ledger",
+            cohort_kind="naturalistic",
+            tracepress_commit="70957bba",
+            codex_version="0.154.0",
+        )
+
+        integrity = report["analysis_integrity"]
+        self.assertEqual(integrity["eligible_requests"], 3)
+        self.assertEqual(integrity["complete_requests"], 1)
+        self.assertEqual(integrity["partial_requests"], 1)
+        self.assertEqual(integrity["dropped_requests"], 1)
+        self.assertEqual(integrity["auxiliary_drop_events"], 1)
+        self.assertEqual(integrity["unmatched_events"], 0)
+        self.assertEqual(integrity["analysis_outcome_conflicts"], 0)
+        self.assertTrue(integrity["outcome_partition_valid"])
+
+        ledger = {row["provider_request_id"]: row for row in report["request_analysis_ledger"]}
+        self.assertEqual(ledger["r1"]["outcome"], "Complete")
+        self.assertEqual(ledger["r2"]["outcome"], "Partial")
+        self.assertEqual(ledger["r3"]["outcome"], "Dropped")
+        self.assertEqual(ledger["r3"]["forward_id"], "f3")
+        self.assertEqual(ledger["r3"]["durable_drop_events"], 1)
+        self.assertEqual(ledger["r3"]["request_bytes"], 70)
+
+    def test_ledger_rejects_complete_snapshot_with_terminal_drop(self) -> None:
+        connection = create_fixture()
+        connection.execute(
+            "INSERT INTO events VALUES (?, ?, ?)",
+            (7, "context.analysis.dropped", '{"request_id":"r1","reason":"cancelled","terminal":true}'),
+        )
+
+        report = ANALYZER.analyze_connection(
+            connection,
+            measurement_id="baseline-001",
+            cohort_label="conflict",
+            cohort_kind="naturalistic",
+            tracepress_commit="70957bb",
+            codex_version="0.154.0",
+        )
+
+        self.assertEqual(report["request_analysis_ledger"][0]["outcome"], "Complete")
+        self.assertEqual(report["analysis_integrity"]["analysis_outcome_conflicts"], 1)
+        self.assertEqual(report["analysis_integrity"]["measurement_integrity"], "failed")
+
+    def test_recovered_partial_snapshot_is_partial_not_dropped(self) -> None:
+        connection = create_fixture()
+        connection.execute(
+            "UPDATE context_snapshots SET status = 'partial', completed_at_us = NULL, recovered_at_us = 99 WHERE snapshot_id = 'snap1'"
+        )
+
+        report = ANALYZER.analyze_connection(
+            connection,
+            measurement_id="baseline-001",
+            cohort_label="recovered",
+            cohort_kind="naturalistic",
+            tracepress_commit="70957bba",
+            codex_version="0.154.0",
+        )
+
+        self.assertEqual(report["request_analysis_ledger"][0]["outcome"], "Partial")
+        self.assertEqual(report["quality"]["analysis_complete"], 0)
+        self.assertEqual(report["quality"]["analysis_partial"], 1)
+        self.assertEqual(report["quality"]["analysis_dropped"], 0)
+
+    def test_compaction_transport_is_ineligible_without_context_snapshot(self) -> None:
+        ledger, integrity = ANALYZER.request_analysis_ledger(
+            [
+                {
+                    "request_id": "compact-1",
+                    "operation_id": "op1",
+                    "request_kind": "compaction_v2",
+                    "method": "POST",
+                    "route": "/v1/responses/compact",
+                }
+            ],
+            [],
+            [],
+            {"op1": "s1"},
+        )
+
+        self.assertEqual(len(ledger), 1)
+        self.assertFalse(ledger[0]["eligible"])
+        self.assertEqual(ledger[0]["outcome"], "Ineligible")
+        self.assertEqual(integrity["eligible_requests"], 0)
+        self.assertEqual(integrity["measurement_integrity"], "passed")
 
     def test_compaction_report_pairs_adjacent_visible_windows_without_payloads(self) -> None:
         requests = [
@@ -279,6 +397,7 @@ class BaselineConvergenceContractTests(unittest.TestCase):
                 "correlation_coverage": 1.0,
                 "forwarding_errors": 0,
                 "context_malformed": 0,
+                "measurement_integrity": "passed",
             },
             "composition": {
                 "detected_content": [
@@ -305,6 +424,34 @@ class BaselineConvergenceContractTests(unittest.TestCase):
     def test_convergence_rejects_large_share_change(self) -> None:
         result = CONVERGENCE.evaluate_reports([self.report(20), self.report(30, 0.7), self.report(40, 0.7)])
         self.assertEqual(result["status"], "NEED_MORE_SESSIONS")
+
+    def test_convergence_rejects_failed_measurement_integrity(self) -> None:
+        reports = [self.report(20), self.report(30), self.report(40)]
+        reports[-1]["analysis_integrity"] = {"measurement_integrity": "failed"}
+        result = CONVERGENCE.evaluate_reports(reports)
+        self.assertEqual(result["status"], "NEED_MORE_SESSIONS")
+
+    def test_convergence_rejects_mixed_measurement_manifests(self) -> None:
+        reports = [self.report(20), self.report(30), self.report(40)]
+        for report in reports:
+            report["measurement_id"] = "baseline-002"
+            report["manifest"] = {"measurement_instrument_version": 2}
+        reports[-1]["manifest"] = {"measurement_instrument_version": 3}
+        result = CONVERGENCE.evaluate_reports(reports)
+        self.assertEqual(result["status"], "NEED_MORE_SESSIONS")
+        self.assertIn("reports mix measurement manifests or instrument versions", result["reasons"])
+
+    def test_convergence_rejects_stratified_missingness_bias(self) -> None:
+        reports = [self.report(20), self.report(30), self.report(40)]
+        for report in reports:
+            report["missingness"] = {
+                "by_request_size_quartile": [
+                    {"name": "q4", "eligible_requests": 10, "drop_rate": 0.1}
+                ]
+            }
+        result = CONVERGENCE.evaluate_reports(reports)
+        self.assertEqual(result["status"], "NEED_MORE_SESSIONS")
+        self.assertIn("missingness is above 5% in an important request stratum", result["reasons"])
 
 
 if __name__ == "__main__":

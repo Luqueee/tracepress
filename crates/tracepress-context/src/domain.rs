@@ -135,8 +135,10 @@ pub enum ContextAnalysisStatus {
 #[serde(rename_all = "snake_case")]
 #[non_exhaustive]
 pub enum ContextAnalysisDropReason {
-    /// The proxy's non-blocking analysis permit or a bounded downstream queue was unavailable.
+    /// A bounded downstream analysis handoff was unavailable.
     ObserverBackpressure,
+    /// The deferred analysis admission bound was reached before the request could be retained.
+    DeferredBacklogCapacity,
     /// A resource bound rejected the analysis before a result could be produced.
     ResourceLimit,
     /// The request could not be interpreted by the context analyzer.
@@ -155,6 +157,7 @@ impl ContextAnalysisDropReason {
     pub const fn as_wire_str(self) -> &'static str {
         match self {
             Self::ObserverBackpressure => "observer_backpressure",
+            Self::DeferredBacklogCapacity => "deferred_backlog_capacity",
             Self::ResourceLimit => "resource_limit",
             Self::Malformed => "malformed",
             Self::CorrelationDegraded => "correlation_degraded",

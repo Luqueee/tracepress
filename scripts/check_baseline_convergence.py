@@ -11,6 +11,7 @@ from typing import Any
 
 
 MIN_SESSIONS = 40
+MAX_SESSIONS = 100
 SHARE_TOLERANCE = 0.02
 RELATIVE_TOLERANCE = 0.10
 QUALITY_TARGETS = {
@@ -80,6 +81,51 @@ def _distribution_stable(current: float | None, previous: float | None) -> bool 
 
 def _top_three(report: dict[str, Any]) -> list[str]:
     return [str(row.get("name")) for row in report.get("opportunity_ranking", [])[:3]]
+
+
+def _manifest_gate(reports: list[dict[str, Any]]) -> dict[str, Any]:
+    """Reject transitions that mix different measurement instruments or cohorts."""
+
+    identities = []
+    for report in reports:
+        manifest = report.get("manifest")
+        if not isinstance(manifest, dict):
+            continue
+        identities.append(
+            {
+                "measurement_id": report.get("measurement_id"),
+                "manifest": manifest,
+            }
+        )
+    if not identities:
+        return {"pass": True, "reason": "manifest unavailable in synthetic report"}
+    reference = json.dumps(identities[0], sort_keys=True, default=str)
+    mismatches = [index for index, identity in enumerate(identities[1:], start=1) if json.dumps(identity, sort_keys=True, default=str) != reference]
+    return {
+        "pass": not mismatches and len(identities) == len(reports),
+        "reports_with_manifest": len(identities),
+        "total_reports": len(reports),
+        "mismatched_report_indexes": mismatches,
+    }
+
+
+def _missingness_gate(report: dict[str, Any]) -> dict[str, Any]:
+    """Flag meaningful strata whose request outcomes are missing systematically."""
+
+    missingness = report.get("missingness", {})
+    flagged = []
+    for dimension in (
+        "by_request_kind",
+        "by_request_size_quartile",
+        "by_context_size_quartile",
+        "by_observation_status",
+    ):
+        for row in missingness.get(dimension, []) or []:
+            eligible = _number(row.get("eligible_requests"))
+            drop_rate = _number(row.get("drop_rate"))
+            if eligible is not None and eligible >= 5 and drop_rate is not None and drop_rate > 0.05:
+                flagged.append({"dimension": dimension, "name": row.get("name"), "drop_rate": drop_rate})
+    return {"pass": not flagged, "flagged_strata": flagged}
 
 
 def _transition(current: dict[str, Any], previous: dict[str, Any]) -> dict[str, Any]:
@@ -154,6 +200,15 @@ def _quality_gate(report: dict[str, Any]) -> dict[str, Any]:
         "target": 0,
         "pass": values["context_malformed"] == 0,
     }
+    integrity = report.get("analysis_integrity", {}).get(
+        "measurement_integrity",
+        report.get("quality", {}).get("measurement_integrity", "passed"),
+    )
+    checks["measurement_integrity"] = {
+        "value": integrity,
+        "target": "passed",
+        "pass": integrity == "passed",
+    }
     return {"pass": all(check["pass"] for check in checks.values()), "checks": checks}
 
 
@@ -176,6 +231,12 @@ def evaluate_reports(reports: list[dict[str, Any]]) -> dict[str, Any]:
         reasons.append("two consecutive stable transitions are required")
     if any(not gate["pass"] for gate in quality):
         reasons.append("one or more measurement quality gates failed")
+    manifest = _manifest_gate(reports)
+    if not manifest["pass"]:
+        reasons.append("reports mix measurement manifests or instrument versions")
+    missingness = [_missingness_gate(report) for report in reports]
+    if any(not gate["pass"] for gate in missingness):
+        reasons.append("missingness is above 5% in an important request stratum")
     if transitions and not transitions[-1]["stable"]:
         reasons.append("latest batch transition is not stable")
     if len(transitions) >= 2 and not all(transition["stable"] for transition in transitions[-2:]):
@@ -185,15 +246,22 @@ def evaluate_reports(reports: list[dict[str, Any]]) -> dict[str, Any]:
         and sessions >= MIN_SESSIONS
         and len(transitions) >= 2
         and all(gate["pass"] for gate in quality)
+        and manifest["pass"]
+        and all(gate["pass"] for gate in missingness)
         and all(transition["stable"] for transition in transitions[-2:])
     )
+    if sessions >= MAX_SESSIONS and not converged:
+        reasons.append(f"maximum cohort guardrail reached at {MAX_SESSIONS}; review methodology")
     return {
         "status": "CONVERGED" if converged else "NEED_MORE_SESSIONS",
         "current_sessions": sessions,
         "minimum_sessions": MIN_SESSIONS,
+        "maximum_sessions": MAX_SESSIONS,
         "share_tolerance": SHARE_TOLERANCE,
         "distribution_relative_tolerance": RELATIVE_TOLERANCE,
         "quality": quality,
+        "manifest": manifest,
+        "missingness": missingness,
         "transitions": transitions,
         "reasons": reasons or ["all convergence gates passed"],
     }

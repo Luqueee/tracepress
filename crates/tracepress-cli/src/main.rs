@@ -74,9 +74,6 @@ const RECORDER_QUEUE_ITEMS: usize = 128;
 /// this queue is intentionally much smaller than the IPC item-count queue.
 const CONTEXT_INGESTION_QUEUE_HARD_CAP: usize = 4;
 
-/// Bounds heavy analyzed result payloads retained by the recorder and ingestion worker together.
-const CONTEXT_HEAVY_OUTCOME_CAP: usize = CONTEXT_INGESTION_QUEUE_HARD_CAP;
-
 fn context_ingestion_queue_capacity(configured: usize) -> usize {
     configured.clamp(1, CONTEXT_INGESTION_QUEUE_HARD_CAP)
 }
@@ -250,7 +247,6 @@ struct ContextFinalizationInput<'analysis> {
     started_at_us: u64,
     attempt_id: AttemptId,
     analysis: &'analysis ContextAnalysisResult,
-    analysis_permit: Option<OwnedSemaphorePermit>,
     provider_input_tokens: Option<u64>,
     provider_usage_comparable: bool,
     correlation: CorrelationStatus,
@@ -268,18 +264,21 @@ struct RecordObservationInput {
 #[derive(Debug, Default)]
 struct ContextCounters {
     observer_backpressure: AtomicU64,
+    deferred_backlog_capacity: AtomicU64,
     resource_limit: AtomicU64,
     malformed: AtomicU64,
     correlation_degraded: AtomicU64,
     unsupported: AtomicU64,
     cancelled: AtomicU64,
     pre_persistence_drop_backpressure: AtomicU64,
+    pre_persistence_drop_deferred_backlog_capacity: AtomicU64,
     pre_persistence_drop_resource_limit: AtomicU64,
     pre_persistence_drop_malformed: AtomicU64,
     pre_persistence_drop_correlation: AtomicU64,
     pre_persistence_drop_unsupported: AtomicU64,
     pre_persistence_drop_cancelled: AtomicU64,
     pending_drop_backpressure: AtomicU64,
+    pending_drop_deferred_backlog_capacity: AtomicU64,
     pending_drop_resource_limit: AtomicU64,
     pending_drop_malformed: AtomicU64,
     pending_drop_correlation: AtomicU64,
@@ -332,6 +331,7 @@ impl ContextCounters {
     const fn counter(&self, reason: ContextAnalysisDropReason) -> &AtomicU64 {
         match reason {
             ContextAnalysisDropReason::ObserverBackpressure => &self.observer_backpressure,
+            ContextAnalysisDropReason::DeferredBacklogCapacity => &self.deferred_backlog_capacity,
             ContextAnalysisDropReason::ResourceLimit => &self.resource_limit,
             ContextAnalysisDropReason::Malformed => &self.malformed,
             ContextAnalysisDropReason::CorrelationDegraded => &self.correlation_degraded,
@@ -344,6 +344,9 @@ impl ContextCounters {
         match reason {
             ContextAnalysisDropReason::ObserverBackpressure => {
                 &self.pre_persistence_drop_backpressure
+            }
+            ContextAnalysisDropReason::DeferredBacklogCapacity => {
+                &self.pre_persistence_drop_deferred_backlog_capacity
             }
             ContextAnalysisDropReason::ResourceLimit => &self.pre_persistence_drop_resource_limit,
             ContextAnalysisDropReason::Malformed => &self.pre_persistence_drop_malformed,
@@ -358,6 +361,9 @@ impl ContextCounters {
     const fn pending_drop_counter(&self, reason: ContextAnalysisDropReason) -> &AtomicU64 {
         match reason {
             ContextAnalysisDropReason::ObserverBackpressure => &self.pending_drop_backpressure,
+            ContextAnalysisDropReason::DeferredBacklogCapacity => {
+                &self.pending_drop_deferred_backlog_capacity
+            }
             ContextAnalysisDropReason::ResourceLimit => &self.pending_drop_resource_limit,
             ContextAnalysisDropReason::Malformed => &self.pending_drop_malformed,
             ContextAnalysisDropReason::CorrelationDegraded => &self.pending_drop_correlation,
@@ -623,14 +629,17 @@ impl ContextCounters {
         let correlation_correlated = self.correlation_correlated.load(Ordering::Relaxed);
         let correlation_coverage = coverage(correlation_correlated, correlation_eligible);
         format!(
-            "context_observer_backpressure_total={}\ncontext_resource_limit_total={}\ncontext_malformed_total={}\ncontext_correlation_degraded_total={}\ncontext_unsupported_total={}\ncontext_cancelled_total={}\nanalysis_requests_seen={seen}\nanalysis_requests_complete={complete}\nanalysis_requests_partial={partial}\nanalysis_requests_dropped={dropped}\nanalysis_drop_backpressure={}\nanalysis_drop_resource_limit={}\nanalysis_drop_malformed={}\nanalysis_drop_correlation={}\nanalysis_drop_unsupported={}\nanalysis_drop_cancelled={}\ncorrelation_eligible={correlation_eligible}\ncorrelation_correlated={correlation_correlated}\nanalysis_coverage={analysis_coverage}\ncorrelation_coverage={correlation_coverage}\nanalysis_coverage_complete={complete_coverage}\nanalysis_coverage_partial={partial_coverage}\nanalysis_coverage_dropped={dropped_coverage}\ntoken_estimation_coverage={token_coverage}\nsemantic_detection_coverage={semantic_coverage}",
+            "context_observer_backpressure_total={}\ncontext_deferred_backlog_capacity_total={}\ncontext_resource_limit_total={}\ncontext_malformed_total={}\ncontext_correlation_degraded_total={}\ncontext_unsupported_total={}\ncontext_cancelled_total={}\nanalysis_requests_seen={seen}\nanalysis_requests_complete={complete}\nanalysis_requests_partial={partial}\nanalysis_requests_dropped={dropped}\nanalysis_drop_backpressure={}\nanalysis_drop_deferred_backlog_capacity={}\nanalysis_drop_resource_limit={}\nanalysis_drop_malformed={}\nanalysis_drop_correlation={}\nanalysis_drop_unsupported={}\nanalysis_drop_cancelled={}\ncorrelation_eligible={correlation_eligible}\ncorrelation_correlated={correlation_correlated}\nanalysis_coverage={analysis_coverage}\ncorrelation_coverage={correlation_coverage}\nanalysis_coverage_complete={complete_coverage}\nanalysis_coverage_partial={partial_coverage}\nanalysis_coverage_dropped={dropped_coverage}\ntoken_estimation_coverage={token_coverage}\nsemantic_detection_coverage={semantic_coverage}",
             self.observer_backpressure.load(Ordering::Relaxed),
+            self.deferred_backlog_capacity.load(Ordering::Relaxed),
             self.resource_limit.load(Ordering::Relaxed),
             self.malformed.load(Ordering::Relaxed),
             self.correlation_degraded.load(Ordering::Relaxed),
             self.unsupported.load(Ordering::Relaxed),
             self.cancelled.load(Ordering::Relaxed),
             self.pre_persistence_drop_backpressure
+                .load(Ordering::Relaxed),
+            self.pre_persistence_drop_deferred_backlog_capacity
                 .load(Ordering::Relaxed),
             self.pre_persistence_drop_resource_limit
                 .load(Ordering::Relaxed),
@@ -878,17 +887,12 @@ struct RecorderSink {
     ordering: Arc<TransportOrdering>,
     counters: Arc<CorrelationCounters>,
     context_counters: Arc<ContextCounters>,
+    /// Bounds analyzed outcomes retained between the recorder channel and the context worker.
     analysis_slots: Arc<Semaphore>,
     analysis_enabled: bool,
 }
 
 impl RecorderSink {
-    fn offer(&self, event: RunEvent) -> Result<(), MetadataSinkError> {
-        self.sender
-            .try_send(event)
-            .map_err(|_error| MetadataSinkError::rejected())
-    }
-
     /// Admits transport metadata without allocating a per-forward task.
     fn offer_transport(&self, metadata: ForwardMetadata) -> Result<(), MetadataSinkError> {
         if matches!(metadata.route, InboundRoute::ResponsesCompact) {
@@ -940,11 +944,11 @@ impl RecorderSink {
     }
 
     /// Provider observations are produced by detached observer tasks, so a full recorder queue
-    /// may stall those tasks without stalling the forwarding path. Waiting here preserves every
-    /// Phase 2 provider receipt instead of silently dropping an observation during a burst.
+    /// must reject auxiliary work rather than stall a blocking executor worker. The caller turns
+    /// that rejection into explicit observer/backpressure accounting; it never gates forwarding.
     fn offer_durable(&self, event: RunEvent) -> Result<(), MetadataSinkError> {
         self.sender
-            .blocking_send(event)
+            .try_send(event)
             .map_err(|_error| MetadataSinkError::rejected())
     }
 }
@@ -1006,7 +1010,7 @@ impl ProviderObservationSink for RecorderSink {
             }
             _ => None,
         };
-        match self.offer(RunEvent::ContextAnalysis(
+        match self.offer_durable(RunEvent::ContextAnalysis(
             observation.forward,
             observation.outcome,
             permit,
@@ -1065,9 +1069,7 @@ struct ForwardState {
     request: Option<PendingObservation>,
     response: Option<ResponseObservation>,
     context: Option<ContextAnalysisOutcome>,
-    analysis_permit: Option<OwnedSemaphorePermit>,
-    /// A Phase 2 request event arrived before its detached Phase 3 outcome.
-    context_pending: bool,
+    context_analysis_permit: Option<OwnedSemaphorePermit>,
     status_code: Option<u16>,
     transport_failure: Option<TransportFailure>,
     /// Transport admission failed before status could be joined to this forward.
@@ -1085,15 +1087,16 @@ impl ForwardState {
             || self.transport_admission_failure.is_some()
     }
 
-    /// Returns whether this forward has all evidence required for one durable observation.
+    /// Returns whether this forward has all evidence required for one durable provider
+    /// observation.
     ///
-    /// Context analysis is detached from forwarding, so the response/transport halves must not
-    /// settle the forward while its admitted analysis outcome is still in flight.
+    /// Context analysis is detached from forwarding. A response therefore settles the bounded
+    /// correlation identity as soon as provider evidence is complete; the compact receipt is
+    /// retained separately until the deferred context outcome arrives.
     const fn is_ready_to_settle(&self) -> bool {
         self.request.is_some()
             && (self.response.is_some() || self.transport_failure.is_some())
             && self.transport_is_terminal()
-            && !self.context_pending
     }
 
     /// Takes the evidence observed for this forward so far.
@@ -1105,7 +1108,7 @@ impl ForwardState {
         let status_code = self.status_code;
         let response = self.response.take();
         let context = self.context.take();
-        let analysis_permit = self.analysis_permit.take();
+        let context_analysis_permit = self.context_analysis_permit.take();
         let transport_failure = self.transport_failure.take();
         let orphaned_semantic =
             self.request.is_none() && (response.is_some() || transport_failure.is_some());
@@ -1115,7 +1118,7 @@ impl ForwardState {
                 pending,
                 response,
                 context,
-                analysis_permit,
+                analysis_permit: context_analysis_permit,
                 status_code,
                 transport_failure,
             }),
@@ -1271,7 +1274,7 @@ impl RunRecorder {
             }
             state.transport = true;
             state.status_code = metadata.status_code;
-            if state.request.is_none() || state.response.is_none() || state.context_pending {
+            if state.request.is_none() || state.response.is_none() {
                 return Ok(());
             }
             // Metadata is handed off from a tracked blocking task. A response observer can
@@ -1352,8 +1355,8 @@ impl RunRecorder {
         }
     }
 
-    /// Buffers the Phase 2 request half before dispatch and waits for its detached Phase 3 outcome
-    /// before checking terminal evidence.
+    /// Buffers the Phase 2 request half before dispatch. Provider evidence can settle without
+    /// waiting for the detached Phase 3 outcome; that outcome is joined through `pending_context`.
     async fn request_context(&mut self, observation: RequestContextObservation) {
         let analysis_enabled = self.analysis_enabled;
         let forward = observation.forward;
@@ -1382,7 +1385,6 @@ impl RunRecorder {
             if let Some(context) = observation.context {
                 state.context = Some(context);
             }
-            state.context_pending = self.analysis_enabled && state.context.is_none();
             if !state.is_ready_to_settle() {
                 return;
             }
@@ -1415,7 +1417,6 @@ impl RunRecorder {
         if let Some(context) = observation.context {
             state.context = Some(context);
         }
-        state.context_pending = self.analysis_enabled && state.context.is_none();
         if !state.is_ready_to_settle() {
             return;
         }
@@ -1427,7 +1428,7 @@ impl RunRecorder {
         }
     }
 
-    /// Attaches the detached Phase 3 outcome after the forwarding task has crossed dispatch.
+    /// Attaches the detached Phase 3 outcome after the provider record has crossed dispatch.
     async fn context_analysis(&mut self, input: ContextAnalysisInput) {
         let ContextAnalysisInput {
             forward,
@@ -1451,13 +1452,13 @@ impl RunRecorder {
             return;
         };
         if state.settled {
+            drop(analysis_permit);
             self.context_counters
                 .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
             return;
         }
         state.context = Some(outcome);
-        state.analysis_permit = analysis_permit;
-        state.context_pending = false;
+        state.context_analysis_permit = analysis_permit;
         if !state.is_ready_to_settle() {
             return;
         }
@@ -1518,7 +1519,6 @@ impl RunRecorder {
         state.response = Some(observation);
         if state.request.is_none()
             || (!state.transport && state.transport_admission_failure.is_none())
-            || state.context_pending
         {
             return;
         }
@@ -1540,7 +1540,7 @@ impl RunRecorder {
             return;
         }
         state.transport_failure = Some(failure);
-        if state.request.is_none() || state.context_pending {
+        if state.request.is_none() {
             return;
         }
         state.settled = true;
@@ -1889,9 +1889,7 @@ impl RunRecorder {
     }
 
     fn drop_unpaired_context(&self, forward: ForwardId, state: &mut ForwardState) {
-        let permit = state.analysis_permit.take();
         let Some(outcome) = state.context.take() else {
-            drop(permit);
             self.context_counters
                 .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
             return;
@@ -1903,7 +1901,6 @@ impl RunRecorder {
             ContextAnalysisOutcome::Dropped(reason) => reason,
             _ => ContextAnalysisDropReason::Unsupported,
         };
-        drop(permit);
         self.context_counters.dropped(forward, reason);
     }
 
@@ -2136,13 +2133,13 @@ impl ContextIngestionWorker {
             provider_usage_comparable,
             correlation,
         } = job;
+        let _analysis_permit = analysis_permit;
         let (snapshot_id, started_at_us) = match self
             .begin_context(provider_request_id, inference_operation_id)
             .await
         {
             Ok(value) => value,
             Err(reason) => {
-                drop(analysis_permit);
                 self.counters.dropped(forward, reason);
                 return;
             }
@@ -2164,7 +2161,6 @@ impl ContextIngestionWorker {
             Ok(value) => value,
             Err(reason) => {
                 self.abort_context(snapshot_id, reason).await;
-                drop(analysis_permit);
                 self.counters.dropped(forward, reason);
                 return;
             }
@@ -2175,7 +2171,6 @@ impl ContextIngestionWorker {
             started_at_us,
             attempt_id,
             analysis: &analysis,
-            analysis_permit,
             provider_input_tokens,
             provider_usage_comparable,
             correlation,
@@ -2319,7 +2314,6 @@ impl ContextIngestionWorker {
         let Some((current_blocks, finalize, coverage)) = self.build_context_finalize(&input) else {
             self.abort_context(snapshot_id, ContextAnalysisDropReason::CorrelationDegraded)
                 .await;
-            drop(input.analysis_permit);
             self.counters
                 .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
             return;
@@ -2381,12 +2375,12 @@ impl ContextIngestionWorker {
                     .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
             }
         }
-        drop(input.analysis_permit);
     }
 }
 async fn flush_context_drops(config: &Config, session_id: SessionId, counters: &ContextCounters) {
     let reasons = [
         ContextAnalysisDropReason::ObserverBackpressure,
+        ContextAnalysisDropReason::DeferredBacklogCapacity,
         ContextAnalysisDropReason::ResourceLimit,
         ContextAnalysisDropReason::Malformed,
         ContextAnalysisDropReason::CorrelationDegraded,
@@ -2431,10 +2425,9 @@ fn observation_record(
         pending,
         response,
         context,
-        analysis_permit,
         status_code,
         transport_failure,
-        ..
+        analysis_permit,
     } = semantic;
     // The parser always measures its bounded input; an unmeasured body is never invented.
     // A decoder rejected by the bounded analysis capacity did not present bytes to the semantic
@@ -2813,7 +2806,7 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
     let (context_sender, context_receiver) = tokio::sync::mpsc::channel(context_queue_items);
     let counters = Arc::new(CorrelationCounters::default());
     let context_counters = Arc::new(ContextCounters::default());
-    let analysis_slots = Arc::new(Semaphore::new(CONTEXT_HEAVY_OUTCOME_CAP));
+    let analysis_slots = Arc::new(Semaphore::new(context_queue_items));
     let context_task = tokio::spawn(
         ContextIngestionWorker {
             config: config.clone(),
@@ -3338,8 +3331,20 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         .await;
     proxy_task.abort();
     let _proxy_result = proxy_task.await;
-    let recorded = match tokio::time::timeout(RECORDER_DRAIN_TIMEOUT, async {
+    let (recorded, drain_timed_out) = match tokio::time::timeout(RECORDER_DRAIN_TIMEOUT, async {
         background_proxy.wait_for_background_tasks().await;
+        let deferred_metrics = background_proxy.deferred_analysis_metrics();
+        println!(
+            "deferred_queue_items={}\ndeferred_queue_bytes={}\ndeferred_high_water_items={}\ndeferred_high_water_bytes={}\ndeferred_total={}\nprocessed_deferred_total={}\nbacklog_capacity_drops={}\nanalysis_wait_us={}",
+            deferred_metrics.queue_items,
+            deferred_metrics.queue_bytes,
+            deferred_metrics.high_water_items,
+            deferred_metrics.high_water_bytes,
+            deferred_metrics.deferred_total,
+            deferred_metrics.processed_deferred_total,
+            deferred_metrics.backlog_capacity_drops,
+            deferred_metrics.analysis_wait_us,
+        );
         // The recorder's channel must be closed before it is drained; otherwise the recorder
         // cannot observe end-of-run and wait for more events forever.
         drop(background_proxy);
@@ -3347,35 +3352,27 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
     })
     .await
     {
-        Ok(result) => result,
+        Ok(result) => (result, false),
         Err(_elapsed) => {
-            // Reconcile any snapshot that committed before its response was lost. Only unresolved
-            // identities are dropped at the cancellation boundary below.
+            // Reconcile any snapshot that committed before its response was lost. Active
+            // snapshots are intentionally left pending until FinishSession gives the daemon a
+            // chance to finalize them as durable partial outcomes.
             reconcile_pending_context(config, &context_counters).await;
-            // The drain timeout is a terminal cancellation boundary. Account every admitted
-            // analysis before aborting workers, then make one bounded best-effort drop flush.
-            context_counters.drop_pending(ContextAnalysisDropReason::Cancelled);
             transport_task.abort();
             recorder_task.abort();
             context_task.abort();
             let _ = (&mut transport_task).await;
             let _ = (&mut recorder_task).await;
             let _ = (&mut context_task).await;
-            let _ = tokio::time::timeout(
-                Duration::from_secs(1),
-                flush_context_drops(config, session.session_id, &context_counters),
+            (
+                Err(format!(
+                    "provider observer/recorder drain exceeded {}s",
+                    RECORDER_DRAIN_TIMEOUT.as_secs()
+                )),
+                true,
             )
-            .await;
-            Err(format!(
-                "provider observer/recorder drain exceeded {}s",
-                RECORDER_DRAIN_TIMEOUT.as_secs()
-            ))
         }
     };
-    // Correlation degradation is reported for every run, before anything else can fail: a run
-    // whose bounded state lost evidence must never look like a run that lost none.
-    println!("{}", counters.report());
-    println!("{}", context_counters.report());
     let ended_at = current_timestamp()?;
     let finalization = control(
         config,
@@ -3385,6 +3382,19 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         },
     )
     .await;
+    if drain_timed_out {
+        // FinishSession may have finalized active snapshots as durable partials. Reconcile only
+        // after that boundary, then classify the genuinely unresolved remainder as dropped.
+        reconcile_pending_context(config, &context_counters).await;
+        context_counters.drop_pending(ContextAnalysisDropReason::Cancelled);
+        let _ = tokio::time::timeout(
+            Duration::from_secs(1),
+            flush_context_drops(config, session.session_id, &context_counters),
+        )
+        .await;
+    }
+    println!("{}", counters.report());
+    println!("{}", context_counters.report());
     let status = status_result.map_err(|error| format!("cannot launch agent {agent}: {error}"))?;
     recorded.map_err(|error| format!("forward recording failed: {error}"))?;
     match finalization? {
@@ -3455,12 +3465,34 @@ async fn proxy() -> Result<(), String> {
         "proxy listening on {}",
         listener.local_addr().map_err(|error| error.to_string())?
     );
-    serve(listener, proxy.router())
+    let background_proxy = proxy.clone();
+    let serve_result = serve(listener, proxy.router())
         .with_graceful_shutdown(async {
             let _ = tokio::signal::ctrl_c().await;
         })
         .await
-        .map_err(|error| error.to_string())
+        .map_err(|error| error.to_string());
+    let drain_result = tokio::time::timeout(
+        RECORDER_DRAIN_TIMEOUT,
+        background_proxy.wait_for_background_tasks(),
+    )
+    .await;
+    if let Err(error) = serve_result {
+        let _ = drain_result;
+        return Err(error);
+    }
+    match drain_result {
+        Ok(()) => Ok(()),
+        Err(_elapsed) => {
+            let metrics = background_proxy.deferred_analysis_metrics();
+            Err(format!(
+                "proxy observer drain exceeded {}s (queue_items={}, queue_bytes={})",
+                RECORDER_DRAIN_TIMEOUT.as_secs(),
+                metrics.queue_items,
+                metrics.queue_bytes,
+            ))
+        }
+    }
 }
 
 async fn doctor(config: &Config) -> Result<(), String> {

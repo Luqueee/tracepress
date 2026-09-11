@@ -1,10 +1,11 @@
 # Tracepress Baseline n20
 
-Metadata-only report. No request/response payloads, identifiers, fingerprints, headers, or prices are included.
+Metadata-only report. No request/response payloads, raw fingerprints, headers, or prices are included; the ledger contains opaque storage identities for accounting.
 
 ## Manifest
 
 - `tracepress_commit`: 70957bba
+- `measurement_instrument_version`: 1
 - `codex_version`: 0.154.0
 - `model`: gpt-5.6-luna
 - `reasoning_effort`: xhigh
@@ -25,6 +26,9 @@ Metadata-only report. No request/response payloads, identifiers, fingerprints, h
 ## Measurement quality
 
 - Analysis: 100.00% (39/39).
+- Request ledger: 39 eligible; 39 complete; 0 partial; 0 dropped.
+- Measurement integrity: `passed`; conflicts: 0; unmatched drop events: 0.
+- Auxiliary drops: 0 events / 0 work units.
 - Correlation: 100.00% (39/39).
 - Forwarding errors: 0.
 - Context malformed: 0.
@@ -55,6 +59,13 @@ Metadata-only report. No request/response payloads, identifiers, fingerprints, h
 - Stable explicit-prefix estimate: 0; share: 0.00%.
 - Unknown detected content: 226,570 estimated tokens (25.83%).
 
+## Missingness
+
+Drop rate is based on exclusive request outcomes, never on event count.
+- Request-size quartile boundaries: `[81289.5, 81376.0, 127129.5]`.
+- Context-size quartile boundaries: `[16460.5, 16496.0, 31677.5]`.
+- Unavailable dimensions: `["workload", "concurrency_mode"]`.
+
 ## Compaction
 
 - Cohort: `naturalistic`; requests: 0; V2: 0; legacy: 0.
@@ -78,3 +89,12 @@ This is a ranking signal, not an expected savings percentage.
 - provider-managed context may be partially invisible.
 - candidate exposure is not saveable tokens.
 - cost is intentionally unavailable.
+
+## Missingness strata
+
+| Request-size stratum | Eligible | Complete | Partial | Dropped | Coverage | Drop rate |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| q1 | 10 | 10 | 0 | 0 | 100.00% | 0.00% |
+| q2 | 10 | 10 | 0 | 0 | 100.00% | 0.00% |
+| q3 | 9 | 9 | 0 | 0 | 100.00% | 0.00% |
+| q4 | 10 | 10 | 0 | 0 | 100.00% | 0.00% |

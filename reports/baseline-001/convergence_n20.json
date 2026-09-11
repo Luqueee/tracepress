@@ -1,7 +1,20 @@
 {
   "current_sessions": 20,
   "distribution_relative_tolerance": 0.1,
+  "manifest": {
+    "mismatched_report_indexes": [],
+    "pass": true,
+    "reports_with_manifest": 1,
+    "total_reports": 1
+  },
+  "maximum_sessions": 100,
   "minimum_sessions": 40,
+  "missingness": [
+    {
+      "flagged_strata": [],
+      "pass": true
+    }
+  ],
   "quality": [
     {
       "checks": {
@@ -24,6 +37,11 @@
           "pass": true,
           "target": 0,
           "value": 0.0
+        },
+        "measurement_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
         }
       },
       "pass": true

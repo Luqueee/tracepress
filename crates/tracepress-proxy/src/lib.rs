@@ -7,9 +7,10 @@
 
 pub(crate) mod decoding;
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::sync::{
-    Arc,
+    Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::{Duration, Instant};
@@ -21,13 +22,13 @@ use axum::http::{HeaderMap, HeaderName, StatusCode, Uri};
 use axum::response::Response;
 use axum::routing::post;
 use decoding::{
-    AnalysisBody, AnalysisDecoder, BoundedAnalysisDecoder, DecodeLimits, DecodeResult, WireBody,
+    AnalysisDecoder, BoundedAnalysisDecoder, DecodeLimits, DecodeResult, WireBody,
     parse_content_encoding_header,
 };
 use futures_util::{StreamExt as _, stream};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
-use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
+use tokio::sync::{Notify, Semaphore};
 pub use tracepress_context::ContextAnalysisDropReason;
 use tracepress_context::{
     ContextAnalysisLimits, ContextAnalysisLimitsError, ContextAnalysisResult, ContextDigest,
@@ -49,15 +50,20 @@ use tracepress_provider::{
 const CONTEXT_ANALYSIS_QUIESCENCE_WINDOW: Duration = Duration::from_millis(10);
 const OBSERVATION_QUEUE_CAPACITY: usize = 32;
 
-/// Hard cap on concurrent context analyses, even when the process advertises more capacity.
+/// Hard cap on the resource-derived context-analysis execution ceiling.
 ///
 /// Each analysis retains a refcounted request prefix and up to the analyzer's bounded block
 /// drafts, so allowing every runtime worker to analyze at once would turn burst width into
 /// memory pressure. The effective value is the smaller of this cap, available parallelism, and
-/// the configured CPU-work budget.
+/// the configured CPU-work budget. The deferred queue currently uses one FIFO worker per
+/// proxy/session; the derived value remains a diagnostic/configuration bound.
 const CONTEXT_ANALYSIS_CONCURRENCY_HARD_CAP: usize = 2;
 /// Bounds concurrent request decoders independently of the Phase 3 analysis slots.
 const OBSERVATION_DECODE_CONCURRENCY_HARD_CAP: usize = 8;
+/// Maximum number of raw wire bodies retained for deferred context analysis.
+const DEFERRED_ANALYSIS_MAX_ITEMS: usize = 32;
+/// Maximum compressed/raw wire bytes retained for deferred context analysis.
+const DEFERRED_ANALYSIS_MAX_BYTES: u64 = 64 * 1024 * 1024;
 
 /// Correlation identity of one forwarded provider request.
 ///
@@ -77,13 +83,15 @@ impl ForwardId {
 /// Keeps one accepted forward counted until its response body settles or the forward fails.
 struct ActiveForwardGuard {
     active: Arc<AtomicU64>,
+    notify: Arc<Notify>,
 }
 
 impl ActiveForwardGuard {
-    fn acquire(active: &Arc<AtomicU64>) -> Self {
+    fn acquire(active: &Arc<AtomicU64>, notify: &Arc<Notify>) -> Self {
         let _ = active.fetch_add(1, Ordering::AcqRel);
         Self {
             active: Arc::clone(active),
+            notify: Arc::clone(notify),
         }
     }
 }
@@ -92,6 +100,7 @@ impl Drop for ActiveForwardGuard {
     fn drop(&mut self) {
         let previous = self.active.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(previous > 0, "active forward counter underflow");
+        self.notify.notify_waiters();
     }
 }
 #[derive(Clone, Debug)]
@@ -135,6 +144,126 @@ impl Drop for BackgroundGuard {
         let previous = self.tracker.pending.fetch_sub(1, Ordering::AcqRel);
         debug_assert!(previous > 0, "background task counter underflow");
         self.tracker.notify.notify_waiters();
+    }
+}
+
+/// Admission accounting for deferred analysis bodies.
+///
+/// The budget covers queued and currently executing jobs together. This keeps the raw wire body
+/// retained by an analysis job bounded by both item count and bytes, without making forwarding
+/// wait for an analysis permit.
+#[derive(Debug)]
+struct DeferredAnalysisBudget {
+    state: Mutex<DeferredAnalysisBudgetState>,
+    max_items: usize,
+    max_bytes: u64,
+}
+
+#[derive(Debug, Default)]
+struct DeferredAnalysisBudgetState {
+    items: usize,
+    bytes: u64,
+}
+
+#[derive(Debug)]
+struct DeferredAnalysisPermit {
+    budget: Arc<DeferredAnalysisBudget>,
+    bytes: u64,
+    queue: std::sync::Weak<DeferredAnalysisQueue>,
+    forward: Option<ForwardId>,
+}
+
+/// Bounded deferred-analysis counters exposed for diagnostics and benchmark reports.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct DeferredAnalysisMetrics {
+    /// Current jobs retained, including one currently executing.
+    pub queue_items: u64,
+    /// Current retained raw wire bytes.
+    pub queue_bytes: u64,
+    /// Highest observed retained job count.
+    pub high_water_items: u64,
+    /// Highest observed retained raw wire bytes.
+    pub high_water_bytes: u64,
+    /// Number of requests admitted to deferred analysis.
+    pub deferred_total: u64,
+    /// Number of admitted jobs whose analysis was handed to the sink.
+    pub processed_deferred_total: u64,
+    /// Number of requests rejected by the item or byte admission bound.
+    pub backlog_capacity_drops: u64,
+    /// Sum of time jobs spent waiting before the worker picked them up.
+    pub analysis_wait_us: u64,
+}
+
+impl DeferredAnalysisBudget {
+    fn new(max_items: usize, max_bytes: u64) -> Self {
+        Self {
+            state: Mutex::new(DeferredAnalysisBudgetState::default()),
+            max_items: max_items.max(1),
+            max_bytes,
+        }
+    }
+
+    fn try_reserve(
+        self: &Arc<Self>,
+        bytes: u64,
+    ) -> Result<DeferredAnalysisPermit, ContextAnalysisDropReason> {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(next_items) = state.items.checked_add(1) else {
+            return Err(ContextAnalysisDropReason::DeferredBacklogCapacity);
+        };
+        let Some(next_bytes) = state.bytes.checked_add(bytes) else {
+            return Err(ContextAnalysisDropReason::DeferredBacklogCapacity);
+        };
+        if next_items > self.max_items || next_bytes > self.max_bytes {
+            return Err(ContextAnalysisDropReason::DeferredBacklogCapacity);
+        }
+        state.items = next_items;
+        state.bytes = next_bytes;
+        drop(state);
+        Ok(DeferredAnalysisPermit {
+            budget: Arc::clone(self),
+            bytes,
+            queue: std::sync::Weak::new(),
+            forward: None,
+        })
+    }
+
+    fn release(&self, bytes: u64) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        debug_assert!(
+            state.items > 0,
+            "deferred analysis item accounting underflow"
+        );
+        debug_assert!(
+            state.bytes >= bytes,
+            "deferred analysis byte accounting underflow"
+        );
+        state.items = state.items.saturating_sub(1);
+        state.bytes = state.bytes.saturating_sub(bytes);
+    }
+
+    fn usage(&self) -> (usize, u64) {
+        let state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        (state.items, state.bytes)
+    }
+}
+
+impl Drop for DeferredAnalysisPermit {
+    fn drop(&mut self) {
+        self.budget.release(self.bytes);
+        if let (Some(queue), Some(forward)) = (self.queue.upgrade(), self.forward) {
+            queue.cancel_admission(forward);
+        }
     }
 }
 
@@ -507,7 +636,8 @@ pub struct ProxyConfig {
     pub max_response_body_bytes: MaxResponseBodyBytes,
     /// Bounded shadow context limits derived from `resource_limits`.
     pub context_analysis_limits: ContextAnalysisLimits,
-    /// Maximum number of context analyses allowed to run concurrently.
+    /// Resource-derived context-analysis execution ceiling. The deferred queue currently uses
+    /// one FIFO worker per proxy/session, so this remains a diagnostic/configuration bound.
     pub context_analysis_concurrency: NonZeroUsize,
 }
 
@@ -571,6 +701,238 @@ fn derive_context_analysis_concurrency_with_parallelism(
     NonZeroUsize::new(capacity).unwrap_or(NonZeroUsize::MIN)
 }
 
+/// One raw-body analysis retained until the single session-local worker processes it.
+struct DeferredAnalysisJob {
+    forward: ForwardId,
+    wire_body: WireBody,
+    content_encoding: ContentEncoding,
+    decode_limits: DecodeLimits,
+    context_limits: ContextAnalysisLimits,
+    wire_content_hash: ContextDigest,
+    sink: Arc<dyn ProviderObservationSink>,
+    admission: DeferredAnalysisPermit,
+    enqueued_at: Instant,
+}
+
+struct DeferredAnalysisQueue {
+    budget: Arc<DeferredAnalysisBudget>,
+    state: Mutex<DeferredAnalysisQueueState>,
+    notify: Notify,
+    background: BackgroundTracker,
+    active_forwards: Arc<AtomicU64>,
+    active_notify: Arc<Notify>,
+    high_water_items: AtomicUsize,
+    high_water_bytes: AtomicU64,
+    deferred_total: AtomicU64,
+    processed_deferred_total: AtomicU64,
+    backlog_capacity_drops: AtomicU64,
+    analysis_wait_us: AtomicU64,
+}
+
+#[derive(Default)]
+struct DeferredAnalysisQueueState {
+    admitted: BTreeSet<ForwardId>,
+    jobs: BTreeMap<ForwardId, DeferredAnalysisJob>,
+    worker_running: bool,
+}
+
+enum DeferredAnalysisNext {
+    Ready(Box<DeferredAnalysisJob>),
+    Waiting,
+    Empty,
+}
+
+impl DeferredAnalysisQueue {
+    fn new(
+        background: BackgroundTracker,
+        active_forwards: Arc<AtomicU64>,
+        active_notify: Arc<Notify>,
+    ) -> Arc<Self> {
+        Arc::new(Self {
+            budget: Arc::new(DeferredAnalysisBudget::new(
+                DEFERRED_ANALYSIS_MAX_ITEMS,
+                DEFERRED_ANALYSIS_MAX_BYTES,
+            )),
+            state: Mutex::new(DeferredAnalysisQueueState::default()),
+            notify: Notify::new(),
+            background,
+            active_forwards,
+            active_notify,
+            high_water_items: AtomicUsize::new(0),
+            high_water_bytes: AtomicU64::new(0),
+            deferred_total: AtomicU64::new(0),
+            processed_deferred_total: AtomicU64::new(0),
+            backlog_capacity_drops: AtomicU64::new(0),
+            analysis_wait_us: AtomicU64::new(0),
+        })
+    }
+
+    fn try_admit(
+        self: &Arc<Self>,
+        forward: ForwardId,
+        wire_bytes: u64,
+    ) -> Result<DeferredAnalysisPermit, ContextAnalysisDropReason> {
+        let result = self.budget.try_reserve(wire_bytes);
+        match result {
+            Ok(mut permit) => {
+                permit.queue = Arc::downgrade(self);
+                permit.forward = Some(forward);
+                let mut state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let _inserted = state.admitted.insert(forward);
+                drop(state);
+                let (items, bytes) = self.budget.usage();
+                let _previous = self.high_water_items.fetch_max(items, Ordering::Relaxed);
+                let _previous = self.high_water_bytes.fetch_max(bytes, Ordering::Relaxed);
+                let _counted = self.deferred_total.fetch_add(1, Ordering::Relaxed);
+                Ok(permit)
+            }
+            Err(reason) => {
+                let _counted = self.backlog_capacity_drops.fetch_add(1, Ordering::Relaxed);
+                Err(reason)
+            }
+        }
+    }
+
+    fn enqueue(self: &Arc<Self>, job: DeferredAnalysisJob) {
+        let forward = job.forward;
+        let start_worker = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _previous = state.jobs.insert(forward, job);
+            if state.worker_running {
+                false
+            } else {
+                state.worker_running = true;
+                true
+            }
+        };
+        self.notify.notify_waiters();
+        if !start_worker {
+            return;
+        }
+        let queue = Arc::clone(self);
+        let task_guard = self.background.guard();
+        drop(tokio::spawn(async move {
+            let _task_guard = task_guard;
+            queue.run().await;
+        }));
+    }
+
+    fn next_ready(&self) -> DeferredAnalysisNext {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let Some(forward) = state.admitted.first().copied() else {
+            state.worker_running = false;
+            drop(state);
+            return DeferredAnalysisNext::Empty;
+        };
+        let Some(job) = state.jobs.remove(&forward) else {
+            drop(state);
+            return DeferredAnalysisNext::Waiting;
+        };
+        let _removed = state.admitted.remove(&forward);
+        drop(state);
+        DeferredAnalysisNext::Ready(Box::new(job))
+    }
+
+    fn cancel_admission(&self, forward: ForwardId) {
+        let mut state = self
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        let _removed = state.admitted.remove(&forward);
+        drop(state);
+        self.notify.notify_waiters();
+    }
+
+    async fn run(self: Arc<Self>) {
+        loop {
+            self.wait_for_forwarding_idle().await;
+            let notified = self.notify.notified();
+            let job = match self.next_ready() {
+                DeferredAnalysisNext::Ready(job) => *job,
+                DeferredAnalysisNext::Waiting => {
+                    notified.await;
+                    continue;
+                }
+                DeferredAnalysisNext::Empty => return,
+            };
+            let DeferredAnalysisJob {
+                forward,
+                wire_body,
+                content_encoding,
+                decode_limits,
+                context_limits,
+                wire_content_hash,
+                sink,
+                admission,
+                enqueued_at,
+            } = job;
+            let wait_us = u64::try_from(enqueued_at.elapsed().as_micros()).unwrap_or(u64::MAX);
+            let _waited = self.analysis_wait_us.fetch_add(wait_us, Ordering::Relaxed);
+            let outcome = tokio::task::spawn_blocking(move || {
+                let _admission = admission;
+                let decoded =
+                    BoundedAnalysisDecoder.decode(&wire_body, content_encoding, &decode_limits);
+                decoded.body.map_or_else(
+                    || ContextAnalysisOutcome::Dropped(decode_drop_reason(decoded.status)),
+                    |body| {
+                        let mut analysis = analyze_responses(body.as_ref(), context_limits);
+                        analysis.request_content_hash = wire_content_hash;
+                        ContextAnalysisOutcome::Analyzed(analysis)
+                    },
+                )
+            })
+            .await
+            .unwrap_or(ContextAnalysisOutcome::Dropped(
+                ContextAnalysisDropReason::Cancelled,
+            ));
+            let _accepted = tokio::task::spawn_blocking(move || {
+                sink.try_record_context_analysis(ContextAnalysisObservation { forward, outcome })
+            })
+            .await;
+            let _counted = self
+                .processed_deferred_total
+                .fetch_add(1, Ordering::Relaxed);
+        }
+    }
+
+    async fn wait_for_forwarding_idle(&self) {
+        loop {
+            if self.active_forwards.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            let notified = self.active_notify.notified();
+            if self.active_forwards.load(Ordering::Acquire) == 0 {
+                return;
+            }
+            notified.await;
+        }
+    }
+
+    fn metrics(&self) -> DeferredAnalysisMetrics {
+        let (items, bytes) = self.budget.usage();
+        DeferredAnalysisMetrics {
+            queue_items: u64::try_from(items).unwrap_or(u64::MAX),
+            queue_bytes: bytes,
+            high_water_items: u64::try_from(self.high_water_items.load(Ordering::Relaxed))
+                .unwrap_or(u64::MAX),
+            high_water_bytes: self.high_water_bytes.load(Ordering::Relaxed),
+            deferred_total: self.deferred_total.load(Ordering::Relaxed),
+            processed_deferred_total: self.processed_deferred_total.load(Ordering::Relaxed),
+            backlog_capacity_drops: self.backlog_capacity_drops.load(Ordering::Relaxed),
+            analysis_wait_us: self.analysis_wait_us.load(Ordering::Relaxed),
+        }
+    }
+}
+
 /// Cloneable Axum state for one transparent ingress.
 #[derive(Clone)]
 pub struct TransparentProxy {
@@ -579,10 +941,11 @@ pub struct TransparentProxy {
     metadata: Arc<dyn MetadataSink>,
     observations: Arc<dyn ProviderObservationSink>,
     observations_enabled: bool,
-    context_analysis_permits: Arc<Semaphore>,
+    deferred_analysis: Arc<DeferredAnalysisQueue>,
     observation_decode_permits: Arc<Semaphore>,
     forwards: Arc<AtomicU64>,
     active_forwards: Arc<AtomicU64>,
+    active_notify: Arc<Notify>,
     background: BackgroundTracker,
 }
 
@@ -606,10 +969,15 @@ impl TransparentProxy {
             .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(ForwardError::ClientBuild)?;
+        let background = BackgroundTracker::new();
+        let active_forwards = Arc::new(AtomicU64::new(0));
+        let active_notify = Arc::new(Notify::new());
+        let deferred_analysis = DeferredAnalysisQueue::new(
+            background.clone(),
+            Arc::clone(&active_forwards),
+            Arc::clone(&active_notify),
+        );
         Ok(Self {
-            context_analysis_permits: Arc::new(Semaphore::new(
-                config.context_analysis_concurrency.get(),
-            )),
             observation_decode_permits: Arc::new(Semaphore::new(
                 OBSERVATION_DECODE_CONCURRENCY_HARD_CAP,
             )),
@@ -619,8 +987,10 @@ impl TransparentProxy {
             observations: Arc::new(NoopProviderObservationSink),
             observations_enabled: false,
             forwards: Arc::new(AtomicU64::new(0)),
-            active_forwards: Arc::new(AtomicU64::new(0)),
-            background: BackgroundTracker::new(),
+            active_forwards,
+            active_notify,
+            background,
+            deferred_analysis,
         })
     }
 
@@ -630,11 +1000,17 @@ impl TransparentProxy {
     }
     /// Marks one request as active until its response body or failure path settles.
     fn begin_forward(&self) -> ActiveForwardGuard {
-        ActiveForwardGuard::acquire(&self.active_forwards)
+        ActiveForwardGuard::acquire(&self.active_forwards, &self.active_notify)
     }
     /// Waits for detached provider/context observers before recorder shutdown.
     pub async fn wait_for_background_tasks(&self) {
         self.background.wait().await;
+    }
+
+    /// Returns bounded deferred-analysis queue counters for diagnostics and benchmarks.
+    #[must_use]
+    pub fn deferred_analysis_metrics(&self) -> DeferredAnalysisMetrics {
+        self.deferred_analysis.metrics()
     }
 
     /// Returns a handle for auxiliary sink work that must drain before shutdown.
@@ -747,12 +1123,11 @@ async fn forward_inner(
             return Err(error);
         }
     };
-    // Phase 2 request parsing may begin as soon as the body is available. A Phase 3 reservation
-    // is acquired before its trigger can retain a request body or any detached analysis task.
-    // When no reservation exists the compact drop is carried by the request observation instead
-    // of retaining another body copy or queuing a task.
-    let context_permit =
-        context_enabled.then(|| try_context_analysis_permit(&proxy.context_analysis_permits));
+    // Phase 2 request parsing may begin as soon as the body is available. Admission only
+    // reserves bounded storage for the raw wire body; execution is deferred until the response
+    // settles and never competes with forwarding for this reservation.
+    let context_admission =
+        context_enabled.then(|| proxy.deferred_analysis.try_admit(forward, request_bytes));
     let observation = observed
         .then(|| {
             queue_request_observation(RequestObservationRequest {
@@ -760,7 +1135,7 @@ async fn forward_inner(
                 forward,
                 wire_body: wire_body.clone(),
                 content_encoding,
-                analysis_permit: context_permit,
+                analysis_admission: context_admission,
             })
         })
         .flatten();
@@ -1021,10 +1396,10 @@ fn response_mode(
 /// started later by [`queue_context_analysis`], after the upstream dispatch boundary.
 struct QueuedRequestObservation {
     stream_hint: tokio::sync::oneshot::Receiver<Option<bool>>,
-    analysis_body:
-        tokio::sync::oneshot::Receiver<(Option<AnalysisBody>, AnalysisDecodeStatus, ContextDigest)>,
-    /// Present only after a Phase 3 reservation was acquired before this object was built.
-    permit: Option<OwnedSemaphorePermit>,
+    analysis_input: tokio::sync::oneshot::Receiver<(WireBody, ContentEncoding)>,
+    /// Present only after deferred raw-body admission succeeded.
+    admission: Option<DeferredAnalysisPermit>,
+    decode_limits: DecodeLimits,
 }
 
 struct RequestObservationRequest<'a> {
@@ -1032,9 +1407,13 @@ struct RequestObservationRequest<'a> {
     forward: ForwardId,
     wire_body: WireBody,
     content_encoding: tracepress_provider::ContentEncoding,
-    analysis_permit: Option<Result<OwnedSemaphorePermit, ContextAnalysisDropReason>>,
+    analysis_admission: Option<Result<DeferredAnalysisPermit, ContextAnalysisDropReason>>,
 }
 
+#[allow(
+    clippy::significant_drop_tightening,
+    reason = "the decoder permit must live inside the detached observation task"
+)]
 fn queue_request_observation(
     request: RequestObservationRequest<'_>,
 ) -> Option<QueuedRequestObservation> {
@@ -1043,7 +1422,7 @@ fn queue_request_observation(
         forward,
         wire_body,
         content_encoding,
-        analysis_permit,
+        analysis_admission,
     } = request;
     let limits = observation_limits(proxy.config.max_request_body_bytes.get())?;
     let decode_limits = DecodeLimits {
@@ -1058,25 +1437,25 @@ fn queue_request_observation(
     let endpoint_profile_version = proxy.config.upstream.profile_version();
     let sink = Arc::clone(&proxy.observations);
     let (hint, stream_hint) = tokio::sync::oneshot::channel();
-    let (sender, analysis_body) = tokio::sync::oneshot::channel();
-    let decode_permit = matches!(content_encoding, ContentEncoding::Zstd)
-        .then(|| {
-            Arc::clone(&proxy.observation_decode_permits)
-                .try_acquire_owned()
-                .ok()
-        })
-        .flatten();
+    let (analysis_sender, analysis_input) = tokio::sync::oneshot::channel();
+    let decode_permit = match content_encoding {
+        ContentEncoding::Zstd => Arc::clone(&proxy.observation_decode_permits)
+            .try_acquire_owned()
+            .ok(),
+        _ => None,
+    };
     let skip_decode = matches!(content_encoding, ContentEncoding::Zstd) && decode_permit.is_none();
-    let (permit, context) = match analysis_permit {
-        Some(Ok(permit)) => (Some(permit), None),
+    let (admission, context) = match analysis_admission {
+        Some(Ok(admission)) => (Some(admission), None),
         Some(Err(reason)) => (None, Some(ContextAnalysisOutcome::Dropped(reason))),
         None => (None, None),
     };
+    let deferred_wire_body = wire_body.clone();
+    let observation_decode_limits = decode_limits.clone();
     let task_guard = proxy.background.guard();
     drop(tokio::task::spawn_blocking(move || {
         let _task_guard = task_guard;
         let _decode_permit = decode_permit;
-        let wire_content_hash = ContextDigest::from_bytes(wire_body.as_ref());
         let decoded = if skip_decode {
             DecodeResult {
                 status: AnalysisDecodeStatus::ResourceLimit,
@@ -1087,7 +1466,7 @@ fn queue_request_observation(
                 decoder_version: 1,
             }
         } else {
-            BoundedAnalysisDecoder.decode(&wire_body, content_encoding, &decode_limits)
+            BoundedAnalysisDecoder.decode(&wire_body, content_encoding, &observation_decode_limits)
         };
         let mut parsed = if let Some(body) = decoded.body.as_ref() {
             OpenAiResponsesV1Observer::new()
@@ -1118,12 +1497,13 @@ fn queue_request_observation(
             context,
         });
         let _delivered = hint.send(parsed.stream);
-        let _sent = sender.send((decoded.body, decoded.status, wire_content_hash));
+        let _sent = analysis_sender.send((deferred_wire_body, content_encoding));
     }));
     Some(QueuedRequestObservation {
         stream_hint,
-        analysis_body,
-        permit,
+        analysis_input,
+        admission,
+        decode_limits,
     })
 }
 
@@ -1135,72 +1515,56 @@ struct QueuedContextAnalysis {
 
 struct ContextAnalysisTrigger {
     forward: ForwardId,
-    analysis_body:
-        tokio::sync::oneshot::Receiver<(Option<AnalysisBody>, AnalysisDecodeStatus, ContextDigest)>,
+    analysis_input: tokio::sync::oneshot::Receiver<(WireBody, ContentEncoding)>,
     context_limits: ContextAnalysisLimits,
-    permit: OwnedSemaphorePermit,
+    decode_limits: DecodeLimits,
+    admission: DeferredAnalysisPermit,
     sink: Arc<dyn ProviderObservationSink>,
-    active_forwards: Arc<AtomicU64>,
+    deferred_analysis: Arc<DeferredAnalysisQueue>,
     background: BackgroundTracker,
-}
-
-fn try_context_analysis_permit(
-    permits: &Arc<Semaphore>,
-) -> Result<OwnedSemaphorePermit, ContextAnalysisDropReason> {
-    Arc::clone(permits)
-        .try_acquire_owned()
-        .map_err(|_error| ContextAnalysisDropReason::ObserverBackpressure)
 }
 
 impl ContextAnalysisTrigger {
     fn start(self) {
         let Self {
             forward,
-            analysis_body,
+            analysis_input,
             context_limits,
-            permit,
+            decode_limits,
+            admission,
             sink,
-            active_forwards,
+            deferred_analysis,
             background,
         } = self;
         let task_guard = background.guard();
         drop(tokio::spawn(async move {
             let _task_guard = task_guard;
-            let Ok((analysis_body, decode_status, wire_content_hash)) = analysis_body.await else {
-                let _accepted = sink.try_record_context_analysis(ContextAnalysisObservation {
-                    forward,
-                    outcome: ContextAnalysisOutcome::Dropped(ContextAnalysisDropReason::Cancelled),
-                });
-                drop(permit);
+            let Ok((wire_body, content_encoding)) = analysis_input.await else {
+                let _accepted = tokio::task::spawn_blocking(move || {
+                    sink.try_record_context_analysis(ContextAnalysisObservation {
+                        forward,
+                        outcome: ContextAnalysisOutcome::Dropped(
+                            ContextAnalysisDropReason::Cancelled,
+                        ),
+                    })
+                })
+                .await;
+                drop(admission);
                 return;
             };
             tokio::time::sleep(CONTEXT_ANALYSIS_QUIESCENCE_WINDOW).await;
-            let blocking_background = background.clone();
-            let blocking_guard = blocking_background.guard();
-            let _ = tokio::task::spawn_blocking(move || {
-                let _task_guard = blocking_guard;
-                let _permit = permit;
-                if active_forwards.load(Ordering::Acquire) != 0 {
-                    let _accepted = sink.try_record_context_analysis(ContextAnalysisObservation {
-                        forward,
-                        outcome: ContextAnalysisOutcome::Dropped(
-                            ContextAnalysisDropReason::ObserverBackpressure,
-                        ),
-                    });
-                    return;
-                }
-                let outcome = analysis_body.map_or_else(
-                    || ContextAnalysisOutcome::Dropped(decode_drop_reason(decode_status)),
-                    |body| {
-                        let mut analysis = analyze_responses(body.as_ref(), context_limits);
-                        analysis.request_content_hash = wire_content_hash;
-                        ContextAnalysisOutcome::Analyzed(analysis)
-                    },
-                );
-                let _accepted = sink
-                    .try_record_context_analysis(ContextAnalysisObservation { forward, outcome });
-            })
-            .await;
+            let wire_content_hash = ContextDigest::from_bytes(wire_body.as_ref());
+            deferred_analysis.enqueue(DeferredAnalysisJob {
+                forward,
+                wire_body,
+                content_encoding,
+                decode_limits,
+                context_limits,
+                wire_content_hash,
+                sink,
+                admission,
+                enqueued_at: Instant::now(),
+            });
         }));
     }
 }
@@ -1240,16 +1604,18 @@ fn queue_context_analysis(
 ) -> QueuedContextAnalysis {
     let QueuedRequestObservation {
         stream_hint,
-        analysis_body,
-        permit,
+        analysis_input,
+        admission,
+        decode_limits,
     } = queued;
-    let trigger = permit.map(|permit| ContextAnalysisTrigger {
+    let trigger = admission.map(|admission| ContextAnalysisTrigger {
         forward,
-        analysis_body,
+        analysis_input,
         context_limits: proxy.config.context_analysis_limits,
-        permit,
+        decode_limits,
+        admission,
         sink: Arc::clone(&proxy.observations),
-        active_forwards: Arc::clone(&proxy.active_forwards),
+        deferred_analysis: Arc::clone(&proxy.deferred_analysis),
         background: proxy.background.clone(),
     });
     QueuedContextAnalysis {
@@ -2010,17 +2376,23 @@ mod tests {
     }
 
     #[test]
-    fn context_analysis_cap_plus_one_is_explicit_backpressure() {
-        let permits = Arc::new(Semaphore::new(CONTEXT_ANALYSIS_CONCURRENCY_HARD_CAP));
-        let first = try_context_analysis_permit(&permits);
-        let second = try_context_analysis_permit(&permits);
-        assert!(first.is_ok(), "first analysis should acquire its permit");
-        assert!(second.is_ok(), "second analysis should acquire its permit");
+    fn deferred_analysis_budget_is_bounded_by_items_and_wire_bytes() {
+        let budget = Arc::new(DeferredAnalysisBudget::new(2, 10));
+        let first = budget.try_reserve(6).expect("first body should fit");
         assert!(matches!(
-            try_context_analysis_permit(&permits),
-            Err(ContextAnalysisDropReason::ObserverBackpressure)
+            budget.try_reserve(5),
+            Err(ContextAnalysisDropReason::DeferredBacklogCapacity)
         ));
-        drop((first, second));
+        let second = budget.try_reserve(4).expect("second body should fit");
+        assert_eq!(budget.usage(), (2, 10));
+        assert!(matches!(
+            budget.try_reserve(0),
+            Err(ContextAnalysisDropReason::DeferredBacklogCapacity)
+        ));
+        drop(first);
+        assert_eq!(budget.usage(), (1, 4));
+        drop(second);
+        assert_eq!(budget.usage(), (0, 0));
     }
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum TriggerResult {
@@ -2070,18 +2442,67 @@ mod tests {
         }
     }
 
+    #[derive(Default)]
+    struct OrderingSink {
+        forwards: std::sync::Mutex<Vec<ForwardId>>,
+    }
+
+    impl ProviderObservationSink for OrderingSink {
+        fn try_record_request_context(
+            &self,
+            _observation: RequestContextObservation,
+        ) -> Result<(), ObservationSinkError> {
+            Ok(())
+        }
+
+        fn try_record_context_analysis(
+            &self,
+            observation: ContextAnalysisObservation,
+        ) -> Result<(), ObservationSinkError> {
+            self.forwards
+                .lock()
+                .expect("ordering sink lock")
+                .push(observation.forward);
+            Ok(())
+        }
+
+        fn try_record_response(
+            &self,
+            _forward: ForwardId,
+            _observation: ResponseObservation,
+        ) -> Result<(), ObservationSinkError> {
+            Ok(())
+        }
+
+        fn try_record_transport_failure(
+            &self,
+            _forward: ForwardId,
+            _failure: TransportFailure,
+        ) -> Result<(), ObservationSinkError> {
+            Ok(())
+        }
+    }
+
     fn test_context_trigger(
-        active_forwards: Arc<AtomicU64>,
+        active_forwards: &Arc<AtomicU64>,
+        active_notify: &Arc<Notify>,
         sink: Arc<TriggerSink>,
     ) -> ContextAnalysisTrigger {
         let bytes = Bytes::from_static(br#"{"model":"test","input":"value"}"#);
-        let (sender, analysis_body) = tokio::sync::oneshot::channel();
+        let queue = DeferredAnalysisQueue::new(
+            BackgroundTracker::new(),
+            Arc::clone(active_forwards),
+            Arc::clone(active_notify),
+        );
+        let admission = queue
+            .try_admit(
+                ForwardId(0),
+                u64::try_from(bytes.len()).expect("test body length"),
+            )
+            .expect("test analysis admission");
+        let (sender, analysis_input) = tokio::sync::oneshot::channel();
         sender
-            .send((
-                Some(AnalysisBody::new(bytes)),
-                AnalysisDecodeStatus::Identity,
-                ContextDigest::from_bytes(br#"{"model":"test","input":"value"}"#),
-            ))
+            .send((WireBody::new(bytes), ContentEncoding::Identity))
             .expect("observation receiver is live");
         let context_limits =
             ContextAnalysisLimits::new(tracepress_context::ContextAnalysisLimitValues {
@@ -2096,13 +2517,17 @@ mod tests {
             .expect("context limits");
         ContextAnalysisTrigger {
             forward: ForwardId(0),
-            analysis_body,
+            analysis_input,
             context_limits,
-            permit: Arc::new(Semaphore::new(2))
-                .try_acquire_owned()
-                .expect("test analysis permit"),
+            decode_limits: DecodeLimits {
+                max_compressed_bytes: 4096,
+                max_decompressed_bytes: 4096,
+                max_expansion_ratio: None,
+                max_decode_time: Duration::from_secs(1),
+            },
+            admission,
             sink,
-            active_forwards,
+            deferred_analysis: queue,
             background: BackgroundTracker::new(),
         }
     }
@@ -2123,29 +2548,137 @@ mod tests {
         panic!("context trigger did not report a result");
     }
 
+    fn deferred_job(
+        queue: &Arc<DeferredAnalysisQueue>,
+        forward: ForwardId,
+        sink: Arc<OrderingSink>,
+    ) -> DeferredAnalysisJob {
+        let bytes = Bytes::from_static(br#"{"model":"test","input":"value"}"#);
+        let wire_content_hash = ContextDigest::from_bytes(bytes.as_ref());
+        let admission = queue
+            .try_admit(
+                forward,
+                u64::try_from(bytes.len()).expect("test body length"),
+            )
+            .expect("test analysis admission");
+        let context_limits =
+            ContextAnalysisLimits::new(tracepress_context::ContextAnalysisLimitValues {
+                max_analyzed_bytes: 4_096,
+                max_blocks: 64,
+                max_json_depth: 64,
+                max_string_bytes_inspected: 4_096,
+                max_analysis_work_units: 100_000,
+                max_analysis_wall_time_ms: 250,
+                max_batches: 1,
+            })
+            .expect("context limits");
+        DeferredAnalysisJob {
+            forward,
+            wire_body: WireBody::new(bytes),
+            content_encoding: ContentEncoding::Identity,
+            decode_limits: DecodeLimits {
+                max_compressed_bytes: 4096,
+                max_decompressed_bytes: 4096,
+                max_expansion_ratio: None,
+                max_decode_time: Duration::from_secs(1),
+            },
+            context_limits,
+            wire_content_hash,
+            sink,
+            admission,
+            enqueued_at: Instant::now(),
+        }
+    }
+
     #[tokio::test]
-    async fn active_next_forward_drops_context_analysis_before_cpu_work() {
+    async fn active_next_forward_defers_context_analysis_until_cpu_is_available() {
         let active_forwards = Arc::new(AtomicU64::new(0));
-        let next_forward = ActiveForwardGuard::acquire(&active_forwards);
+        let active_notify = Arc::new(Notify::new());
+        let next_forward = ActiveForwardGuard::acquire(&active_forwards, &active_notify);
         let sink = Arc::new(TriggerSink::default());
-        test_context_trigger(Arc::clone(&active_forwards), Arc::clone(&sink)).start();
+        test_context_trigger(&active_forwards, &active_notify, Arc::clone(&sink)).start();
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(sink.results.lock().expect("test sink lock").is_empty());
+        drop(next_forward);
         assert_eq!(
             wait_for_trigger_result(&sink).await,
-            TriggerResult::Dropped(ContextAnalysisDropReason::ObserverBackpressure)
+            TriggerResult::Analyzed
         );
-        drop(next_forward);
         assert_eq!(active_forwards.load(Ordering::Acquire), 0);
     }
 
     #[tokio::test]
     async fn quiescent_context_analysis_completes() {
         let active_forwards = Arc::new(AtomicU64::new(0));
+        let active_notify = Arc::new(Notify::new());
         let sink = Arc::new(TriggerSink::default());
-        test_context_trigger(Arc::clone(&active_forwards), Arc::clone(&sink)).start();
+        test_context_trigger(&active_forwards, &active_notify, Arc::clone(&sink)).start();
         assert_eq!(
             wait_for_trigger_result(&sink).await,
             TriggerResult::Analyzed
         );
         assert_eq!(active_forwards.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn deferred_analysis_is_fifo_by_forward_id() {
+        let active_forwards = Arc::new(AtomicU64::new(0));
+        let active_notify = Arc::new(Notify::new());
+        let active = ActiveForwardGuard::acquire(&active_forwards, &active_notify);
+        let queue = DeferredAnalysisQueue::new(
+            BackgroundTracker::new(),
+            Arc::clone(&active_forwards),
+            Arc::clone(&active_notify),
+        );
+        let sink = Arc::new(OrderingSink::default());
+        let first = deferred_job(&queue, ForwardId(1), Arc::clone(&sink));
+        let second = deferred_job(&queue, ForwardId(2), Arc::clone(&sink));
+        // Completion order is deliberately reversed; admission order remains authoritative.
+        queue.enqueue(second);
+        queue.enqueue(first);
+        drop(active);
+
+        for _ in 0..1_000 {
+            if sink.forwards.lock().expect("ordering sink lock").len() == 2 {
+                break;
+            }
+            tokio::time::sleep(Duration::from_millis(1)).await;
+        }
+        assert_eq!(
+            sink.forwards.lock().expect("ordering sink lock").as_slice(),
+            &[ForwardId(1), ForwardId(2)]
+        );
+    }
+
+    #[tokio::test]
+    async fn deferred_analysis_processes_100_chained_jobs_without_capacity_drop() {
+        let active_forwards = Arc::new(AtomicU64::new(0));
+        let active_notify = Arc::new(Notify::new());
+        let background = BackgroundTracker::new();
+        let queue = DeferredAnalysisQueue::new(
+            background.clone(),
+            Arc::clone(&active_forwards),
+            Arc::clone(&active_notify),
+        );
+        let sink = Arc::new(OrderingSink::default());
+
+        for batch in 0..7 {
+            let start = batch * 16;
+            let end = ((batch + 1) * 16).min(100);
+            for index in start..end {
+                queue.enqueue(deferred_job(&queue, ForwardId(index), Arc::clone(&sink)));
+            }
+            // Keep the synthetic chain inside the explicit hard bound while still exercising
+            // repeated admission, worker startup, FIFO processing, and queue reuse.
+            background.wait().await;
+        }
+
+        let metrics = queue.metrics();
+        assert_eq!(sink.forwards.lock().expect("ordering sink lock").len(), 100);
+        assert_eq!(metrics.deferred_total, 100);
+        assert_eq!(metrics.processed_deferred_total, 100);
+        assert_eq!(metrics.backlog_capacity_drops, 0);
+        assert_eq!(metrics.queue_items, 0);
+        assert_eq!(metrics.queue_bytes, 0);
     }
 }

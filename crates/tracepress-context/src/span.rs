@@ -7,6 +7,10 @@
 //! computation, so the span stays usable as the authoritative structural identity of a block even
 //! when the decoded value is ambiguous.
 //!
+//! The byte slice is the JSON representation supplied to the analyzer. If a provider request
+//! arrived with a content encoding, the compatibility layer decodes a separate analysis body;
+//! these spans never refer to compressed wire offsets.
+//!
 //! Colliding member names are recorded, never resolved: every colliding member keeps its own
 //! occurrence index and the index reports [`RawSpanIndex::duplicate_key_detected`], because a
 //! JSON-Pointer path stops identifying a unique value while the raw spans still do.

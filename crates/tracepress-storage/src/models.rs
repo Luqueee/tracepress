@@ -29,6 +29,46 @@ pub enum ProviderProtocol {
     OpenAiResponsesV1,
 }
 
+/// Transport surface recorded for a provider request.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ProviderTransport {
+    /// `OpenAI`'s public API.
+    OpenAiPublicApi,
+    /// `ChatGPT` Codex subscription backend.
+    ChatGptCodexSubscription,
+}
+
+/// Content encoding recorded for the analysis-only request decoder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ContentEncoding {
+    /// No encoding or identity.
+    Identity,
+    /// Zstandard.
+    Zstd,
+    /// Unsupported or ambiguous content encoding.
+    Unsupported,
+}
+
+/// Outcome recorded by the analysis-only decoder.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum AnalysisDecodeStatus {
+    /// Analyzer used identity bytes.
+    Identity,
+    /// Analyzer used bounded decoded bytes.
+    Decoded,
+    /// Encoding was unsupported or ambiguous.
+    UnsupportedEncoding,
+    /// Encoded body was invalid or truncated.
+    CorruptPayload,
+    /// Decode byte/work bound was reached.
+    ResourceLimit,
+    /// Decode time bound was reached.
+    Timeout,
+}
+
 /// Outcome of provider semantic observation.
 #[allow(
     clippy::exhaustive_enums,
@@ -756,6 +796,15 @@ pub enum WriteCommand {
         metadata: RequestMetadata,
         provider: Option<ProviderKind>,
         protocol: Option<ProviderProtocol>,
+        transport: Option<ProviderTransport>,
+        endpoint_profile_version: Option<u32>,
+        content_encoding: Option<ContentEncoding>,
+        analysis_decode_status: Option<AnalysisDecodeStatus>,
+        wire_bytes: Option<u64>,
+        wire_sha256: Option<Box<[u8]>>,
+        decoded_bytes: Option<u64>,
+        decode_duration_us: Option<u64>,
+        decoder_version: Option<u32>,
         parser_version: Option<u32>,
         observation_status: Option<ObservationStatus>,
         model: Option<String>,

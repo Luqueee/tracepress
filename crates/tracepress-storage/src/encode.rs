@@ -9,10 +9,10 @@ use tracepress_core::{
 };
 
 use crate::{
-    ContextAnalysisStatus, ContextBlockKind, ContextCorrelationStatus, ContextOrigin, ContextRole,
-    DetectedContentKind, EstimateConfidence, FidelityClass, LogicalContextStatus,
-    ObservationStatus, OpportunitySignal, ProviderKind, ProviderProtocol, ProviderResponseState,
-    ReconciliationStatus, StorageError,
+    AnalysisDecodeStatus, ContentEncoding, ContextAnalysisStatus, ContextBlockKind,
+    ContextCorrelationStatus, ContextOrigin, ContextRole, DetectedContentKind, EstimateConfidence,
+    FidelityClass, LogicalContextStatus, ObservationStatus, OpportunitySignal, ProviderKind,
+    ProviderProtocol, ProviderResponseState, ProviderTransport, ReconciliationStatus, StorageError,
 };
 
 pub(crate) const fn provider_kind_text(value: ProviderKind) -> &'static str {
@@ -24,6 +24,32 @@ pub(crate) const fn provider_kind_text(value: ProviderKind) -> &'static str {
 pub(crate) const fn provider_protocol_text(value: ProviderProtocol) -> &'static str {
     match value {
         ProviderProtocol::OpenAiResponsesV1 => "openai-responses-v1",
+    }
+}
+
+pub(crate) const fn provider_transport_text(value: ProviderTransport) -> &'static str {
+    match value {
+        ProviderTransport::OpenAiPublicApi => "openai_public_api",
+        ProviderTransport::ChatGptCodexSubscription => "chatgpt_codex_subscription",
+    }
+}
+
+pub(crate) const fn content_encoding_text(value: ContentEncoding) -> &'static str {
+    match value {
+        ContentEncoding::Identity => "identity",
+        ContentEncoding::Zstd => "zstd",
+        ContentEncoding::Unsupported => "unsupported",
+    }
+}
+
+pub(crate) const fn analysis_decode_status_text(value: AnalysisDecodeStatus) -> &'static str {
+    match value {
+        AnalysisDecodeStatus::Identity => "identity",
+        AnalysisDecodeStatus::Decoded => "decoded",
+        AnalysisDecodeStatus::UnsupportedEncoding => "unsupported_encoding",
+        AnalysisDecodeStatus::CorruptPayload => "corrupt_payload",
+        AnalysisDecodeStatus::ResourceLimit => "resource_limit",
+        AnalysisDecodeStatus::Timeout => "timeout",
     }
 }
 

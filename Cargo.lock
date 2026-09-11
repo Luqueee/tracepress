@@ -1605,11 +1605,13 @@ dependencies = [
  "axum",
  "futures-util",
  "reqwest",
+ "sha2",
  "thiserror",
  "tokio",
  "tracepress-context",
  "tracepress-core",
  "tracepress-provider",
+ "zstd",
 ]
 
 [[package]]

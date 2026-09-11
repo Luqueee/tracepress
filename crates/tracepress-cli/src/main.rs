@@ -51,7 +51,8 @@ use tracepress_ipc::{
     Credential, Endpoint, IpcClient, IpcLimits, IpcRequest, ResponseOutcome, UnixEndpoint,
 };
 use tracepress_provider::{
-    ProviderEndpoint, ProviderResponseState, RequestObservation, ResponseObservation,
+    ProviderEndpoint, ProviderResponseState, ProviderTransport, RequestObservation,
+    ResponseObservation,
 };
 use tracepress_proxy::{
     ContextAnalysisDropReason, ContextAnalysisMode, ContextAnalysisObservation,
@@ -3025,6 +3026,74 @@ fn context_analysis_mode() -> Result<ContextAnalysisMode, String> {
     }
 }
 
+fn is_codex_agent(agent: &str) -> bool {
+    std::path::Path::new(agent)
+        .file_name()
+        .and_then(|name| name.to_str())
+        .is_some_and(|name| name == "codex" || name == "codex.exe")
+}
+
+fn provider_transport_from_value(value: &str) -> Result<ProviderTransport, String> {
+    match value.to_ascii_lowercase().as_str() {
+        "openai_public_api" | "public" => Ok(ProviderTransport::OpenAiPublicApi),
+        "chatgpt_codex_subscription" | "subscription" | "codex_subscription" => {
+            Ok(ProviderTransport::ChatGptCodexSubscription)
+        }
+        _ => Err(format!(
+            "TRACEPRESS_PROVIDER_TRANSPORT must be `openai_public_api` or `chatgpt_codex_subscription`, got `{value}`"
+        )),
+    }
+}
+
+fn provider_transport_for_agent(agent: &str) -> Result<ProviderTransport, String> {
+    if let Ok(value) = std::env::var("TRACEPRESS_PROVIDER_TRANSPORT") {
+        return provider_transport_from_value(&value);
+    }
+    if is_codex_agent(agent) {
+        Ok(ProviderTransport::ChatGptCodexSubscription)
+    } else {
+        Ok(ProviderTransport::OpenAiPublicApi)
+    }
+}
+
+fn provider_endpoint(transport: ProviderTransport) -> Result<ProviderEndpoint, String> {
+    match transport {
+        ProviderTransport::OpenAiPublicApi => {
+            let upstream = std::env::var("TRACEPRESS_UPSTREAM")
+                .map_err(|_| "TRACEPRESS_UPSTREAM is required by `tracepress run`".to_owned())?;
+            ProviderEndpoint::new(&upstream).map_err(|error| error.to_string())
+        }
+        ProviderTransport::ChatGptCodexSubscription => {
+            if std::env::var_os("TRACEPRESS_UPSTREAM").is_some() {
+                return Err(
+                    "TRACEPRESS_UPSTREAM cannot override the fixed ChatGPT Codex subscription endpoint"
+                        .to_owned(),
+                );
+            }
+            Ok(ProviderEndpoint::chatgpt_codex_subscription())
+        }
+        _ => Err("unsupported provider transport".to_owned()),
+    }
+}
+
+fn configure_codex_subscription(command: &mut Command, proxy_address: std::net::SocketAddr) {
+    let base_url = format!("http://{proxy_address}/v1");
+    let _command = command.args([
+        "-c",
+        "model_provider=tracepress_subscription",
+        "-c",
+        "model_providers.tracepress_subscription.name=OpenAI",
+        "-c",
+        &format!("model_providers.tracepress_subscription.base_url=\"{base_url}\""),
+        "-c",
+        "model_providers.tracepress_subscription.wire_api=\"responses\"",
+        "-c",
+        "model_providers.tracepress_subscription.requires_openai_auth=true",
+        "-c",
+        "model_providers.tracepress_subscription.supports_websockets=false",
+    ]);
+}
+
 #[allow(
     clippy::too_many_lines,
     reason = "the existing run path keeps lifecycle cleanup and reporting ordered"
@@ -3033,9 +3102,8 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
     if !daemon_running(config).await? {
         return Err("daemon is not running; run `tracepress daemon start` first".to_owned());
     }
-    let upstream = std::env::var("TRACEPRESS_UPSTREAM")
-        .map_err(|_| "TRACEPRESS_UPSTREAM is required by `tracepress run`")?;
-    let endpoint = ProviderEndpoint::new(&upstream).map_err(|error| error.to_string())?;
+    let transport = provider_transport_for_agent(&agent)?;
+    let endpoint = provider_endpoint(transport)?;
     let resource_limits = proxy_resource_limits(8 * 1024 * 1024, 32 * 1024 * 1024)?;
     let analysis_mode = context_analysis_mode()?;
     let context_queue_items = usize::try_from(resource_limits.max_ipc_queue_items.get())
@@ -3089,7 +3157,11 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
     let background_proxy = proxy.clone();
     let proxy_task = tokio::spawn(async move { serve(listener, proxy.router()).await });
     let base_url = format!("http://{proxy_address}/v1");
-    let status_result = Command::new(&agent)
+    let mut command = Command::new(&agent);
+    if matches!(transport, ProviderTransport::ChatGptCodexSubscription) && is_codex_agent(&agent) {
+        configure_codex_subscription(&mut command, proxy_address);
+    }
+    let status_result = command
         .args(args)
         .env("TRACEPRESS_SESSION_ID", session.session_id.to_string())
         .env("OPENAI_BASE_URL", &base_url)
@@ -3201,9 +3273,11 @@ fn current_timestamp() -> Result<String, String> {
     ))
 }
 async fn proxy() -> Result<(), String> {
-    let upstream = std::env::var("TRACEPRESS_UPSTREAM")
-        .map_err(|_| "TRACEPRESS_UPSTREAM must be set to /v1/chat/completions")?;
-    let endpoint = ProviderEndpoint::new(&upstream).map_err(|error| error.to_string())?;
+    let transport = std::env::var("TRACEPRESS_PROVIDER_TRANSPORT")
+        .map_or(Ok(ProviderTransport::OpenAiPublicApi), |value| {
+            provider_transport_from_value(&value)
+        })?;
+    let endpoint = provider_endpoint(transport)?;
     let resource_limits = proxy_resource_limits(8 * 1024 * 1024, 32 * 1024 * 1024)?;
     let analysis_mode = context_analysis_mode()?;
     let proxy = TransparentProxy::new(

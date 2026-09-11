@@ -21,15 +21,15 @@ pub use blob_store::{
 };
 pub use error::StorageError;
 pub use models::{
-    CONTEXT_INSPECTION_MAX_BLOCKS, ContextAnalysisStatus, ContextBlockKind,
-    ContextCorrelationStatus, ContextInspection, ContextInspectionBlock,
+    AnalysisDecodeStatus, CONTEXT_INSPECTION_MAX_BLOCKS, ContentEncoding, ContextAnalysisStatus,
+    ContextBlockKind, ContextCorrelationStatus, ContextInspection, ContextInspectionBlock,
     ContextInspectionComposition, ContextInspectionCoverage, ContextInspectionNamedEstimate,
     ContextInspectionRepetition, ContextInspectionVisibility, ContextOrigin, ContextRole,
     ContextSnapshotStatus, DetectedContentKind, EstimateConfidence, EstimatedTokenComposition,
     EstimatedTokensByKind, EstimatedTokensByOrigin, EstimatedTokensByRole, FidelityClass,
     LogicalContextStatus, ObservationStatus, OpportunitySignal, ProviderKind, ProviderProtocol,
-    ProviderResponseState, ReconciliationStatus, RecoveryReceipt, WriteBatch, WriteCommand,
-    WriteReceipt,
+    ProviderResponseState, ProviderTransport, ReconciliationStatus, RecoveryReceipt, WriteBatch,
+    WriteCommand, WriteReceipt,
 };
 
 /// Bounded key used by the daemon's lifecycle reconciliation read.

@@ -397,7 +397,11 @@ pub struct ContextSnapshot {
     pub status: ContextAnalysisStatus,
     /// Per-signal visibility of the analyzed request.
     pub visibility: ContextVisibility,
-    /// Digest over the exact accepted request bytes.
+    /// Digest over the exact JSON bytes supplied to the analyzer.
+    ///
+    /// A request's separately recorded wire digest identifies the forwarded representation when
+    /// analysis-only decoding was required; this digest never claims to be a digest of that wire
+    /// representation.
     pub request_content_hash: ContextDigest,
     /// Whether a duplicate object key was observed anywhere in the request.
     pub duplicate_key_detected: bool,

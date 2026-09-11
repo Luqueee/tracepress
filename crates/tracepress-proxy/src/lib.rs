@@ -5,6 +5,8 @@
 
 //! Transparent OpenAI-compatible HTTP forwarding for Tracepress Phase 1.
 
+pub(crate) mod decoding;
+
 use std::num::NonZeroUsize;
 use std::sync::{
     Arc,
@@ -18,7 +20,12 @@ use axum::extract::{Request, State};
 use axum::http::{HeaderMap, HeaderName, StatusCode, Uri};
 use axum::response::Response;
 use axum::routing::post;
+use decoding::{
+    AnalysisBody, AnalysisDecoder, BoundedAnalysisDecoder, DecodeLimits, WireBody,
+    parse_content_encoding_header,
+};
 use futures_util::{StreamExt as _, stream};
+use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use tokio::sync::{Notify, OwnedSemaphorePermit, Semaphore};
 pub use tracepress_context::ContextAnalysisDropReason;
@@ -281,7 +288,8 @@ impl TransportFailure {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum ContextAnalysisOutcome {
-    /// The analyzer produced the bounded result for the exact forwarded request bytes.
+    /// The analyzer produced the bounded result for the analysis bytes; forwarding retained the
+    /// original wire representation.
     Analyzed(ContextAnalysisResult),
     /// The analyzer was not run or its result could not be handed to the sink.
     Dropped(ContextAnalysisDropReason),
@@ -527,6 +535,7 @@ impl TransparentProxy {
     pub fn new(config: ProxyConfig) -> Result<Self, ForwardError> {
         let client = reqwest::Client::builder()
             .http1_only()
+            .redirect(reqwest::redirect::Policy::none())
             .build()
             .map_err(ForwardError::ClientBuild)?;
         Ok(Self {
@@ -636,6 +645,9 @@ async fn forward_inner(
         .map_err(|_error| ForwardError::RequestTooLarge)?;
     let request_bytes =
         u64::try_from(bytes.len()).map_err(|_error| ForwardError::RequestLimitUnrepresentable)?;
+    let wire_body = WireBody::new(bytes);
+    let content_encoding =
+        parse_content_encoding_header(parts.headers.get(axum::http::header::CONTENT_ENCODING));
     let headers = forwarded_headers(&parts.headers);
     let target = match upstream_uri(&proxy.config.upstream, route) {
         Ok(target) => target,
@@ -657,7 +669,8 @@ async fn forward_inner(
             queue_request_observation(RequestObservationRequest {
                 proxy,
                 forward,
-                bytes: bytes.clone(),
+                wire_body: wire_body.clone(),
+                content_encoding,
                 analysis_permit: context_permit,
             })
         })
@@ -666,7 +679,7 @@ async fn forward_inner(
         .client
         .post(target)
         .headers(headers)
-        .body(bytes)
+        .body(wire_body.clone_bytes())
         .send()
         .await
     {
@@ -890,15 +903,16 @@ fn response_mode(
 /// started later by [`queue_context_analysis`], after the upstream dispatch boundary.
 struct QueuedRequestObservation {
     stream_hint: tokio::sync::oneshot::Receiver<Option<bool>>,
-    observation: tokio::sync::oneshot::Receiver<RequestObservation>,
+    analysis_body: tokio::sync::oneshot::Receiver<Option<AnalysisBody>>,
     /// Present only after a Phase 3 reservation was acquired before this object was built.
-    bytes: Option<Bytes>,
     permit: Option<OwnedSemaphorePermit>,
 }
+
 struct RequestObservationRequest<'a> {
     proxy: &'a TransparentProxy,
     forward: ForwardId,
-    bytes: Bytes,
+    wire_body: WireBody,
+    content_encoding: tracepress_provider::ContentEncoding,
     analysis_permit: Option<Result<OwnedSemaphorePermit, ContextAnalysisDropReason>>,
 }
 
@@ -908,39 +922,68 @@ fn queue_request_observation(
     let RequestObservationRequest {
         proxy,
         forward,
-        bytes,
+        wire_body,
+        content_encoding,
         analysis_permit,
     } = request;
     let limits = observation_limits(proxy.config.max_request_body_bytes.get())?;
+    let decode_limits = DecodeLimits {
+        max_compressed_bytes: proxy.config.max_request_body_bytes.get(),
+        max_decompressed_bytes: proxy.config.resource_limits.max_decompressed_bytes.get(),
+        max_expansion_ratio: None,
+        max_decode_time: Duration::from_millis(
+            proxy.config.resource_limits.max_processing_time_ms.get(),
+        ),
+    };
+    let transport = proxy.config.upstream.transport();
+    let endpoint_profile_version = proxy.config.upstream.profile_version();
     let sink = Arc::clone(&proxy.observations);
     let (hint, stream_hint) = tokio::sync::oneshot::channel();
-    let (sender, observation) = tokio::sync::oneshot::channel();
-    let parse_bytes = bytes.clone();
-    let (analysis_bytes, permit, context) = match analysis_permit {
-        Some(Ok(permit)) => (Some(bytes), Some(permit), None),
-        Some(Err(reason)) => (None, None, Some(ContextAnalysisOutcome::Dropped(reason))),
-        None => (None, None, None),
+    let (sender, analysis_body) = tokio::sync::oneshot::channel();
+    let (permit, context) = match analysis_permit {
+        Some(Ok(permit)) => (Some(permit), None),
+        Some(Err(reason)) => (None, Some(ContextAnalysisOutcome::Dropped(reason))),
+        None => (None, None),
     };
     let task_guard = proxy.background.guard();
     drop(tokio::task::spawn_blocking(move || {
         let _task_guard = task_guard;
+        let decoded = BoundedAnalysisDecoder.decode(&wire_body, content_encoding, &decode_limits);
+        let parse_bytes = decoded
+            .body
+            .as_ref()
+            .map_or_else(|| wire_body.clone_bytes(), AnalysisBody::clone_bytes);
         let parsed = OpenAiResponsesV1Observer::new()
             .observe_request(ObservationInput::new(&parse_bytes, limits))
             .unwrap_or_else(|_error| {
                 tracepress_provider::parse_request(ObservationInput::new(&parse_bytes, limits))
             });
+        let mut parsed = parsed;
+        parsed.transport = transport;
+        parsed.endpoint_profile_version = Some(endpoint_profile_version);
+        parsed.request_bytes = Some(decoded.wire_bytes);
+        parsed.wire_bytes = Some(decoded.wire_bytes);
+        parsed.wire_sha256 = Some(
+            Sha256::digest(wire_body.as_ref())
+                .to_vec()
+                .into_boxed_slice(),
+        );
+        parsed.decoded_bytes = Some(decoded.decoded_bytes);
+        parsed.content_encoding = content_encoding;
+        parsed.analysis_decode_status = decoded.status;
+        parsed.decode_duration_us = Some(decoded.decode_duration_us);
+        parsed.decoder_version = Some(decoded.decoder_version);
         let _accepted = sink.try_record_request_context(RequestContextObservation {
             forward,
             observation: parsed.clone(),
             context,
         });
         let _delivered = hint.send(parsed.stream);
-        let _sent = sender.send(parsed);
+        let _sent = sender.send(decoded.body);
     }));
     Some(QueuedRequestObservation {
         stream_hint,
-        observation,
-        bytes: analysis_bytes,
+        analysis_body,
         permit,
     })
 }
@@ -953,8 +996,7 @@ struct QueuedContextAnalysis {
 
 struct ContextAnalysisTrigger {
     forward: ForwardId,
-    observation: tokio::sync::oneshot::Receiver<RequestObservation>,
-    bytes: Bytes,
+    analysis_body: tokio::sync::oneshot::Receiver<Option<AnalysisBody>>,
     context_limits: ContextAnalysisLimits,
     permit: OwnedSemaphorePermit,
     sink: Arc<dyn ProviderObservationSink>,
@@ -974,8 +1016,7 @@ impl ContextAnalysisTrigger {
     fn start(self) {
         let Self {
             forward,
-            observation,
-            bytes,
+            analysis_body,
             context_limits,
             permit,
             sink,
@@ -985,7 +1026,7 @@ impl ContextAnalysisTrigger {
         let task_guard = background.guard();
         drop(tokio::spawn(async move {
             let _task_guard = task_guard;
-            let Ok(_observation) = observation.await else {
+            let Ok(analysis_body) = analysis_body.await else {
                 drop(permit);
                 return;
             };
@@ -1004,11 +1045,17 @@ impl ContextAnalysisTrigger {
                     });
                     return;
                 }
-                let analysis = analyze_responses(&bytes, context_limits);
-                let _accepted = sink.try_record_context_analysis(ContextAnalysisObservation {
-                    forward,
-                    outcome: ContextAnalysisOutcome::Analyzed(analysis),
-                });
+                let outcome = analysis_body.map_or(
+                    ContextAnalysisOutcome::Dropped(ContextAnalysisDropReason::Malformed),
+                    |body| {
+                        ContextAnalysisOutcome::Analyzed(analyze_responses(
+                            body.as_ref(),
+                            context_limits,
+                        ))
+                    },
+                );
+                let _accepted = sink
+                    .try_record_context_analysis(ContextAnalysisObservation { forward, outcome });
             })
             .await;
         }));
@@ -1024,22 +1071,18 @@ fn queue_context_analysis(
 ) -> QueuedContextAnalysis {
     let QueuedRequestObservation {
         stream_hint,
-        observation,
-        bytes,
+        analysis_body,
         permit,
     } = queued;
-    let trigger = bytes
-        .zip(permit)
-        .map(|(bytes, permit)| ContextAnalysisTrigger {
-            forward,
-            observation,
-            bytes,
-            context_limits: proxy.config.context_analysis_limits,
-            permit,
-            sink: Arc::clone(&proxy.observations),
-            active_forwards: Arc::clone(&proxy.active_forwards),
-            background: proxy.background.clone(),
-        });
+    let trigger = permit.map(|permit| ContextAnalysisTrigger {
+        forward,
+        analysis_body,
+        context_limits: proxy.config.context_analysis_limits,
+        permit,
+        sink: Arc::clone(&proxy.observations),
+        active_forwards: Arc::clone(&proxy.active_forwards),
+        background: proxy.background.clone(),
+    });
     QueuedContextAnalysis {
         stream_hint,
         trigger,
@@ -1411,7 +1454,10 @@ fn upstream_uri(
     }
     let mut url =
         reqwest::Url::parse(endpoint.as_str()).map_err(|_error| ForwardError::EndpointUri)?;
-    url.set_path(route.path());
+    let path = endpoint
+        .upstream_path(route.path())
+        .map_err(|_error| ForwardError::EndpointUri)?;
+    url.set_path(path);
     Ok(url)
 }
 
@@ -1536,6 +1582,17 @@ mod tests {
             );
         }
     }
+
+    #[test]
+    fn subscription_upstream_uri_is_allowlisted_and_path_rewritten() {
+        let endpoint = ProviderEndpoint::chatgpt_codex_subscription();
+        let uri = upstream_uri(&endpoint, InboundRoute::Responses).expect("fixed endpoint");
+        assert_eq!(
+            uri.as_str(),
+            "https://chatgpt.com/backend-api/codex/responses"
+        );
+        assert!(upstream_uri(&endpoint, InboundRoute::ChatCompletions).is_err());
+    }
     fn resource_limits_with_cpu_work_units(
         cpu_work_units: i128,
     ) -> Result<ResourceLimits, tracepress_core::ResourceLimitsError> {
@@ -1646,17 +1703,10 @@ mod tests {
         sink: Arc<TriggerSink>,
     ) -> ContextAnalysisTrigger {
         let bytes = Bytes::from_static(br#"{"model":"test","input":"value"}"#);
-        let observation_limits = observation_limits(4_096).expect("observation limits");
-        let parsed = OpenAiResponsesV1Observer::new()
-            .observe_request(ObservationInput::new(&bytes, observation_limits))
-            .unwrap_or_else(|_error| {
-                tracepress_provider::parse_request(ObservationInput::new(
-                    &bytes,
-                    observation_limits,
-                ))
-            });
-        let (sender, observation) = tokio::sync::oneshot::channel();
-        sender.send(parsed).expect("observation receiver is live");
+        let (sender, analysis_body) = tokio::sync::oneshot::channel();
+        sender
+            .send(Some(AnalysisBody::new(bytes)))
+            .expect("observation receiver is live");
         let context_limits =
             ContextAnalysisLimits::new(tracepress_context::ContextAnalysisLimitValues {
                 max_analyzed_bytes: 4_096,
@@ -1670,8 +1720,7 @@ mod tests {
             .expect("context limits");
         ContextAnalysisTrigger {
             forward: ForwardId(0),
-            observation,
-            bytes,
+            analysis_body,
             context_limits,
             permit: Arc::new(Semaphore::new(2))
                 .try_acquire_owned()

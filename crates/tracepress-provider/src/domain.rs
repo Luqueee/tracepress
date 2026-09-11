@@ -27,6 +27,52 @@ pub enum ProviderProtocol {
     OpenAiResponsesV1,
 }
 
+/// Transport identity for a provider protocol.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ProviderTransport {
+    /// `OpenAI`'s public API surface.
+    #[default]
+    OpenAiPublicApi,
+    /// The fixed `ChatGPT` Codex backend used by subscription-authenticated Codex clients.
+    ChatGptCodexSubscription,
+}
+
+/// Content encoding observed on an incoming provider request.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ContentEncoding {
+    /// No content encoding was present, or the identity encoding was declared.
+    #[default]
+    Identity,
+    /// Zstandard encoding.
+    Zstd,
+    /// A present encoding that this release does not support for shadow decoding.
+    Unsupported,
+}
+
+/// Outcome of the analysis-only content decoding boundary.
+#[derive(Clone, Copy, Debug, Default, Deserialize, Eq, PartialEq, Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum AnalysisDecodeStatus {
+    /// The analyzer received the original identity bytes.
+    #[default]
+    Identity,
+    /// The analyzer received bounded decoded bytes.
+    Decoded,
+    /// The encoding is not supported or is ambiguous.
+    UnsupportedEncoding,
+    /// The encoded payload was invalid or truncated.
+    CorruptPayload,
+    /// A configured byte or work budget was reached.
+    ResourceLimit,
+    /// The decoder exceeded its time budget.
+    Timeout,
+}
+
 /// Outcome of semantic observation.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
 #[serde(rename_all = "snake_case")]

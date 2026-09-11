@@ -4,8 +4,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
 
 use crate::domain::{
-    OPENAI_RESPONSES_PARSER_VERSION, ObservationInput, ObservationStatus, ProviderKind,
-    ProviderProtocol, status_for_error,
+    AnalysisDecodeStatus, ContentEncoding, OPENAI_RESPONSES_PARSER_VERSION, ObservationInput,
+    ObservationStatus, ProviderKind, ProviderProtocol, ProviderTransport, status_for_error,
 };
 use crate::json::{self, NestedField, StringExtraction};
 
@@ -17,12 +17,39 @@ pub struct RequestObservation {
     pub provider: ProviderKind,
     /// Canonical protocol identity.
     pub protocol: ProviderProtocol,
+    /// Transport surface on which this request was forwarded.
+    #[serde(default)]
+    pub transport: ProviderTransport,
+    /// Version of the selected endpoint profile.
+    #[serde(default)]
+    pub endpoint_profile_version: Option<u32>,
     /// Parser version used for this observation.
     pub parser_version: u32,
     /// Semantic outcome.
     pub status: ObservationStatus,
     /// Exact length of the bounded request body presented to the parser.
     pub request_bytes: Option<u64>,
+    /// Exact bytes received and forwarded on the wire.
+    #[serde(default)]
+    pub wire_bytes: Option<u64>,
+    /// SHA-256 over the exact wire body, distinct from the context-analysis digest.
+    #[serde(default)]
+    pub wire_sha256: Option<Box<[u8]>>,
+    /// Bytes made available to the analyzer after analysis-only decoding.
+    #[serde(default)]
+    pub decoded_bytes: Option<u64>,
+    /// Content encoding observed on the wire.
+    #[serde(default)]
+    pub content_encoding: ContentEncoding,
+    /// Outcome of analysis-only decoding.
+    #[serde(default)]
+    pub analysis_decode_status: AnalysisDecodeStatus,
+    /// Bounded decoder duration in microseconds.
+    #[serde(default)]
+    pub decode_duration_us: Option<u64>,
+    /// Version of the analysis decoder.
+    #[serde(default)]
+    pub decoder_version: Option<u32>,
     /// Requested model name.
     pub model: Option<String>,
     /// Whether streaming was requested.
@@ -59,9 +86,18 @@ impl RequestObservation {
         Self {
             provider: ProviderKind::OpenAi,
             protocol: ProviderProtocol::OpenAiResponsesV1,
+            transport: ProviderTransport::OpenAiPublicApi,
+            endpoint_profile_version: None,
             parser_version: OPENAI_RESPONSES_PARSER_VERSION,
             status,
             request_bytes: None,
+            wire_bytes: None,
+            wire_sha256: None,
+            decoded_bytes: None,
+            content_encoding: ContentEncoding::Identity,
+            analysis_decode_status: AnalysisDecodeStatus::Identity,
+            decode_duration_us: None,
+            decoder_version: None,
             model: None,
             stream: None,
             background: None,
@@ -84,6 +120,8 @@ impl RequestObservation {
 pub fn parse_request(input: ObservationInput<'_>) -> RequestObservation {
     let mut result = RequestObservation::empty(ObservationStatus::Complete);
     result.request_bytes = u64::try_from(input.bytes.len()).ok();
+    result.wire_bytes = result.request_bytes;
+    result.decoded_bytes = result.request_bytes;
     let parsed =
         json::validate_text(input).and_then(|()| json::parse_bounded(input.bytes, input.limits));
     let value = match parsed {

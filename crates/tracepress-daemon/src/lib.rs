@@ -25,15 +25,17 @@ use tracepress_core::{
     UuidV7Generator,
 };
 use tracepress_provider::{
-    AnomalyFlags, ObservationStatus as ProviderObservationStatus,
+    AnalysisDecodeStatus as ProviderAnalysisDecodeStatus, AnomalyFlags,
+    ContentEncoding as ProviderContentEncoding, ObservationStatus as ProviderObservationStatus,
     ProviderKind as CanonicalProviderKind, ProviderProtocol as CanonicalProviderProtocol,
-    ProviderResponseState, RequestObservation, ResponseObservation,
-    UsageStatus as ProviderUsageStatus,
+    ProviderResponseState, ProviderTransport as CanonicalProviderTransport, RequestObservation,
+    ResponseObservation, UsageStatus as ProviderUsageStatus,
 };
 use tracepress_storage::{
-    ContextInspection, ContextSnapshotStatus, ObservationStatus, ProviderKind, ProviderProtocol,
-    ProviderResponseState as StorageResponseState, StorageError, StorageWriter, WriteBatch,
-    WriteCommand, WriteReceipt,
+    AnalysisDecodeStatus, ContentEncoding, ContextInspection, ContextSnapshotStatus,
+    ObservationStatus, ProviderKind, ProviderProtocol,
+    ProviderResponseState as StorageResponseState, ProviderTransport, StorageError, StorageWriter,
+    WriteBatch, WriteCommand, WriteReceipt,
 };
 
 /// Failure returned by the daemon lifecycle boundary.
@@ -1322,6 +1324,41 @@ const fn storage_protocol(value: CanonicalProviderProtocol) -> Option<ProviderPr
     }
 }
 
+const fn storage_transport(value: CanonicalProviderTransport) -> Option<ProviderTransport> {
+    match value {
+        CanonicalProviderTransport::OpenAiPublicApi => Some(ProviderTransport::OpenAiPublicApi),
+        CanonicalProviderTransport::ChatGptCodexSubscription => {
+            Some(ProviderTransport::ChatGptCodexSubscription)
+        }
+        _ => None,
+    }
+}
+
+const fn storage_content_encoding(value: ProviderContentEncoding) -> Option<ContentEncoding> {
+    match value {
+        ProviderContentEncoding::Identity => Some(ContentEncoding::Identity),
+        ProviderContentEncoding::Zstd => Some(ContentEncoding::Zstd),
+        ProviderContentEncoding::Unsupported => Some(ContentEncoding::Unsupported),
+        _ => None,
+    }
+}
+
+const fn storage_decode_status(
+    value: ProviderAnalysisDecodeStatus,
+) -> Option<AnalysisDecodeStatus> {
+    match value {
+        ProviderAnalysisDecodeStatus::Identity => Some(AnalysisDecodeStatus::Identity),
+        ProviderAnalysisDecodeStatus::Decoded => Some(AnalysisDecodeStatus::Decoded),
+        ProviderAnalysisDecodeStatus::UnsupportedEncoding => {
+            Some(AnalysisDecodeStatus::UnsupportedEncoding)
+        }
+        ProviderAnalysisDecodeStatus::CorruptPayload => Some(AnalysisDecodeStatus::CorruptPayload),
+        ProviderAnalysisDecodeStatus::ResourceLimit => Some(AnalysisDecodeStatus::ResourceLimit),
+        ProviderAnalysisDecodeStatus::Timeout => Some(AnalysisDecodeStatus::Timeout),
+        _ => None,
+    }
+}
+
 const fn storage_observation_status(value: ProviderObservationStatus) -> Option<ObservationStatus> {
     match value {
         ProviderObservationStatus::Complete => Some(ObservationStatus::Complete),
@@ -1602,6 +1639,15 @@ fn provider_request_command(
         metadata: RequestMetadata::responses(request_id, observation.request_bytes),
         provider: storage_provider(request.provider),
         protocol: storage_protocol(request.protocol),
+        transport: storage_transport(request.transport),
+        endpoint_profile_version: request.endpoint_profile_version,
+        content_encoding: storage_content_encoding(request.content_encoding),
+        analysis_decode_status: storage_decode_status(request.analysis_decode_status),
+        wire_bytes: request.wire_bytes,
+        wire_sha256: request.wire_sha256.clone(),
+        decoded_bytes: request.decoded_bytes,
+        decode_duration_us: request.decode_duration_us,
+        decoder_version: request.decoder_version,
         parser_version: Some(request.parser_version),
         observation_status: storage_observation_status(request.status),
         model: request.model.clone(),
@@ -1733,6 +1779,10 @@ impl ProviderEvents<'_> {
 ///
 /// Payloads carry identifiers, versions, states, counts, and timings only: no headers, no
 /// content, no raw usage bytes, and no sensitive provider metadata.
+#[allow(
+    clippy::too_many_lines,
+    reason = "the canonical provider event payload keeps all allowlisted request metadata together"
+)]
 fn provider_events(
     evidence: ObservedAttempt<'_>,
     generator: &UuidV7Generator,
@@ -1758,8 +1808,16 @@ fn provider_events(
         serde_json::json!({
             "provider": request.provider,
             "protocol": request.protocol,
+            "transport": request.transport,
+            "endpoint_profile_version": request.endpoint_profile_version,
             "parser_version": request.parser_version,
             "observation_status": request.status,
+            "content_encoding": request.content_encoding,
+            "analysis_decode_status": request.analysis_decode_status,
+            "wire_bytes": request.wire_bytes,
+            "decoded_bytes": request.decoded_bytes,
+            "decode_duration_us": request.decode_duration_us,
+            "decoder_version": request.decoder_version,
             "model": request.model,
             "stream": request.stream,
             "request_bytes": observation.request_bytes,

@@ -1,0 +1,11 @@
+ALTER TABLE provider_requests ADD COLUMN transport TEXT;
+ALTER TABLE provider_requests ADD COLUMN endpoint_profile_version INTEGER CHECK(endpoint_profile_version >= 0);
+ALTER TABLE provider_requests ADD COLUMN usage_source TEXT;
+ALTER TABLE provider_requests ADD COLUMN billing_model TEXT;
+ALTER TABLE provider_requests ADD COLUMN content_encoding TEXT;
+ALTER TABLE provider_requests ADD COLUMN analysis_decode_status TEXT;
+ALTER TABLE provider_requests ADD COLUMN wire_bytes INTEGER CHECK(wire_bytes >= 0);
+ALTER TABLE provider_requests ADD COLUMN wire_sha256 BLOB CHECK(length(wire_sha256) = 32);
+ALTER TABLE provider_requests ADD COLUMN decoded_bytes INTEGER CHECK(decoded_bytes >= 0);
+ALTER TABLE provider_requests ADD COLUMN decode_duration_us INTEGER CHECK(decode_duration_us >= 0);
+ALTER TABLE provider_requests ADD COLUMN decoder_version INTEGER CHECK(decoder_version >= 0);

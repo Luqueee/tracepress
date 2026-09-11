@@ -320,7 +320,7 @@
       }
     }
   },
-  "generated_at_utc": "2026-09-11T15:26:19.855345+00:00",
+  "generated_at_utc": "2026-09-11T16:14:58.607195+00:00",
   "limitations": [
     "token estimates are heuristic",
     "Subscription has no API-cost semantics",
@@ -425,6 +425,7 @@
     "correlation_coverage": 1.0,
     "correlation_eligible": 39,
     "event_drop_reasons": {},
+    "event_drop_work": {},
     "forwarding_errors": 0,
     "provider_observation_partial": 19,
     "provider_usage_final": 39,

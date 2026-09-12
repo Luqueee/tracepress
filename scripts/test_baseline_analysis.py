@@ -264,6 +264,19 @@ class BaselineAnalysisContractTests(unittest.TestCase):
         self.assertGreater(content["json"]["token_share"], content["plain_text"]["token_share"])
         self.assertEqual(report["unknown"]["estimated_tokens"], 0)
         self.assertEqual(report["unknown"]["block_count"], 1)
+        coverage = report["quality"]["token_estimation_coverage"]
+        detected_coverage = {row["name"]: row for row in coverage["by_detected_content_kind"]}
+        self.assertEqual(detected_coverage["plain_text"]["block_coverage"], 1.0)
+        self.assertEqual(detected_coverage["json"]["block_coverage"], 1.0)
+        self.assertEqual(detected_coverage["unknown"]["block_coverage"], 0.0)
+        self.assertEqual(
+            report["composition"]["by_origin_kind_detected_content"][0]["name"],
+            "origin=tool_generated | kind=tool_result | detected_kind=json",
+        )
+        self.assertEqual(
+            report["repetition_by_origin_kind_detected_content"][0]["name"],
+            "origin=tool_generated | kind=tool_result | detected_kind=json",
+        )
 
     def test_report_can_restrict_accounting_to_selected_database_sessions(self) -> None:
         connection = create_fixture()

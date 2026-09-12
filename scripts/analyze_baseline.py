@@ -189,6 +189,70 @@ def aggregate_metric_rows(records: Iterable[dict[str, Any]], key: str) -> list[d
     ]
 
 
+def estimation_coverage_by(records: Iterable[dict[str, Any]], key: str) -> list[dict[str, Any]]:
+    """Show which categories contribute estimable blocks and bytes."""
+
+    grouped: dict[str, dict[str, int]] = {}
+    for record in records:
+        name = safe_name(record.get(key))
+        bucket = grouped.setdefault(
+            name,
+            {
+                "block_count": 0,
+                "estimated_block_count": 0,
+                "raw_bytes": 0,
+                "estimated_raw_bytes": 0,
+                "estimated_tokens": 0,
+            },
+        )
+        bucket["block_count"] += 1
+        raw_bytes = int_value(record, "raw_bytes") or 0
+        bucket["raw_bytes"] += raw_bytes
+        estimate = int_value(record, "estimated_tokens")
+        if estimate is not None:
+            bucket["estimated_block_count"] += 1
+            bucket["estimated_raw_bytes"] += raw_bytes
+            bucket["estimated_tokens"] += estimate
+    total_estimated_tokens = sum(bucket["estimated_tokens"] for bucket in grouped.values())
+    return [
+        {
+            "name": name,
+            **bucket,
+            "block_coverage": ratio(bucket["estimated_block_count"], bucket["block_count"]),
+            "bytes_coverage": ratio(bucket["estimated_raw_bytes"], bucket["raw_bytes"]),
+            "estimated_token_share": ratio(bucket["estimated_tokens"], total_estimated_tokens),
+        }
+        for name, bucket in sorted(grouped.items(), key=lambda item: (-item[1]["estimated_tokens"], item[0]))
+    ]
+
+
+def aggregate_cross(
+    records: Iterable[dict[str, Any]],
+    keys: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    """Aggregate token and byte composition over a bounded metadata cross-tab."""
+
+    grouped: dict[tuple[str, ...], dict[str, int]] = {}
+    for record in records:
+        values = tuple(safe_name(record.get(key)) for key in keys)
+        bucket = grouped.setdefault(values, {"block_count": 0, "raw_bytes": 0, "estimated_tokens": 0})
+        bucket["block_count"] += 1
+        bucket["raw_bytes"] += int_value(record, "raw_bytes") or 0
+        bucket["estimated_tokens"] += int_value(record, "estimated_tokens") or 0
+    total_tokens = sum(bucket["estimated_tokens"] for bucket in grouped.values())
+    total_bytes = sum(bucket["raw_bytes"] for bucket in grouped.values())
+    return [
+        {
+            **dict(zip(keys, values)),
+            "name": " | ".join(f"{key}={value}" for key, value in zip(keys, values)),
+            **bucket,
+            "token_share": ratio(bucket["estimated_tokens"], total_tokens),
+            "bytes_share": ratio(bucket["raw_bytes"], total_bytes),
+        }
+        for values, bucket in sorted(grouped.items(), key=lambda item: (-item[1]["estimated_tokens"], item[0]))
+    ]
+
+
 def fingerprint_value(value: Any) -> bytes | None:
     if value is None:
         return None
@@ -990,6 +1054,109 @@ def repetition_and_persistence(
     }
 
 
+def repetition_by_group(
+    blocks: list[dict[str, Any]],
+    snapshot_context: dict[str, dict[str, Any]],
+    fields: tuple[str, ...],
+) -> list[dict[str, Any]]:
+    """Break repetition and persistence down by safe structural category fields."""
+
+    enriched: list[dict[str, Any]] = []
+    for block in blocks:
+        context = snapshot_context.get(safe_name(block.get("snapshot_id")), {})
+        enriched.append(
+            {
+                **block,
+                "_session_id": context.get("session_id", "unknown"),
+                "_snapshot_order": context.get("snapshot_order", 0),
+                "_group": tuple(safe_name(block.get(field)) for field in fields),
+                "_estimated": int_value(block, "estimated_tokens"),
+            }
+        )
+
+    def fingerprint_groups(field: str) -> dict[tuple[str, bytes], list[dict[str, Any]]]:
+        result: dict[tuple[str, bytes], list[dict[str, Any]]] = defaultdict(list)
+        for block in enriched:
+            fingerprint = fingerprint_value(block.get(field))
+            if fingerprint is not None:
+                result[(block["_session_id"], fingerprint)].append(block)
+        return result
+
+    details: dict[tuple[str, ...], dict[str, Any]] = defaultdict(
+        lambda: {
+            "block_count": 0,
+            "estimated_tokens": 0,
+            "exact_repeated_blocks": 0,
+            "exact_repeated_estimated_tokens": 0,
+            "semantic_repeated_blocks": 0,
+            "semantic_repeated_estimated_tokens": 0,
+            "persistence_values": [],
+            "unique_semantic_information": 0,
+        }
+    )
+    for block in enriched:
+        detail = details[block["_group"]]
+        detail["block_count"] += 1
+        detail["estimated_tokens"] += block["_estimated"] or 0
+
+    for field, prefix in (
+        ("exact_fingerprint", "exact"),
+        ("semantic_fingerprint", "semantic"),
+    ):
+        for records in fingerprint_groups(field).values():
+            records.sort(key=lambda item: (item["_snapshot_order"], int_value(item, "ordinal") or 0))
+            for record in records[1:]:
+                detail = details[record["_group"]]
+                detail[f"{prefix}_repeated_blocks"] += 1
+                detail[f"{prefix}_repeated_estimated_tokens"] += record["_estimated"] or 0
+            if field == "semantic_fingerprint":
+                first = records[0]
+                details[first["_group"]]["unique_semantic_information"] += first["_estimated"] or 0
+
+    persistence_groups: dict[tuple[str, ...], list[int]] = defaultdict(list)
+    seen_fingerprints: set[tuple[str, str, bytes]] = set()
+    for field in ("semantic_fingerprint", "exact_fingerprint"):
+        for _key, records in fingerprint_groups(field).items():
+            records.sort(key=lambda item: (item["_snapshot_order"], int_value(item, "ordinal") or 0))
+            fingerprint = fingerprint_value(records[0].get(field))
+            marker = (field, records[0]["_session_id"], fingerprint or b"")
+            if marker in seen_fingerprints:
+                continue
+            seen_fingerprints.add(marker)
+            by_group: dict[tuple[str, ...], set[int]] = defaultdict(set)
+            for record in records:
+                by_group[record["_group"]].add(record["_snapshot_order"])
+            for group, orders in by_group.items():
+                persistence_groups[group].append(len(orders))
+
+    result = []
+    for group, detail in sorted(details.items(), key=lambda item: (-item[1]["estimated_tokens"], item[0])):
+        persistence_values = persistence_groups.get(group, [])
+        effective = detail["estimated_tokens"]
+        unique = detail["unique_semantic_information"]
+        result.append(
+            {
+                **dict(zip(fields, group)),
+                "name": " | ".join(f"{field}={value}" for field, value in zip(fields, group)),
+                "block_count": detail["block_count"],
+                "estimated_tokens": effective,
+                "token_share": None,
+                "exact_repeated_blocks": detail["exact_repeated_blocks"],
+                "exact_repeated_estimated_tokens": detail["exact_repeated_estimated_tokens"],
+                "semantic_repeated_blocks": detail["semantic_repeated_blocks"],
+                "semantic_repeated_estimated_tokens": detail["semantic_repeated_estimated_tokens"],
+                "unique_semantic_information_estimated_tokens": unique,
+                "redundancy_factor": ratio(effective, unique),
+                "persistence": distribution(persistence_values),
+                "average_persistence": statistics.mean(persistence_values) if persistence_values else None,
+            }
+        )
+    total = sum(row["estimated_tokens"] for row in result)
+    for row in result:
+        row["token_share"] = ratio(row["estimated_tokens"], total)
+    return result
+
+
 def unknown_report(blocks: list[dict[str, Any]], snapshot_context: dict[str, dict[str, Any]]) -> dict[str, Any]:
     unknown = [block for block in blocks if safe_name(block.get("detected_kind")) == "unknown"]
     estimated = [int_value(block, "estimated_tokens") for block in unknown if int_value(block, "estimated_tokens") is not None]
@@ -1514,15 +1681,30 @@ def analyze_connection(
     residuals = [value for value in residuals if value is not None]
 
     detected_content = aggregate(block_rows, "detected_kind")
+    estimation_coverage = {
+        "by_detected_content_kind": estimation_coverage_by(block_rows, "detected_kind"),
+        "by_context_block_kind": estimation_coverage_by(block_rows, "kind"),
+        "by_context_origin": estimation_coverage_by(block_rows, "origin"),
+    }
+    cross_composition = aggregate_cross(
+        block_rows,
+        ("origin", "kind", "detected_kind"),
+    )
     composition = {
         "by_context_block_kind": aggregate(block_rows, "kind"),
         "by_role": aggregate(block_rows, "role"),
         "by_origin": aggregate(block_rows, "origin"),
         "detected_content": detected_content,
+        "by_origin_kind_detected_content": cross_composition,
         "estimated_token_total": estimated_token_total,
         "raw_bytes_total": raw_token_total,
     }
     repetition, _persistence, category_details = repetition_and_persistence(block_rows, snapshot_context)
+    cross_repetition = repetition_by_group(
+        block_rows,
+        snapshot_context,
+        ("origin", "kind", "detected_kind"),
+    )
     metric_prefix_values = [int_value(row, "stable_explicit_prefix_estimate") for row in metric_rows]
     metric_prefix_values = [value for value in metric_prefix_values if value is not None]
     stable_prefix_total = sum(metric_prefix_values)
@@ -1630,6 +1812,7 @@ def analyze_connection(
                 "observed_blocks": len(estimated_block_values),
                 "by_blocks": estimator_coverage,
                 "estimated_token_subset": estimated_token_total,
+                **estimation_coverage,
             },
             "forwarding_errors": forwarding_errors,
             "context_malformed": malformed,
@@ -1671,6 +1854,7 @@ def analyze_connection(
         },
         "unknown": unknown,
         "repetition": repetition,
+        "repetition_by_origin_kind_detected_content": cross_repetition,
         "stable_prefix": stable_prefix,
         "scheduler": scheduler,
         "compaction": compaction_report(
@@ -1774,6 +1958,25 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Analysis loss rate: {format_pct(quality['analysis_loss_rate'])}.",
         f"- Backlog capacity drops: {format_number(quality['backlog_capacity_drops'])}.",
         "",
+        "## Estimation coverage by category",
+        "",
+        "The composition token shares use the estimable-token subset; these tables show coverage bias by category.",
+        "",
+        "| Dimension | Category | Blocks estimated/total | Bytes estimated/total | Estimated token share |",
+        "| --- | --- | ---: | ---: | ---: |",
+        *[
+            f"| detected_content_kind | {row['name']} | {row['estimated_block_count']}/{row['block_count']} ({format_pct(row['block_coverage'])}) | {format_number(row['estimated_raw_bytes'])}/{format_number(row['raw_bytes'])} ({format_pct(row['bytes_coverage'])}) | {format_pct(row['estimated_token_share'])} |"
+            for row in quality["token_estimation_coverage"]["by_detected_content_kind"]
+        ],
+        *[
+            f"| context_block_kind | {row['name']} | {row['estimated_block_count']}/{row['block_count']} ({format_pct(row['block_coverage'])}) | {format_number(row['estimated_raw_bytes'])}/{format_number(row['raw_bytes'])} ({format_pct(row['bytes_coverage'])}) | {format_pct(row['estimated_token_share'])} |"
+            for row in quality["token_estimation_coverage"]["by_context_block_kind"]
+        ],
+        *[
+            f"| context_origin | {row['name']} | {row['estimated_block_count']}/{row['block_count']} ({format_pct(row['block_coverage'])}) | {format_number(row['estimated_raw_bytes'])}/{format_number(row['raw_bytes'])} ({format_pct(row['bytes_coverage'])}) | {format_pct(row['estimated_token_share'])} |"
+            for row in quality["token_estimation_coverage"]["by_context_origin"]
+        ],
+        "",
         "## Deferred-analysis scheduler",
         "",
         f"- Runtime sidecar available: `{report['scheduler']['available']}`; sessions with metrics: {format_number(report['scheduler']['sessions_with_metrics'])}.",
@@ -1799,12 +2002,39 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Context composition cross-tab",
+            "",
+            "| Origin | Block kind | Detected kind | Estimated tokens | Token share | Bytes |",
+            "| --- | --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for row in report["composition"]["by_origin_kind_detected_content"][:40]:
+        lines.append(
+            f"| {row['origin']} | {row['kind']} | {row['detected_kind']} | {format_number(row['estimated_tokens'])} | {format_pct(row['token_share'])} | {format_number(row['raw_bytes'])} |"
+        )
+    lines.extend(
+        [
+            "",
             "## Repetition and exposure",
             "",
             f"- Exact repeated blocks: {format_number(report['repetition']['exact_repeated_blocks'])}; semantic: {format_number(report['repetition']['semantic_repeated_blocks'])}.",
             f"- Exact repeated token share: {format_pct(report['repetition']['exact_repeated_token_share'])}; semantic: {format_pct(report['repetition']['semantic_repeated_token_share'])}.",
             f"- Stable explicit-prefix estimate: {format_number(report['stable_prefix']['estimated_tokens'])}; share: {format_pct(report['stable_prefix']['share'])}.",
             f"- Unknown detected content: {format_number(report['unknown']['estimated_tokens'])} estimated tokens ({format_pct(report['unknown']['token_share'])}).",
+            "",
+            "## Repetition by structural category",
+            "",
+            "| Origin | Block kind | Detected kind | Token share | Exact repeated tokens | Semantic repeated tokens | Persistence P50/P90 |",
+            "| --- | --- | --- | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in report["repetition_by_origin_kind_detected_content"][:40]:
+        persistence = row["persistence"]
+        lines.append(
+            f"| {row['origin']} | {row['kind']} | {row['detected_kind']} | {format_pct(row['token_share'])} | {format_number(row['exact_repeated_estimated_tokens'])} | {format_number(row['semantic_repeated_estimated_tokens'])} | {format_number(persistence['p50'])}/{format_number(persistence['p90'])} |"
+        )
+    lines.extend(
+        [
             "",
             "## Missingness",
             "",

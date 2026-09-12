@@ -835,6 +835,14 @@ def scheduler_report(
     eligible = analysis_integrity["eligible_requests"]
     dropped = analysis_integrity["dropped_requests"]
 
+    def field_coverage(*keys: str) -> dict[str, float | int | None]:
+        observed = sum(1 for session in sessions if first_int(session, *keys) is not None)
+        return {
+            "sessions_with_value": observed,
+            "sessions_total": len(sessions),
+            "coverage": ratio(observed, len(sessions)),
+        }
+
     return {
         "available": bool(sessions),
         "sessions_with_metrics": len(sessions),
@@ -849,6 +857,14 @@ def scheduler_report(
         "high_water_bytes": distribution(high_water_bytes),
         "analysis_wait_us": distribution(wait_us),
         "drain_duration_us": distribution(drain_us),
+        "field_coverage": {
+            "high_water_items": field_coverage("high_water_items", "deferred_high_water_items"),
+            "high_water_bytes": field_coverage("high_water_bytes", "deferred_high_water_bytes"),
+            "analysis_wait_us": field_coverage("analysis_wait_us"),
+            "deferred_total": field_coverage("deferred_total", "analysis_deferred_total"),
+            "processed_deferred_total": field_coverage("processed_deferred_total"),
+            "backlog_capacity_drops": field_coverage("backlog_capacity_drops"),
+        },
         "session_metadata": [
             {
                 key: jsonable(value)
@@ -1984,6 +2000,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- High-water items P50/P90/P99: {format_number(report['scheduler']['high_water_items']['p50'])}/{format_number(report['scheduler']['high_water_items']['p90'])}/{format_number(report['scheduler']['high_water_items']['p99'])}.",
         f"- High-water bytes P50/P90/P99: {format_number(report['scheduler']['high_water_bytes']['p50'])}/{format_number(report['scheduler']['high_water_bytes']['p90'])}/{format_number(report['scheduler']['high_water_bytes']['p99'])}.",
         f"- Analysis wait µs P50/P90/P99: {format_number(report['scheduler']['analysis_wait_us']['p50'])}/{format_number(report['scheduler']['analysis_wait_us']['p90'])}/{format_number(report['scheduler']['analysis_wait_us']['p99'])}.",
+        f"- Scheduler field coverage: high-water items {format_pct(report['scheduler']['field_coverage']['high_water_items']['coverage'])}; high-water bytes {format_pct(report['scheduler']['field_coverage']['high_water_bytes']['coverage'])}; wait {format_pct(report['scheduler']['field_coverage']['analysis_wait_us']['coverage'])}.",
         "",
         "## Provider usage",
         "",

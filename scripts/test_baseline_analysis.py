@@ -520,6 +520,7 @@ class BaselineAnalysisContractTests(unittest.TestCase):
         self.assertEqual(scheduler["analysis_loss_rate"], 0.0)
         self.assertEqual(scheduler["high_water_items"]["p90"], 2.0)
         self.assertEqual(scheduler["analysis_wait_us"]["p50"], 666.0)
+        self.assertEqual(scheduler["field_coverage"]["high_water_items"]["coverage"], 1.0)
         self.assertEqual(report["missingness"]["by_workload"][0]["name"], "repo_exploration")
         self.assertEqual(report["missingness"]["unavailable_dimensions"], [])
 

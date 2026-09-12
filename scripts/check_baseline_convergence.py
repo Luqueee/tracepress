@@ -228,6 +228,13 @@ def _quality_gate(report: dict[str, Any]) -> dict[str, Any]:
                 and sessions_with_metrics == sessions_total
             ),
         }
+        counter_consistency = scheduler.get("counter_consistency")
+        if isinstance(counter_consistency, dict) and counter_consistency.get("available"):
+            checks["scheduler_counter_consistency"] = {
+                "value": counter_consistency.get("delta"),
+                "target": 0,
+                "pass": counter_consistency.get("pass") is True,
+            }
     integrity = report.get("analysis_integrity", {}).get(
         "measurement_integrity",
         report.get("quality", {}).get("measurement_integrity", "passed"),

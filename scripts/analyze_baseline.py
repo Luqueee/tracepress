@@ -835,12 +835,22 @@ def scheduler_report(
     admitted_total = session_total("analysis_admitted_total", "admitted_total")
     processed_total = session_total("processed_deferred_total")
     capacity_drops = session_total("backlog_capacity_drops")
+    eligible = analysis_integrity["eligible_requests"]
+    dropped = analysis_integrity["dropped_requests"]
+    reported_seen_values = session_values("analysis_requests_seen")
+    counter_consistency = {
+        "available": bool(sessions) and len(reported_seen_values) == len(sessions),
+        "reported_analysis_requests_seen": sum(reported_seen_values),
+        "eligible_requests": eligible,
+        "delta": sum(reported_seen_values) - eligible,
+        "pass": bool(sessions)
+        and len(reported_seen_values) == len(sessions)
+        and sum(reported_seen_values) == eligible,
+    }
     high_water_items = session_values("high_water_items", "deferred_high_water_items")
     high_water_bytes = session_values("high_water_bytes", "deferred_high_water_bytes")
     wait_us = session_values("analysis_wait_us")
     drain_us = session_values("drain_duration_us", "analysis_drain_us")
-    eligible = analysis_integrity["eligible_requests"]
-    dropped = analysis_integrity["dropped_requests"]
 
     def field_coverage(*keys: str) -> dict[str, float | int | None]:
         observed = sum(1 for session in sessions if first_int(session, *keys) is not None)
@@ -906,6 +916,7 @@ def scheduler_report(
             "dropped_requests": dropped,
             "admitted_total": admitted_total if sessions else None,
         },
+        "counter_consistency": counter_consistency,
     }
 
 
@@ -2013,6 +2024,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- High-water bytes P50/P90/P99: {format_number(report['scheduler']['high_water_bytes']['p50'])}/{format_number(report['scheduler']['high_water_bytes']['p90'])}/{format_number(report['scheduler']['high_water_bytes']['p99'])}.",
         f"- Analysis wait µs P50/P90/P99: {format_number(report['scheduler']['analysis_wait_us']['p50'])}/{format_number(report['scheduler']['analysis_wait_us']['p90'])}/{format_number(report['scheduler']['analysis_wait_us']['p99'])}.",
         f"- Scheduler field coverage: high-water items {format_pct(report['scheduler']['field_coverage']['high_water_items']['coverage'])}; high-water bytes {format_pct(report['scheduler']['field_coverage']['high_water_bytes']['coverage'])}; wait {format_pct(report['scheduler']['field_coverage']['analysis_wait_us']['coverage'])}.",
+        f"- Runtime counter consistency: `{report['scheduler']['counter_consistency']['pass']}`; reported seen: {format_number(report['scheduler']['counter_consistency']['reported_analysis_requests_seen'])}; ledger eligible: {format_number(report['scheduler']['counter_consistency']['eligible_requests'])}; delta: {format_number(report['scheduler']['counter_consistency']['delta'])}.",
         "",
         "## Provider usage",
         "",

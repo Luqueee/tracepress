@@ -1,0 +1,22 @@
+{
+  "analysis_version": 1,
+  "codex_version": "0.154.0",
+  "cohort_kind": "naturalistic",
+  "cohort_label": "n10",
+  "convergence_gate_version": 2,
+  "detector_version": 1,
+  "fingerprint_version": 1,
+  "measurement_id": "baseline-003",
+  "measurement_instrument_version": 2,
+  "measurement_tooling_commit": "3bd135344feced756a299f9dd7eac415e4c4d68f",
+  "model": "gpt-5.6-luna",
+  "provider_parser_version": 1,
+  "reasoning_effort": "xhigh",
+  "runtime_commit": "a15ac2dafa5074e447b8dd2811165f8f4be30c9f",
+  "runtime_instrument_version": 2,
+  "sidecar_schema_version": 2,
+  "token_estimator_version": 1,
+  "tracepress_commit": "a15ac2dafa5074e447b8dd2811165f8f4be30c9f",
+  "transport": "chatgpt_codex_subscription",
+  "usage_normalizer_version": 1
+}

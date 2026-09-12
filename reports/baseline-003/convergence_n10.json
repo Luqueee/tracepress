@@ -1,0 +1,82 @@
+{
+  "current_sessions": 10,
+  "distribution_relative_tolerance": 0.1,
+  "manifest": {
+    "mismatched_report_indexes": [],
+    "pass": true,
+    "reports_with_manifest": 1,
+    "total_reports": 1
+  },
+  "maximum_sessions": 100,
+  "minimum_sessions": 40,
+  "missingness": [
+    {
+      "flagged_strata": [],
+      "pass": true
+    }
+  ],
+  "quality": [
+    {
+      "checks": {
+        "analysis_coverage": {
+          "pass": true,
+          "target": 0.95,
+          "value": 1.0
+        },
+        "analysis_loss_rate": {
+          "pass": true,
+          "target": 0.01,
+          "value": 0.0
+        },
+        "backlog_capacity_drops": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "context_malformed": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "correlation_coverage": {
+          "pass": true,
+          "target": 0.99,
+          "value": 1.0
+        },
+        "forwarding_errors": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "measurement_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        },
+        "scheduler_counter_consistency": {
+          "pass": true,
+          "target": 0,
+          "value": 0
+        },
+        "scheduler_session_coverage": {
+          "pass": true,
+          "target": 10.0,
+          "value": 10.0
+        },
+        "scheduler_sidecar_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        }
+      },
+      "pass": true
+    }
+  ],
+  "reasons": [
+    "minimum cohort size is 40; current is 10",
+    "two consecutive stable transitions are required"
+  ],
+  "share_tolerance": 0.02,
+  "status": "NEED_MORE_SESSIONS",
+  "transitions": []
+}

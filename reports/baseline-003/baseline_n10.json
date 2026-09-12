@@ -315,6 +315,395 @@
         "token_share": 0.003468228415865952
       }
     ],
+    "by_workload": [
+      {
+        "by_detected_content": [
+          {
+            "block_count": 22,
+            "bytes_share": 0.2332858263807709,
+            "estimated_tokens": 46514,
+            "name": "plain_text",
+            "raw_bytes": 145680,
+            "token_share": 0.5271066588096641
+          },
+          {
+            "block_count": 57,
+            "bytes_share": 0.6829151120149887,
+            "estimated_tokens": 23136,
+            "name": "unknown",
+            "raw_bytes": 426460,
+            "token_share": 0.26218213136303886
+          },
+          {
+            "block_count": 6,
+            "bytes_share": 0.07830800518839977,
+            "estimated_tokens": 17535,
+            "name": "json",
+            "raw_bytes": 48901,
+            "token_share": 0.1987103939078011
+          },
+          {
+            "block_count": 7,
+            "bytes_share": 0.005491056415840633,
+            "estimated_tokens": 1059,
+            "name": "source_code",
+            "raw_bytes": 3429,
+            "token_share": 0.012000815919495943
+          }
+        ],
+        "bytes_share": 0.08720799106567419,
+        "estimated_tokens": 88244,
+        "name": "bug_diagnosis",
+        "raw_bytes": 624470,
+        "session_count": 1,
+        "session_share": 0.1,
+        "workload_token_share": 0.07387167471148325
+      },
+      {
+        "by_detected_content": [
+          {
+            "block_count": 6,
+            "bytes_share": 0.21470700165468057,
+            "estimated_tokens": 58909,
+            "name": "json",
+            "raw_bytes": 154022,
+            "token_share": 0.45576857611487637
+          },
+          {
+            "block_count": 17,
+            "bytes_share": 0.19987900061196695,
+            "estimated_tokens": 45839,
+            "name": "plain_text",
+            "raw_bytes": 143385,
+            "token_share": 0.354648283972395
+          },
+          {
+            "block_count": 56,
+            "bytes_share": 0.5805656581990328,
+            "estimated_tokens": 23383,
+            "name": "unknown",
+            "raw_bytes": 416474,
+            "token_share": 0.18091015999752422
+          },
+          {
+            "block_count": 7,
+            "bytes_share": 0.004848339534319636,
+            "estimated_tokens": 1121,
+            "name": "source_code",
+            "raw_bytes": 3478,
+            "token_share": 0.008672979915204406
+          }
+        ],
+        "bytes_share": 0.10018005230496417,
+        "estimated_tokens": 129252,
+        "name": "code_review",
+        "raw_bytes": 717359,
+        "session_count": 1,
+        "session_share": 0.1,
+        "workload_token_share": 0.10820069012973836
+      },
+      {
+        "by_detected_content": [
+          {
+            "block_count": 23,
+            "bytes_share": 0.24485818822595723,
+            "estimated_tokens": 46412,
+            "name": "plain_text",
+            "raw_bytes": 145625,
+            "token_share": 0.5724364192505982
+          },
+          {
+            "block_count": 52,
+            "bytes_share": 0.7034899753166132,
+            "estimated_tokens": 23018,
+            "name": "unknown",
+            "raw_bytes": 418388,
+            "token_share": 0.2838994548459508
+          },
+          {
+            "block_count": 6,
+            "bytes_share": 0.04922889637685546,
+            "estimated_tokens": 11179,
+            "name": "json",
+            "raw_bytes": 29278,
+            "token_share": 0.1378795727570981
+          },
+          {
+            "block_count": 5,
+            "bytes_share": 0.0024229400805741074,
+            "estimated_tokens": 469,
+            "name": "source_code",
+            "raw_bytes": 1441,
+            "token_share": 0.005784553146352895
+          }
+        ],
+        "bytes_share": 0.08305504338474314,
+        "estimated_tokens": 81078,
+        "name": "compaction_investigation",
+        "raw_bytes": 594732,
+        "session_count": 1,
+        "session_share": 0.1,
+        "workload_token_share": 0.06787280316234122
+      },
+      {
+        "by_detected_content": [
+          {
+            "block_count": 6,
+            "bytes_share": 0.15794246399429,
+            "estimated_tokens": 56561,
+            "name": "json",
+            "raw_bytes": 107987,
+            "token_share": 0.4471790898453559
+          },
+          {
+            "block_count": 20,
+            "bytes_share": 0.20995274319120213,
+            "estimated_tokens": 45945,
+            "name": "plain_text",
+            "raw_bytes": 143547,
+            "token_share": 0.36324752537870403
+          },
+          {
+            "block_count": 60,
+            "bytes_share": 0.630923006942992,
+            "estimated_tokens": 23646,
+            "name": "unknown",
+            "raw_bytes": 431369,
+            "token_share": 0.18694854685177573
+          },
+          {
+            "block_count": 4,
+            "bytes_share": 0.001181785871515889,
+            "estimated_tokens": 332,
+            "name": "source_code",
+            "raw_bytes": 808,
+            "token_share": 0.002624837924164321
+          }
+        ],
+        "bytes_share": 0.0954810683932025,
+        "estimated_tokens": 126484,
+        "name": "dependency_investigation",
+        "raw_bytes": 683711,
+        "session_count": 1,
+        "session_share": 0.1,
+        "workload_token_share": 0.1058835150741948
+      },
+      {
+        "by_detected_content": [
+          {
+            "block_count": 19,
+            "bytes_share": 0.22878329428165378,
+            "estimated_tokens": 45887,
+            "name": "plain_text",
+            "raw_bytes": 143435,
+            "token_share": 0.489989215047678
+          },
+          {
+            "block_count": 6,
+            "bytes_share": 0.09826508460842782,
+            "estimated_tokens": 23525,
+            "name": "json",
+            "raw_bytes": 61607,
+            "token_share": 0.2512039637369326
+          },
+          {
+            "block_count": 54,
+            "bytes_share": 0.6654693299433604,
+            "estimated_tokens": 23040,
+            "name": "unknown",
+            "raw_bytes": 417214,
+            "token_share": 0.2460250509882647
+          },
+          {
+            "block_count": 10,
+            "bytes_share": 0.007482291166557939,
+            "estimated_tokens": 1197,
+            "name": "source_code",
+            "raw_bytes": 4691,
+            "token_share": 0.012781770227124688
+          }
+        ],
+        "bytes_share": 0.08755390711267352,
+        "estimated_tokens": 93649,
+        "name": "feature_implementation",
+        "raw_bytes": 626947,
+        "session_count": 1,
+        "session_share": 0.1,
+        "workload_token_share": 0.078396360829696
+      },
+      {
+        "by_detected_content": [
+          {
+            "block_count": 40,
+            "bytes_share": 0.21349726540916295,
+            "estimated_tokens": 103220,
+            "name": "plain_text",
+            "raw_bytes": 322636,
+            "token_share": 0.4275412443512946
+          },
+          {
+            "block_count": 16,
+            "bytes_share": 0.14705183646054942,
+            "estimated_tokens": 83285,
+            "name": "json",
+            "raw_bytes": 222224,
+            "token_share": 0.34496970098621943
+          },
+          {
+            "block_count": 140,
+            "bytes_share": 0.6364671667124362,
+            "estimated_tokens": 53398,
+            "name": "unknown",
+            "raw_bytes": 961826,
+            "token_share": 0.2211765875399189
+          },
+          {
+            "block_count": 12,
+            "bytes_share": 0.0029837314178514356,
+            "estimated_tokens": 1524,
+            "name": "source_code",
+            "raw_bytes": 4509,
+            "token_share": 0.00631246712256707
+          }
+        ],
+        "bytes_share": 0.2110402101918291,
+        "estimated_tokens": 241427,
+        "name": "large_search",
+        "raw_bytes": 1511195,
+        "session_count": 2,
+        "session_share": 0.2,
+        "workload_token_share": 0.2021057160891309
+      },
+      {
+        "by_detected_content": [
+          {
+            "block_count": 6,
+            "bytes_share": 0.28227167807144515,
+            "estimated_tokens": 89645,
+            "name": "json",
+            "raw_bytes": 227579,
+            "token_share": 0.5551117716267261
+          },
+          {
+            "block_count": 22,
+            "bytes_share": 0.17908044864996941,
+            "estimated_tokens": 46206,
+            "name": "plain_text",
+            "raw_bytes": 144382,
+            "token_share": 0.28612297975106815
+          },
+          {
+            "block_count": 59,
+            "bytes_share": 0.5376456915488049,
+            "estimated_tokens": 25307,
+            "name": "unknown",
+            "raw_bytes": 433472,
+            "token_share": 0.1567093937705121
+          },
+          {
+            "block_count": 4,
+            "bytes_share": 0.0010021817297805496,
+            "estimated_tokens": 332,
+            "name": "source_code",
+            "raw_bytes": 808,
+            "token_share": 0.0020558548516936034
+          }
+        ],
+        "bytes_share": 0.11259253114606023,
+        "estimated_tokens": 161490,
+        "name": "refactor",
+        "raw_bytes": 806241,
+        "session_count": 1,
+        "session_share": 0.1,
+        "workload_token_share": 0.1351880779334281
+      },
+      {
+        "by_detected_content": [
+          {
+            "block_count": 22,
+            "bytes_share": 0.21781922665570944,
+            "estimated_tokens": 46797,
+            "name": "plain_text",
+            "raw_bytes": 146840,
+            "token_share": 0.4274245108963703
+          },
+          {
+            "block_count": 6,
+            "bytes_share": 0.16006242054656547,
+            "estimated_tokens": 38986,
+            "name": "json",
+            "raw_bytes": 107904,
+            "token_share": 0.35608205615329813
+          },
+          {
+            "block_count": 53,
+            "bytes_share": 0.6195476587103215,
+            "estimated_tokens": 23110,
+            "name": "unknown",
+            "raw_bytes": 417660,
+            "token_share": 0.21107721535173446
+          },
+          {
+            "block_count": 5,
+            "bytes_share": 0.002570694087403599,
+            "estimated_tokens": 593,
+            "name": "source_code",
+            "raw_bytes": 1733,
+            "token_share": 0.005416217598597081
+          }
+        ],
+        "bytes_share": 0.09414404770932215,
+        "estimated_tokens": 109486,
+        "name": "repo_exploration",
+        "raw_bytes": 674137,
+        "session_count": 1,
+        "session_share": 0.1,
+        "workload_token_share": 0.0916539841514602
+      },
+      {
+        "by_detected_content": [
+          {
+            "block_count": 10,
+            "bytes_share": 0.22322365102694963,
+            "estimated_tokens": 74737,
+            "name": "json",
+            "raw_bytes": 205791,
+            "token_share": 0.45725245949782195
+          },
+          {
+            "block_count": 26,
+            "bytes_share": 0.19539106523991084,
+            "estimated_tokens": 57604,
+            "name": "plain_text",
+            "raw_bytes": 180132,
+            "token_share": 0.3524301306837649
+          },
+          {
+            "block_count": 78,
+            "bytes_share": 0.5802897261648434,
+            "estimated_tokens": 30692,
+            "name": "unknown",
+            "raw_bytes": 534972,
+            "token_share": 0.18777837599725908
+          },
+          {
+            "block_count": 5,
+            "bytes_share": 0.0010955575682960825,
+            "estimated_tokens": 415,
+            "name": "source_code",
+            "raw_bytes": 1010,
+            "token_share": 0.0025390338211541286
+          }
+        ],
+        "bytes_share": 0.128745148691531,
+        "estimated_tokens": 163448,
+        "name": "test_debugging",
+        "raw_bytes": 921905,
+        "session_count": 1,
+        "session_share": 0.1,
+        "workload_token_share": 0.1368271779185272
+      }
+    ],
     "detected_content": [
       {
         "block_count": 211,
@@ -350,7 +739,31 @@
       }
     ],
     "estimated_token_total": 1194558,
-    "raw_bytes_total": 7160697
+    "raw_bytes_total": 7160697,
+    "session_weighted_detected_content": [
+      {
+        "mean_session_token_share": 0.35514632472371355,
+        "name": "json",
+        "sessions_with_estimates": 10
+      },
+      {
+        "mean_session_token_share": 0.4227051880207055,
+        "name": "plain_text",
+        "sessions_with_estimates": 10
+      },
+      {
+        "mean_session_token_share": 0.006513249839226054,
+        "name": "source_code",
+        "sessions_with_estimates": 10
+      },
+      {
+        "mean_session_token_share": 0.21563523741635493,
+        "name": "unknown",
+        "sessions_with_estimates": 10
+      }
+    ],
+    "sessions_total": 10,
+    "sessions_with_estimates": 10
   },
   "context_analysis_metrics": {
     "estimated_tool_definition_share_mean": null,
@@ -376,9 +789,20 @@
     },
     "requests_total": 42,
     "session_filter": {
-      "applied": false,
-      "excluded_sessions": 0,
-      "selected_session_ids": null
+      "applied": true,
+      "excluded_sessions": 10,
+      "selected_session_ids": [
+        "01a0964f-1016-7d42-9f92-5c2a934b44af",
+        "01a0964f-101b-7722-90f8-4ef13a3e5457",
+        "01a09650-a12e-7673-af15-6aefc9675446",
+        "01a09650-a13a-7571-985b-b255c67df625",
+        "01a09652-421e-7812-93c0-9b1390dac848",
+        "01a09652-4229-7b80-a0ca-7dc40ce4933d",
+        "01a09653-8837-7693-93b7-5a15be0a90d0",
+        "01a09653-8844-7c90-8722-9c8b2d434d10",
+        "01a09655-77a4-7140-a148-86801bc2ce90",
+        "01a09655-77b0-74d3-a008-5b7125dfd149"
+      ]
     },
     "sessions_by_state": {
       "closed": 10
@@ -491,7 +915,7 @@
       }
     }
   },
-  "generated_at_utc": "2026-09-12T16:02:40.280232+00:00",
+  "generated_at_utc": "2026-09-12T16:52:10.951682+00:00",
   "limitations": [
     "token estimates are heuristic",
     "Subscription has no API-cost semantics",
@@ -506,7 +930,7 @@
     "detector_version": 1,
     "fingerprint_version": 1,
     "measurement_instrument_version": 2,
-    "measurement_tooling_commit": "3bd135344feced756a299f9dd7eac415e4c4d68f",
+    "measurement_tooling_commit": "348c5e5ea6950174f2de422a66a8f69df2383525",
     "model": "gpt-5.6-luna",
     "provider_parser_version": 1,
     "reasoning_effort": "xhigh",
@@ -516,7 +940,21 @@
     "token_estimator_version": 1,
     "tracepress_commit": "a15ac2dafa5074e447b8dd2811165f8f4be30c9f",
     "transport": "chatgpt_codex_subscription",
-    "usage_normalizer_version": 1
+    "usage_normalizer_version": 1,
+    "workload_label_source": "harness_assigned",
+    "workload_taxonomy": [
+      "repo_exploration",
+      "large_search",
+      "bug_diagnosis",
+      "bug_fix",
+      "test_debugging",
+      "feature_implementation",
+      "refactor",
+      "code_review",
+      "dependency_investigation",
+      "long_running",
+      "compaction_investigation"
+    ]
   },
   "measurement_id": "baseline-003",
   "missingness": {

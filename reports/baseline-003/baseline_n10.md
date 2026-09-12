@@ -5,11 +5,14 @@ Metadata-only report. No request/response payloads, raw fingerprints, headers, o
 ## Manifest
 
 - `tracepress_commit`: a15ac2dafa5074e447b8dd2811165f8f4be30c9f
-- `measurement_tooling_commit`: 3bd135344feced756a299f9dd7eac415e4c4d68f
+- `runtime_commit`: a15ac2dafa5074e447b8dd2811165f8f4be30c9f
 - `measurement_instrument_version`: 2
 - `runtime_instrument_version`: 2
+- `measurement_tooling_commit`: 348c5e5ea6950174f2de422a66a8f69df2383525
 - `sidecar_schema_version`: 2
 - `convergence_gate_version`: 2
+- `workload_label_source`: harness_assigned
+- `workload_taxonomy`: ['repo_exploration', 'large_search', 'bug_diagnosis', 'bug_fix', 'test_debugging', 'feature_implementation', 'refactor', 'code_review', 'dependency_investigation', 'long_running', 'compaction_investigation']
 - `codex_version`: 0.154.0
 - `model`: gpt-5.6-luna
 - `reasoning_effort`: xhigh
@@ -128,6 +131,74 @@ The composition token shares use the estimable-token subset; these tables show c
 | human_authored | message | unknown | 0 | 0.00% | 2,260,120 |
 | provider_managed | opaque_reasoning | unknown | 0 | 0.00% | 263,553 |
 | unknown | unknown | unknown | 0 | 0.00% | 1,179,318 |
+
+## Composition by workload
+
+Workload labels are harness metadata; token shares use the estimable-token subset.
+
+| Workload | Sessions | Session share | Estimated tokens | Workload token share | Bytes |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| bug_diagnosis | 1 | 10.00% | 88,244 | 7.39% | 624,470 |
+| code_review | 1 | 10.00% | 129,252 | 10.82% | 717,359 |
+| compaction_investigation | 1 | 10.00% | 81,078 | 6.79% | 594,732 |
+| dependency_investigation | 1 | 10.00% | 126,484 | 10.59% | 683,711 |
+| feature_implementation | 1 | 10.00% | 93,649 | 7.84% | 626,947 |
+| large_search | 2 | 20.00% | 241,427 | 20.21% | 1,511,195 |
+| refactor | 1 | 10.00% | 161,490 | 13.52% | 806,241 |
+| repo_exploration | 1 | 10.00% | 109,486 | 9.17% | 674,137 |
+| test_debugging | 1 | 10.00% | 163,448 | 13.68% | 921,905 |
+
+### Session-weighted detected content
+
+Each session contributes one normalized composition before averaging.
+
+| Detected kind | Mean session token share | Sessions with estimates |
+| --- | ---: | ---: |
+| json | 35.51% | 10 |
+| plain_text | 42.27% | 10 |
+| source_code | 0.65% | 10 |
+| unknown | 21.56% | 10 |
+
+### Workload x detected content
+
+| Workload | Detected kind | Estimated tokens | Share within workload | Bytes |
+| --- | --- | ---: | ---: | ---: |
+| bug_diagnosis | plain_text | 46,514 | 52.71% | 145,680 |
+| bug_diagnosis | unknown | 23,136 | 26.22% | 426,460 |
+| bug_diagnosis | json | 17,535 | 19.87% | 48,901 |
+| bug_diagnosis | source_code | 1,059 | 1.20% | 3,429 |
+| code_review | json | 58,909 | 45.58% | 154,022 |
+| code_review | plain_text | 45,839 | 35.46% | 143,385 |
+| code_review | unknown | 23,383 | 18.09% | 416,474 |
+| code_review | source_code | 1,121 | 0.87% | 3,478 |
+| compaction_investigation | plain_text | 46,412 | 57.24% | 145,625 |
+| compaction_investigation | unknown | 23,018 | 28.39% | 418,388 |
+| compaction_investigation | json | 11,179 | 13.79% | 29,278 |
+| compaction_investigation | source_code | 469 | 0.58% | 1,441 |
+| dependency_investigation | json | 56,561 | 44.72% | 107,987 |
+| dependency_investigation | plain_text | 45,945 | 36.32% | 143,547 |
+| dependency_investigation | unknown | 23,646 | 18.69% | 431,369 |
+| dependency_investigation | source_code | 332 | 0.26% | 808 |
+| feature_implementation | plain_text | 45,887 | 49.00% | 143,435 |
+| feature_implementation | json | 23,525 | 25.12% | 61,607 |
+| feature_implementation | unknown | 23,040 | 24.60% | 417,214 |
+| feature_implementation | source_code | 1,197 | 1.28% | 4,691 |
+| large_search | plain_text | 103,220 | 42.75% | 322,636 |
+| large_search | json | 83,285 | 34.50% | 222,224 |
+| large_search | unknown | 53,398 | 22.12% | 961,826 |
+| large_search | source_code | 1,524 | 0.63% | 4,509 |
+| refactor | json | 89,645 | 55.51% | 227,579 |
+| refactor | plain_text | 46,206 | 28.61% | 144,382 |
+| refactor | unknown | 25,307 | 15.67% | 433,472 |
+| refactor | source_code | 332 | 0.21% | 808 |
+| repo_exploration | plain_text | 46,797 | 42.74% | 146,840 |
+| repo_exploration | json | 38,986 | 35.61% | 107,904 |
+| repo_exploration | unknown | 23,110 | 21.11% | 417,660 |
+| repo_exploration | source_code | 593 | 0.54% | 1,733 |
+| test_debugging | json | 74,737 | 45.73% | 205,791 |
+| test_debugging | plain_text | 57,604 | 35.24% | 180,132 |
+| test_debugging | unknown | 30,692 | 18.78% | 534,972 |
+| test_debugging | source_code | 415 | 0.25% | 1,010 |
 
 ## Repetition and exposure
 

@@ -807,11 +807,18 @@ def scheduler_report(
     runtime_metrics: dict[str, Any] | None,
     analysis_integrity: dict[str, Any],
     sessions_total: int,
+    selected_session_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     """Aggregate bounded runtime scheduler evidence from a metadata-only sidecar."""
 
     raw_sessions = runtime_metrics.get("sessions", []) if isinstance(runtime_metrics, dict) else []
     sessions = [record for record in raw_sessions if isinstance(record, dict)]
+    if selected_session_ids is not None:
+        sessions = [
+            record
+            for record in sessions
+            if safe_name(record.get("session_id")) in selected_session_ids
+        ]
 
     def session_values(*keys: str) -> list[int]:
         values = []
@@ -1745,7 +1752,12 @@ def analyze_connection(
     estimator_coverage = ratio(len(estimated_block_values), len(block_rows))
     semantic_coverage = ratio(sum(semantic_values), len(semantic_values) * 10_000) if semantic_values else None
     ranking = opportunity_ranking(detected_content, category_details, estimator_coverage, semantic_coverage)
-    scheduler = scheduler_report(runtime_metrics, analysis_integrity, len(session_rows))
+    scheduler = scheduler_report(
+        runtime_metrics,
+        analysis_integrity,
+        len(session_rows),
+        selected_session_ids,
+    )
     request_kinds = Counter(safe_name(row.get("request_kind")) for row in request_rows)
     usage_cache_ratio = ratio(sum(cached_values), sum(input_total_values)) if input_total_values and cached_values else None
     attempts_with_usage = {safe_name(row.get("attempt_id")) for row in final_usage}

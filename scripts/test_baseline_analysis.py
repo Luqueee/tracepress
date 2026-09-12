@@ -524,6 +524,20 @@ class BaselineAnalysisContractTests(unittest.TestCase):
         self.assertEqual(report["missingness"]["by_workload"][0]["name"], "repo_exploration")
         self.assertEqual(report["missingness"]["unavailable_dimensions"], [])
 
+        scoped = ANALYZER.scheduler_report(
+            {
+                "sessions": [
+                    {"session_id": "s1", "high_water_items": 2},
+                    {"session_id": "other", "high_water_items": 99},
+                ]
+            },
+            {"eligible_requests": 1, "dropped_requests": 0},
+            1,
+            {"s1"},
+        )
+        self.assertEqual(scoped["sessions_with_metrics"], 1)
+        self.assertEqual(scoped["high_water_items"]["max"], 2.0)
+
 
 class BaselineConvergenceContractTests(unittest.TestCase):
     @staticmethod

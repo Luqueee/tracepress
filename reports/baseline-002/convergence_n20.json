@@ -1,0 +1,231 @@
+{
+  "current_sessions": 20,
+  "distribution_relative_tolerance": 0.1,
+  "manifest": {
+    "mismatched_report_indexes": [],
+    "pass": true,
+    "reports_with_manifest": 2,
+    "total_reports": 2
+  },
+  "maximum_sessions": 100,
+  "minimum_sessions": 40,
+  "missingness": [
+    {
+      "flagged_strata": [],
+      "pass": true
+    },
+    {
+      "flagged_strata": [],
+      "pass": true
+    }
+  ],
+  "quality": [
+    {
+      "checks": {
+        "analysis_coverage": {
+          "pass": true,
+          "target": 0.95,
+          "value": 1.0
+        },
+        "analysis_loss_rate": {
+          "pass": true,
+          "target": 0.01,
+          "value": 0.0
+        },
+        "backlog_capacity_drops": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "context_malformed": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "correlation_coverage": {
+          "pass": true,
+          "target": 0.99,
+          "value": 1.0
+        },
+        "forwarding_errors": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "measurement_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        },
+        "scheduler_counter_consistency": {
+          "pass": true,
+          "target": 0,
+          "value": 0
+        },
+        "scheduler_session_coverage": {
+          "pass": true,
+          "target": 10.0,
+          "value": 10.0
+        }
+      },
+      "pass": true
+    },
+    {
+      "checks": {
+        "analysis_coverage": {
+          "pass": true,
+          "target": 0.95,
+          "value": 1.0
+        },
+        "analysis_loss_rate": {
+          "pass": true,
+          "target": 0.01,
+          "value": 0.0
+        },
+        "backlog_capacity_drops": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "context_malformed": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "correlation_coverage": {
+          "pass": true,
+          "target": 0.99,
+          "value": 1.0
+        },
+        "forwarding_errors": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "measurement_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        },
+        "scheduler_counter_consistency": {
+          "pass": false,
+          "target": 0,
+          "value": 1
+        },
+        "scheduler_session_coverage": {
+          "pass": true,
+          "target": 20.0,
+          "value": 20.0
+        }
+      },
+      "pass": false
+    }
+  ],
+  "reasons": [
+    "minimum cohort size is 40; current is 20",
+    "two consecutive stable transitions are required",
+    "one or more measurement quality gates failed",
+    "latest batch transition is not stable"
+  ],
+  "share_tolerance": 0.02,
+  "status": "NEED_MORE_SESSIONS",
+  "transitions": [
+    {
+      "checks": {
+        "cached_input_ratio": {
+          "current": 0.9224112022217723,
+          "delta": -0.009272991275948828,
+          "previous": 0.9316841934977211,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "candidate_ranking_top3": {
+          "current": [
+            "plain_text",
+            "json",
+            "unknown"
+          ],
+          "previous": [
+            "plain_text",
+            "json",
+            "source_code"
+          ],
+          "stable": false
+        },
+        "estimated_block_size_p50": {
+          "current": 221.0,
+          "previous": 221.0,
+          "relative_delta": 0.0,
+          "stable": true,
+          "tolerance": 0.1
+        },
+        "estimated_block_size_p90": {
+          "current": 13096.0,
+          "previous": 13736.0,
+          "relative_delta": -0.046592894583576,
+          "stable": true,
+          "tolerance": 0.1
+        },
+        "exact_repetition_token_share": {
+          "current": 0.9199386858628177,
+          "delta": -0.010932880895039188,
+          "previous": 0.9308715667578569,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "json_token_share": {
+          "current": 0.8227752835499359,
+          "delta": -0.01931559915217862,
+          "previous": 0.8420908827021145,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "plain_text_token_share": {
+          "current": 0.1062009221636818,
+          "delta": 0.013141986695819952,
+          "previous": 0.09305893546786184,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "semantic_repetition_token_share": {
+          "current": 0.14408650624154068,
+          "delta": 0.01166676964866889,
+          "previous": 0.1324197365928718,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "stable_prefix_share": {
+          "current": 0.0,
+          "delta": 0.0,
+          "previous": 0.0,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "tool_definition_token_share": {
+          "current": 0.0,
+          "delta": 0.0,
+          "previous": 0.0,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "tool_result_token_share": {
+          "current": 0.8227761171021176,
+          "delta": -0.019315633316644987,
+          "previous": 0.8420917504187626,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "unknown_token_share": {
+          "current": 0.06713963724985834,
+          "delta": 0.006183206272557758,
+          "previous": 0.06095643097730059,
+          "stable": true,
+          "tolerance": 0.02
+        }
+      },
+      "current_sessions": 20,
+      "previous_sessions": 10,
+      "stable": false
+    }
+  ]
+}

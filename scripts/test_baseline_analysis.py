@@ -498,6 +498,9 @@ class BaselineAnalysisContractTests(unittest.TestCase):
                 "sessions": [
                     {
                         "session_id": "s1",
+                        "measurement_run_id": "run-s1",
+                        "tracepress_pid": 1234,
+                        "capture_complete": True,
                         "workload": "repo_exploration",
                         "concurrency_mode": "serial",
                         "high_water_items": 2,
@@ -647,6 +650,34 @@ class BaselineAnalysisContractTests(unittest.TestCase):
         )
         self.assertTrue(scoped["pass"])
         self.assertEqual(scoped["unexpected_sidecar_session_ids"], [])
+
+        legacy = {
+            "sessions": [
+                {
+                    "session_id": "s1",
+                    "analysis_admitted_total": 1,
+                    "analysis_requests_seen": 1,
+                    "processed_deferred_total": 1,
+                    "backlog_capacity_drops": 0,
+                    "high_water_items": 1,
+                    "high_water_bytes": 10,
+                    "analysis_wait_us": 5,
+                }
+            ]
+        }
+        strict = ANALYZER.scheduler_sidecar_integrity(
+            legacy,
+            ledger[:1],
+            {"s1"},
+            {"s1"},
+            measurement_instrument_version=2,
+        )
+        self.assertFalse(strict["pass"])
+        self.assertEqual(strict["per_session"][0]["status"], "legacy_uncertified")
+        self.assertEqual(
+            strict["per_session"][0]["missing_identity_fields"],
+            ["measurement_run_id", "tracepress_pid", "capture_complete"],
+        )
 
 
 class BaselineConvergenceContractTests(unittest.TestCase):

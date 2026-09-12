@@ -55,9 +55,10 @@ use tracepress_provider::{
 };
 use tracepress_proxy::{
     BackgroundTaskSpawner, CompactionObservation, ContextAnalysisDropReason, ContextAnalysisMode,
-    ContextAnalysisObservation, ContextAnalysisOutcome, ForwardId, ForwardMetadata, InboundRoute,
-    MetadataSink, MetadataSinkError, ObservationSinkError, ProviderObservationSink, ProxyConfig,
-    RequestContextObservation, TransparentProxy, TransportFailure,
+    ContextAnalysisObservation, ContextAnalysisOutcome, DeferredAnalysisMetrics, ForwardId,
+    ForwardMetadata, InboundRoute, MetadataSink, MetadataSinkError, ObservationSinkError,
+    ProviderObservationSink, ProxyConfig, RequestContextObservation, TransparentProxy,
+    TransportFailure,
 };
 use tracepress_storage::{
     ContextInspection, ContextInspectionBlock, ContextInspectionNamedEstimate,
@@ -3560,6 +3561,43 @@ fn provider_endpoint(transport: ProviderTransport) -> Result<ProviderEndpoint, S
     }
 }
 
+const MEASUREMENT_METADATA_PREFIX: &str = "TRACEPRESS_MEASUREMENT_METADATA=";
+const SCHEDULER_METRICS_PREFIX: &str = "TRACEPRESS_SCHEDULER_METRICS=";
+
+fn measurement_metadata_line(
+    measurement_run_id: Option<&str>,
+    session_id: SessionId,
+    started_at: &str,
+) -> Option<String> {
+    let measurement_run_id =
+        measurement_run_id.filter(|value| !value.is_empty() && value.len() <= 128)?;
+    let metadata = serde_json::json!({
+        "measurement_run_id": measurement_run_id,
+        "session_id": session_id.to_string(),
+        "tracepress_pid": std::process::id(),
+        "started_at": started_at,
+    });
+    Some(format!(
+        "{MEASUREMENT_METADATA_PREFIX}{}",
+        serde_json::to_string(&metadata).ok()?
+    ))
+}
+
+fn scheduler_metrics_line(metrics: &DeferredAnalysisMetrics) -> String {
+    let metrics = serde_json::json!({
+        "deferred_queue_items": metrics.queue_items,
+        "deferred_queue_bytes": metrics.queue_bytes,
+        "deferred_high_water_items": metrics.high_water_items,
+        "deferred_high_water_bytes": metrics.high_water_bytes,
+        "analysis_admitted_total": metrics.deferred_total,
+        "analysis_deferred_total": metrics.deferred_due_to_active_forwards_total,
+        "processed_deferred_total": metrics.processed_deferred_total,
+        "backlog_capacity_drops": metrics.backlog_capacity_drops,
+        "analysis_wait_us": metrics.analysis_wait_us,
+    });
+    format!("{SCHEDULER_METRICS_PREFIX}{metrics}")
+}
+
 fn configure_codex_subscription(args: &mut Vec<String>, proxy_address: std::net::SocketAddr) {
     let base_url = format!("http://{proxy_address}/v1");
     let overrides = [
@@ -3609,7 +3647,13 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         .map_err(|error| error.to_string())?;
     let proxy_address = listener.local_addr().map_err(|error| error.to_string())?;
     let started_at = current_timestamp()?;
-    let response = control(config, ControlRequest::StartSession { started_at }).await?;
+    let response = control(
+        config,
+        ControlRequest::StartSession {
+            started_at: started_at.clone(),
+        },
+    )
+    .await?;
     let (session, parent_operation_id) = match response {
         ControlResponse::Ok {
             session: Some(session),
@@ -3624,6 +3668,15 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
             return Err("daemon returned an unexpected context response".to_owned());
         }
     };
+    if let Some(metadata) = measurement_metadata_line(
+        std::env::var("TRACEPRESS_MEASUREMENT_RUN_ID")
+            .ok()
+            .as_deref(),
+        session.session_id,
+        &started_at,
+    ) {
+        println!("{metadata}");
+    }
     let SpawnedRecorder {
         proxy,
         mut recorder_task,
@@ -3685,7 +3738,12 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         // The recorder's channel must be closed before it is drained; otherwise the recorder
         // cannot observe end-of-run and wait for more events forever.
         drop(background_proxy);
-        drain_recorders(&mut recorder_task, &mut transport_task, &mut context_task).await
+        let drain_result =
+            drain_recorders(&mut recorder_task, &mut transport_task, &mut context_task).await;
+        // Emit the machine-readable scheduler snapshot only after recorder/context drain. The
+        // collector publishes it only after the child exits, binding it to this run identity.
+        println!("{}", scheduler_metrics_line(&deferred_metrics));
+        drain_result
     })
     .await
     {
@@ -4263,11 +4321,12 @@ mod tests {
         AnalysisSequence, BackgroundTaskSpawner, CONTEXT_INGESTION_QUEUE_HARD_CAP, Config,
         ContextAnalysisDropReason, ContextAnalysisInput, ContextCounters, ContextReceipt,
         ContextSnapshotId, ContextSnapshotStatus, ControlRequest, CorrelationCounters,
-        CorrelationStatus, DurableEventIngress, ObservationRecord, OperationId,
-        PendingAnalysisEvidence, RECORDER_QUEUE_ITEMS, RequestId, RunRecorder, SessionId,
-        TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator, bounded_record_provider_observation_request,
-        configure_codex_subscription, context_ingestion_queue_capacity,
-        reconcile_pending_context_with,
+        CorrelationStatus, DeferredAnalysisMetrics, DurableEventIngress, ObservationRecord,
+        OperationId, PendingAnalysisEvidence, RECORDER_QUEUE_ITEMS, RequestId, RunRecorder,
+        SessionId, TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator,
+        bounded_record_provider_observation_request, configure_codex_subscription,
+        context_ingestion_queue_capacity, measurement_metadata_line,
+        reconcile_pending_context_with, scheduler_metrics_line,
     };
 
     use tracepress_provider::{ObservationInput, ObservationLimits, parse_request, parse_response};
@@ -4289,6 +4348,45 @@ mod tests {
                 == "model_providers.tracepress_subscription.base_url=\"http://127.0.0.1:43191/v1\""
         }));
         assert_eq!(args[13], "--ephemeral");
+    }
+
+    #[test]
+    fn measurement_lines_bind_scheduler_metrics_to_run_identity()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let session_id = SessionId::generate(&UuidV7Generator::new());
+        let metadata = measurement_metadata_line(Some("run-123"), session_id, "unix-ms:1")
+            .ok_or_else(|| std::io::Error::other("bounded run id should produce metadata"))?;
+        let metadata_payload = metadata
+            .strip_prefix("TRACEPRESS_MEASUREMENT_METADATA=")
+            .ok_or_else(|| std::io::Error::other("metadata prefix"))?;
+        let metadata_json: serde_json::Value = serde_json::from_str(metadata_payload)?;
+        assert_eq!(metadata_json["measurement_run_id"], "run-123");
+        assert_eq!(metadata_json["session_id"], session_id.to_string());
+        assert_eq!(metadata_json["started_at"], "unix-ms:1");
+        assert!(metadata_json["tracepress_pid"].as_u64().is_some());
+
+        let metrics = {
+            let mut value = DeferredAnalysisMetrics::default();
+            value.queue_items = 0;
+            value.queue_bytes = 0;
+            value.high_water_items = 2;
+            value.high_water_bytes = 128;
+            value.deferred_total = 7;
+            value.deferred_due_to_active_forwards_total = 3;
+            value.processed_deferred_total = 7;
+            value.backlog_capacity_drops = 0;
+            value.analysis_wait_us = 42;
+            scheduler_metrics_line(&value)
+        };
+        let metrics_payload = metrics
+            .strip_prefix("TRACEPRESS_SCHEDULER_METRICS=")
+            .ok_or_else(|| std::io::Error::other("metrics prefix"))?;
+        let metrics_json: serde_json::Value = serde_json::from_str(metrics_payload)?;
+        assert_eq!(metrics_json["analysis_admitted_total"], 7);
+        assert_eq!(metrics_json["analysis_deferred_total"], 3);
+        assert_eq!(metrics_json["processed_deferred_total"], 7);
+        assert_eq!(metrics_json["deferred_queue_items"], 0);
+        Ok(())
     }
 
     #[test]

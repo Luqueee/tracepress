@@ -1,7 +1,7 @@
 {
   "analysis_version": 1,
   "codex_version": "0.154.0",
-  "cohort_kind": "mixed",
+  "cohort_kind": "naturalistic",
   "cohort_label": "n20",
   "detector_version": 1,
   "fingerprint_version": 1,

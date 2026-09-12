@@ -73,23 +73,23 @@ The composition token shares use the estimable-token subset; these tables show c
 
 ## Scheduler sidecar integrity
 
-- Gate: `passed`; eligible requests: 159; complete snapshots: 159.
-- Sidecar sessions: 10/10; missing: 0; capture issues: 0; counter mismatches: 0.
+- Gate: `failed`; eligible requests: 159; complete snapshots: 159.
+- Sidecar sessions: 10/10; missing: 0; capture issues: 10; counter mismatches: 0.
 - Reported analysis seen: 159; unexplained counter delta: 0.
 - Duplicate sidecar IDs: `[]`; unexpected IDs: `[]`; malformed records: 0.
 
-| Session | Eligible | Complete snapshots | Sidecar | Admitted | Processed + drops | Status | Capture classification | Missing capture fields |
-| --- | ---: | ---: | --- | ---: | ---: | --- | --- | --- |
-| 01a095aa-95bc-7070-8c48-adfddceafc9b | 18 | 18 | True | 18 | 18 | passed | complete | `[]` |
-| 01a095aa-95c5-7081-862c-8f8a48c662f3 | 24 | 24 | True | 24 | 24 | passed | complete | `[]` |
-| 01a095ad-6eff-70a3-ba33-5b5b0afec3ed | 36 | 36 | True | 36 | 36 | passed | complete | `[]` |
-| 01a095ad-6f06-7bf0-a433-802ed60247b5 | 17 | 17 | True | 17 | 17 | passed | complete | `[]` |
-| 01a095b3-4e70-7a70-bddf-112614d88b4c | 33 | 33 | True | 33 | 33 | passed | complete | `[]` |
-| 01a095b3-4e79-75c3-b152-e34981926b47 | 16 | 16 | True | 16 | 16 | passed | complete | `[]` |
-| 01a095c5-ac8f-7111-9197-c342bf4f735c | 3 | 3 | True | 3 | 3 | passed | complete | `[]` |
-| 01a095c5-ac95-7331-955b-ff4ff16ef356 | 2 | 2 | True | 2 | 2 | passed | complete | `[]` |
-| 01a095c6-4a5d-7ef0-9148-4b525137db99 | 7 | 7 | True | 7 | 7 | passed | complete | `[]` |
-| 01a095c6-4a63-7ac1-ad79-fe5a13eb454f | 3 | 3 | True | 3 | 3 | passed | complete | `[]` |
+| Session | Measurement run | PID | Sidecar file | Eligible | Complete snapshots | Admitted | Processed + drops | Status | Capture classification | Missing identity | Missing capture fields |
+| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- |
+| 01a095aa-95bc-7070-8c48-adfddceafc9b | None | unknown | None | 18 | 18 | 18 | 18 | legacy_uncertified | legacy_uncertified | `["measurement_run_id", "tracepress_pid", "capture_complete"]` | `[]` |
+| 01a095aa-95c5-7081-862c-8f8a48c662f3 | None | unknown | None | 24 | 24 | 24 | 24 | legacy_uncertified | legacy_uncertified | `["measurement_run_id", "tracepress_pid", "capture_complete"]` | `[]` |
+| 01a095ad-6eff-70a3-ba33-5b5b0afec3ed | None | unknown | None | 36 | 36 | 36 | 36 | legacy_uncertified | legacy_uncertified | `["measurement_run_id", "tracepress_pid", "capture_complete"]` | `[]` |
+| 01a095ad-6f06-7bf0-a433-802ed60247b5 | None | unknown | None | 17 | 17 | 17 | 17 | legacy_uncertified | legacy_uncertified | `["measurement_run_id", "tracepress_pid", "capture_complete"]` | `[]` |
+| 01a095b3-4e70-7a70-bddf-112614d88b4c | None | unknown | None | 33 | 33 | 33 | 33 | legacy_uncertified | legacy_uncertified | `["measurement_run_id", "tracepress_pid", "capture_complete"]` | `[]` |
+| 01a095b3-4e79-75c3-b152-e34981926b47 | None | unknown | None | 16 | 16 | 16 | 16 | legacy_uncertified | legacy_uncertified | `["measurement_run_id", "tracepress_pid", "capture_complete"]` | `[]` |
+| 01a095c5-ac8f-7111-9197-c342bf4f735c | None | unknown | None | 3 | 3 | 3 | 3 | legacy_uncertified | legacy_uncertified | `["measurement_run_id", "tracepress_pid", "capture_complete"]` | `[]` |
+| 01a095c5-ac95-7331-955b-ff4ff16ef356 | None | unknown | None | 2 | 2 | 2 | 2 | legacy_uncertified | legacy_uncertified | `["measurement_run_id", "tracepress_pid", "capture_complete"]` | `[]` |
+| 01a095c6-4a5d-7ef0-9148-4b525137db99 | None | unknown | None | 7 | 7 | 7 | 7 | legacy_uncertified | legacy_uncertified | `["measurement_run_id", "tracepress_pid", "capture_complete"]` | `[]` |
+| 01a095c6-4a63-7ac1-ad79-fe5a13eb454f | None | unknown | None | 3 | 3 | 3 | 3 | legacy_uncertified | legacy_uncertified | `["measurement_run_id", "tracepress_pid", "capture_complete"]` | `[]` |
 
 ## Provider usage
 
@@ -161,7 +161,7 @@ Drop rate is based on exclusive request outcomes, never on event count.
 
 ## Compaction
 
-- Cohort: `mixed`; requests: 1; V2: 1; legacy: 0.
+- Cohort: `naturalistic`; requests: 1; V2: 1; legacy: 0.
 - Trigger seen: 1; output seen: 1.
 
 ## Phase 4 candidate priority

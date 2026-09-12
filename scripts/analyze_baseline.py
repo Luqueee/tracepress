@@ -900,6 +900,15 @@ def scheduler_report(
                     "backlog_capacity_drops",
                     "drain_duration_us",
                     "analysis_drain_us",
+                    "measurement_run_id",
+                    "tracepress_pid",
+                    "sidecar_filename",
+                    "started_at",
+                    "finished_at",
+                    "exit_status",
+                    "capture_complete",
+                    "capture_reasons",
+                    "scheduler_capture_note",
                 }
             }
             for record in sessions
@@ -925,6 +934,7 @@ def scheduler_sidecar_integrity(
     ledger_rows: list[dict[str, Any]],
     selected_session_ids: set[str],
     known_session_ids: set[str] | None = None,
+    measurement_instrument_version: int | None = None,
 ) -> dict[str, Any]:
     """Audit scheduler sidecar counters against the request ledger per session.
 
@@ -935,6 +945,9 @@ def scheduler_sidecar_integrity(
 
     selected_ids = set(selected_session_ids)
     known_ids = set(known_session_ids) if known_session_ids is not None else selected_ids
+    identity_required = (
+        measurement_instrument_version is not None and measurement_instrument_version >= 2
+    )
     eligible_by_session: Counter[str] = Counter()
     complete_snapshots_by_session: Counter[str] = Counter()
     for row in ledger_rows:
@@ -1026,6 +1039,16 @@ def scheduler_sidecar_integrity(
 
         missing_counters = [key for key in required_counter_keys if first_int(record, key) is None]
         missing_capture_fields = [key for key in capture_keys if first_int(record, key) is None]
+        missing_identity_fields = []
+        if identity_required:
+            if not isinstance(record.get("measurement_run_id"), str) or not record.get(
+                "measurement_run_id"
+            ):
+                missing_identity_fields.append("measurement_run_id")
+            if not isinstance(record.get("tracepress_pid"), int) or record.get("tracepress_pid", 0) <= 0:
+                missing_identity_fields.append("tracepress_pid")
+            if record.get("capture_complete") is not True:
+                missing_identity_fields.append("capture_complete")
         admitted = first_int(record, "analysis_admitted_total", "admitted_total")
         seen = first_int(record, "analysis_requests_seen")
         processed = first_int(record, "processed_deferred_total")
@@ -1037,8 +1060,14 @@ def scheduler_sidecar_integrity(
         )
         note = record.get("scheduler_capture_note")
         capture_issue = bool(note) or bool(missing_capture_fields)
+        if record.get("capture_complete") is False:
+            capture_issue = True
+        if missing_identity_fields:
+            capture_issue = True
         capture_classification = (
-            "shutdown_before_capture"
+            "legacy_uncertified"
+            if missing_identity_fields
+            else "shutdown_before_capture"
             if isinstance(note, str) and "shutdown" in note.lower()
             else "harness_collection_failure"
             if capture_issue
@@ -1050,7 +1079,9 @@ def scheduler_sidecar_integrity(
             or (seen is not None and seen != eligible)
             or (processed_plus_drops is not None and admitted is not None and processed_plus_drops != admitted)
         )
-        if session_id in duplicate_ids:
+        if missing_identity_fields:
+            status = "legacy_uncertified"
+        elif session_id in duplicate_ids:
             status = "sidecar_duplicate"
         elif capture_issue:
             status = "harness_collection_failure"
@@ -1063,6 +1094,15 @@ def scheduler_sidecar_integrity(
                 **base,
                 "status": status,
                 "capture_classification": capture_classification,
+                "measurement_run_id": jsonable(record.get("measurement_run_id")),
+                "tracepress_pid": first_int(record, "tracepress_pid"),
+                "sidecar_filename": jsonable(record.get("sidecar_filename")),
+                "started_at": jsonable(record.get("started_at")),
+                "finished_at": jsonable(record.get("finished_at")),
+                "exit_status": first_int(record, "exit_status"),
+                "capture_complete": record.get("capture_complete"),
+                "capture_reasons": record.get("capture_reasons", []),
+                "missing_identity_fields": missing_identity_fields,
                 "analysis_admitted_total": admitted,
                 "analysis_requests_seen": seen,
                 "processed_deferred_total": processed,
@@ -1997,6 +2037,7 @@ def analyze_connection(
             for row in all_session_rows
             if row.get("session_id") is not None
         },
+        measurement_instrument_version,
     )
     request_kinds = Counter(safe_name(row.get("request_kind")) for row in request_rows)
     usage_cache_ratio = ratio(sum(cached_values), sum(input_total_values)) if input_total_values and cached_values else None
@@ -2262,10 +2303,10 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Reported analysis seen: {format_number(report['scheduler']['sidecar_integrity']['reported_analysis_requests_seen'])}; unexplained counter delta: {format_number(report['scheduler']['sidecar_integrity']['unexplained_counter_delta'])}.",
         f"- Duplicate sidecar IDs: `{json.dumps(report['scheduler']['sidecar_integrity']['duplicate_sidecar_session_ids'])}`; unexpected IDs: `{json.dumps(report['scheduler']['sidecar_integrity']['unexpected_sidecar_session_ids'])}`; malformed records: {len(report['scheduler']['sidecar_integrity']['malformed_sidecar_records'])}.",
         "",
-        "| Session | Eligible | Complete snapshots | Sidecar | Admitted | Processed + drops | Status | Capture classification | Missing capture fields |",
-        "| --- | ---: | ---: | --- | ---: | ---: | --- | --- | --- |",
+        "| Session | Measurement run | PID | Sidecar file | Eligible | Complete snapshots | Admitted | Processed + drops | Status | Capture classification | Missing identity | Missing capture fields |",
+        "| --- | --- | ---: | --- | ---: | ---: | ---: | ---: | --- | --- | --- | --- |",
         *[
-            f"| {row['session_id']} | {format_number(row['eligible_requests'])} | {format_number(row['complete_snapshots'])} | {row['sidecar_present']} | {format_number(row.get('analysis_admitted_total'))} | {format_number(row.get('processed_plus_capacity_drops'))} | {row['status']} | {row.get('capture_classification', 'unknown')} | `{json.dumps(row.get('missing_capture_fields', []))}` |"
+            f"| {row['session_id']} | {row.get('measurement_run_id', 'unknown')} | {format_number(row.get('tracepress_pid'))} | {row.get('sidecar_filename', 'unknown')} | {format_number(row['eligible_requests'])} | {format_number(row['complete_snapshots'])} | {format_number(row.get('analysis_admitted_total'))} | {format_number(row.get('processed_plus_capacity_drops'))} | {row['status']} | {row.get('capture_classification', 'unknown')} | `{json.dumps(row.get('missing_identity_fields', []))}` | `{json.dumps(row.get('missing_capture_fields', []))}` |"
             for row in report['scheduler']['sidecar_integrity']['per_session']
         ],
         "",

@@ -28,6 +28,7 @@ def load_script(name: str):
 
 ANALYZER = load_script("analyze_baseline.py")
 CONVERGENCE = load_script("check_baseline_convergence.py")
+BENCHMARK = load_script("benchmark_phase3.py")
 
 
 def create_fixture() -> sqlite3.Connection:
@@ -167,6 +168,35 @@ def create_fixture() -> sqlite3.Connection:
 
 
 class BaselineAnalysisContractTests(unittest.TestCase):
+    def test_benchmark_accepts_a_significant_forwarding_improvement(self) -> None:
+        comparison = {
+            "workloads": {
+                "small_json": {
+                    "dispatch_us": {
+                        "available": True,
+                        "delta_us": -500.0,
+                        "bootstrap_median_delta_ci95": {
+                            "lower_95_us": -600.0,
+                            "upper_95_us": -400.0,
+                        },
+                    },
+                    "proxy_ttfb_us": {"available": False},
+                    "proxy_ttft_us": {"available": False},
+                    "duration_us": {"available": False},
+                }
+            }
+        }
+
+        BENCHMARK.add_aa_envelope(
+            comparison,
+            {("small_json", "dispatch_us"): [{"absolute_us": 100.0, "relative": 0.1}]},
+        )
+
+        self.assertTrue(comparison["operationally_acceptable"])
+        self.assertTrue(
+            comparison["workloads"]["small_json"]["dispatch_us"]["operationally_acceptable"]
+        )
+
     def test_report_is_token_weighted_and_keeps_missing_reconciliation_unknown(self) -> None:
         connection = create_fixture()
         connection.execute(

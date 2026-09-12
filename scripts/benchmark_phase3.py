@@ -1183,7 +1183,11 @@ def add_aa_envelope(
             metric["aa_envelope_relative"] = round(relative, 5)
             metric["crosses_zero"] = crosses_zero
             metric["within_aa_envelope"] = within_envelope
-            metric["operationally_acceptable"] = crosses_zero or within_envelope
+            # A CI wholly below zero is an improvement, not a forwarding regression. Only a
+            # positive change needs to be explained by the measured A/A noise envelope.
+            metric["operationally_acceptable"] = (
+                upper <= 0.0 or crosses_zero or within_envelope
+            )
             if not metric["operationally_acceptable"]:
                 workload_operational = False
         metrics["operationally_acceptable"] = workload_operational

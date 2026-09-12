@@ -27,6 +27,22 @@ REPORT_VERSION = 1
 DEFAULT_MEASUREMENT_ID = "baseline-001"
 DEFAULT_COHORT_KIND = "naturalistic"
 DEFAULT_MEASUREMENT_INSTRUMENT_VERSION = 2
+DEFAULT_SIDECAR_SCHEMA_VERSION = 2
+DEFAULT_CONVERGENCE_GATE_VERSION = 2
+DEFAULT_WORKLOAD_LABEL_SOURCE = "harness_assigned"
+DEFAULT_WORKLOAD_TAXONOMY = (
+    "repo_exploration",
+    "large_search",
+    "bug_diagnosis",
+    "bug_fix",
+    "test_debugging",
+    "feature_implementation",
+    "refactor",
+    "code_review",
+    "dependency_investigation",
+    "long_running",
+    "compaction_investigation",
+)
 COHORT_KINDS = ("naturalistic", "compaction_calibration", "mixed")
 
 
@@ -251,6 +267,107 @@ def aggregate_cross(
         }
         for values, bucket in sorted(grouped.items(), key=lambda item: (-item[1]["estimated_tokens"], item[0]))
     ]
+
+
+def composition_by_workload(
+    blocks: list[dict[str, Any]],
+    snapshot_context: dict[str, dict[str, Any]],
+    session_metadata: dict[str, dict[str, Any]],
+    session_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    """Report token-weighted and session-weighted composition by harness workload label."""
+
+    selected_sessions = session_ids or {
+        safe_name(context.get("session_id")) for context in snapshot_context.values()
+    }
+    workload_by_session = {
+        session_id: safe_name(session_metadata.get(session_id, {}).get("workload"))
+        for session_id in selected_sessions
+    }
+    workload_sessions: dict[str, set[str]] = defaultdict(set)
+    workload_content: dict[str, dict[str, dict[str, int]]] = defaultdict(
+        lambda: defaultdict(lambda: {"block_count": 0, "raw_bytes": 0, "estimated_tokens": 0})
+    )
+    session_content: dict[str, Counter[str]] = defaultdict(Counter)
+    session_totals: Counter[str] = Counter()
+    for block in blocks:
+        context = snapshot_context.get(safe_name(block.get("snapshot_id")), {})
+        session_id = safe_name(context.get("session_id"))
+        workload = workload_by_session.get(session_id, "unknown")
+        detected = safe_name(block.get("detected_kind"))
+        workload_sessions[workload].add(session_id)
+        bucket = workload_content[workload][detected]
+        bucket["block_count"] += 1
+        bucket["raw_bytes"] += int_value(block, "raw_bytes") or 0
+        estimated = int_value(block, "estimated_tokens")
+        if estimated is not None:
+            bucket["estimated_tokens"] += estimated
+            session_content[session_id][detected] += estimated
+            session_totals[session_id] += estimated
+
+    total_estimated_tokens = sum(
+        bucket["estimated_tokens"]
+        for content in workload_content.values()
+        for bucket in content.values()
+    )
+    total_raw_bytes = sum(
+        bucket["raw_bytes"]
+        for content in workload_content.values()
+        for bucket in content.values()
+    )
+    total_sessions = len(selected_sessions)
+    workload_rows = []
+    for workload in sorted(workload_sessions):
+        content = workload_content.get(workload, {})
+        workload_estimated_tokens = sum(bucket["estimated_tokens"] for bucket in content.values())
+        workload_bytes = sum(bucket["raw_bytes"] for bucket in content.values())
+        content_rows = [
+            {
+                "name": detected,
+                **bucket,
+                "token_share": ratio(bucket["estimated_tokens"], workload_estimated_tokens),
+                "bytes_share": ratio(bucket["raw_bytes"], workload_bytes),
+            }
+            for detected, bucket in sorted(
+                content.items(), key=lambda item: (-item[1]["estimated_tokens"], item[0])
+            )
+        ]
+        workload_rows.append(
+            {
+                "name": workload,
+                "session_count": len(workload_sessions[workload]),
+                "session_share": ratio(len(workload_sessions[workload]), total_sessions),
+                "estimated_tokens": workload_estimated_tokens,
+                "workload_token_share": ratio(workload_estimated_tokens, total_estimated_tokens),
+                "raw_bytes": workload_bytes,
+                "bytes_share": ratio(workload_bytes, total_raw_bytes),
+                "by_detected_content": content_rows,
+            }
+        )
+
+    sessions_with_estimates = [session_id for session_id, total in session_totals.items() if total > 0]
+    detected_names = sorted({detected for content in session_content.values() for detected in content})
+    session_weighted = [
+        {
+            "name": detected,
+            "sessions_with_estimates": len(sessions_with_estimates),
+            "mean_session_token_share": (
+                statistics.mean(
+                    session_content[session_id].get(detected, 0) / session_totals[session_id]
+                    for session_id in sessions_with_estimates
+                )
+                if sessions_with_estimates
+                else None
+            ),
+        }
+        for detected in detected_names
+    ]
+    return {
+        "by_workload": workload_rows,
+        "session_weighted_detected_content": session_weighted,
+        "sessions_total": total_sessions,
+        "sessions_with_estimates": len(sessions_with_estimates),
+    }
 
 
 def fingerprint_value(value: Any) -> bytes | None:
@@ -1165,7 +1282,9 @@ def scheduler_sidecar_integrity(
         "sessions_with_sidecar": len(records_by_session),
         "sessions_missing_sidecar": len(selected_ids - set(records_by_session)),
         "sessions_with_capture_issues": sum(
-            1 for row in per_session if row["capture_classification"] != "complete"
+            1
+            for row in per_session
+            if row.get("capture_classification", "sidecar_missing") != "complete"
         ),
         "counter_mismatch_sessions": sum(
             1
@@ -1737,6 +1856,7 @@ def analyze_connection(
     cohort_kind: str = DEFAULT_COHORT_KIND,
     tracepress_commit: str = "unknown",
     codex_version: str = "unknown",
+    measurement_tooling_commit: str = "unknown",
     measurement_instrument_version: int = DEFAULT_MEASUREMENT_INSTRUMENT_VERSION,
     runtime_metrics: dict[str, Any] | None = None,
     session_ids: set[str] | None = None,
@@ -2019,6 +2139,14 @@ def analyze_connection(
         for record in (runtime_metrics or {}).get("sessions", [])
         if isinstance(record, dict) and record.get("session_id") is not None
     }
+    composition.update(
+        composition_by_workload(
+            block_rows,
+            snapshot_context,
+            runtime_session_metadata,
+            selected_session_ids,
+        )
+    )
     missingness = missingness_report(
         ledger_rows,
         snapshot_visible_tokens,
@@ -2069,7 +2197,14 @@ def analyze_connection(
         "cohort_label": cohort_label,
         "manifest": {
             "tracepress_commit": tracepress_commit,
+            "runtime_commit": tracepress_commit,
             "measurement_instrument_version": measurement_instrument_version,
+            "runtime_instrument_version": measurement_instrument_version,
+            "measurement_tooling_commit": measurement_tooling_commit,
+            "sidecar_schema_version": DEFAULT_SIDECAR_SCHEMA_VERSION,
+            "convergence_gate_version": DEFAULT_CONVERGENCE_GATE_VERSION,
+            "workload_label_source": DEFAULT_WORKLOAD_LABEL_SOURCE,
+            "workload_taxonomy": list(DEFAULT_WORKLOAD_TAXONOMY),
             "codex_version": codex_version,
             "model": distinct_values(request_rows, "model"),
             "reasoning_effort": distinct_values(request_rows, "reasoning_effort"),
@@ -2346,6 +2481,50 @@ def render_markdown(report: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "## Composition by workload",
+            "",
+            "Workload labels are harness metadata; token shares use the estimable-token subset.",
+            "",
+            "| Workload | Sessions | Session share | Estimated tokens | Workload token share | Bytes |",
+            "| --- | ---: | ---: | ---: | ---: | ---: |",
+        ]
+    )
+    for row in report["composition"]["by_workload"]:
+        lines.append(
+            f"| {row['name']} | {format_number(row['session_count'])} | {format_pct(row['session_share'])} | {format_number(row['estimated_tokens'])} | {format_pct(row['workload_token_share'])} | {format_number(row['raw_bytes'])} |"
+        )
+    lines.extend(
+        [
+            "",
+            "### Session-weighted detected content",
+            "",
+            "Each session contributes one normalized composition before averaging.",
+            "",
+            "| Detected kind | Mean session token share | Sessions with estimates |",
+            "| --- | ---: | ---: |",
+        ]
+    )
+    for row in report["composition"]["session_weighted_detected_content"]:
+        lines.append(
+            f"| {row['name']} | {format_pct(row['mean_session_token_share'])} | {format_number(row['sessions_with_estimates'])} |"
+        )
+    lines.extend(
+        [
+            "",
+            "### Workload x detected content",
+            "",
+            "| Workload | Detected kind | Estimated tokens | Share within workload | Bytes |",
+            "| --- | --- | ---: | ---: | ---: |",
+        ]
+    )
+    for workload in report["composition"]["by_workload"]:
+        for row in workload["by_detected_content"]:
+            lines.append(
+                f"| {workload['name']} | {row['name']} | {format_number(row['estimated_tokens'])} | {format_pct(row['token_share'])} | {format_number(row['raw_bytes'])} |"
+            )
+    lines.extend(
+        [
+            "",
             "## Repetition and exposure",
             "",
             f"- Exact repeated blocks: {format_number(report['repetition']['exact_repeated_blocks'])}; semantic: {format_number(report['repetition']['semantic_repeated_blocks'])}.",
@@ -2478,6 +2657,10 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--tracepress-commit", default=os.environ.get("TRACEPRESS_COMMIT", "unknown"))
     parser.add_argument("--codex-version", default=os.environ.get("CODEX_VERSION", "unknown"))
     parser.add_argument(
+        "--measurement-tooling-commit",
+        default=os.environ.get("TRACEPRESS_MEASUREMENT_TOOLING_COMMIT", "unknown"),
+    )
+    parser.add_argument(
         "--runtime-metrics",
         type=Path,
         help="metadata-only scheduler metrics JSON sidecar captured per session",
@@ -2517,6 +2700,7 @@ def main(arguments: list[str] | None = None) -> int:
             cohort_kind=options.cohort_kind,
             tracepress_commit=options.tracepress_commit,
             codex_version=options.codex_version,
+            measurement_tooling_commit=options.measurement_tooling_commit,
             measurement_instrument_version=options.measurement_instrument_version,
             runtime_metrics=runtime_metrics,
             session_ids=set(options.include_session_ids) if options.include_session_ids else None,

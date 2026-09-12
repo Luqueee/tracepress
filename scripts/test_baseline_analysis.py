@@ -168,6 +168,37 @@ def create_fixture() -> sqlite3.Connection:
 
 
 class BaselineAnalysisContractTests(unittest.TestCase):
+    def test_composition_by_workload_reports_token_and_session_weighted_views(self) -> None:
+        result = ANALYZER.composition_by_workload(
+            [
+                {"snapshot_id": "snap-1", "detected_kind": "plain_text", "raw_bytes": 30, "estimated_tokens": 3},
+                {"snapshot_id": "snap-1", "detected_kind": "json", "raw_bytes": 10, "estimated_tokens": 1},
+                {"snapshot_id": "snap-2", "detected_kind": "json", "raw_bytes": 60, "estimated_tokens": 6},
+            ],
+            {
+                "snap-1": {"session_id": "s1"},
+                "snap-2": {"session_id": "s2"},
+            },
+            {
+                "s1": {"workload": "exploration"},
+                "s2": {"workload": "debugging"},
+            },
+            {"s1", "s2"},
+        )
+
+        by_workload = {row["name"]: row for row in result["by_workload"]}
+        self.assertEqual(result["sessions_total"], 2)
+        self.assertEqual(by_workload["exploration"]["session_count"], 1)
+        self.assertEqual(by_workload["exploration"]["estimated_tokens"], 4)
+        self.assertEqual(by_workload["exploration"]["workload_token_share"], 0.4)
+        self.assertEqual(by_workload["debugging"]["workload_token_share"], 0.6)
+        session_weighted = {
+            row["name"]: row["mean_session_token_share"]
+            for row in result["session_weighted_detected_content"]
+        }
+        self.assertEqual(session_weighted["plain_text"], 0.375)
+        self.assertEqual(session_weighted["json"], 0.625)
+
     def test_benchmark_accepts_a_significant_forwarding_improvement(self) -> None:
         comparison = {
             "workloads": {
@@ -485,6 +516,11 @@ class BaselineAnalysisContractTests(unittest.TestCase):
         self.assertEqual(manifest["cohort_kind"], "naturalistic")
         self.assertEqual(manifest["tracepress_commit"], "70957bba")
         self.assertEqual(manifest["analysis_version"], 1)
+        self.assertEqual(manifest["runtime_commit"], "70957bba")
+        self.assertEqual(manifest["sidecar_schema_version"], 2)
+        self.assertEqual(manifest["convergence_gate_version"], 2)
+        self.assertEqual(manifest["workload_label_source"], "harness_assigned")
+        self.assertIn("repo_exploration", manifest["workload_taxonomy"])
 
     def test_report_aggregates_scheduler_metrics_from_metadata_sidecar(self) -> None:
         report = ANALYZER.analyze_connection(
@@ -717,6 +753,29 @@ class BaselineAnalysisContractTests(unittest.TestCase):
         self.assertTrue(result["pass"])
         self.assertEqual(result["per_session"][0]["status"], "passed")
         self.assertEqual(result["per_session"][0]["missing_capture_fields"], [])
+
+    def test_scheduler_sidecar_integrity_reports_missing_v2_sidecar(self) -> None:
+        result = ANALYZER.scheduler_sidecar_integrity(
+            {"sessions": []},
+            [
+                {
+                    "session_id": "s1",
+                    "provider_request_id": "r1",
+                    "eligible": True,
+                    "outcome": "Complete",
+                    "snapshot_id": "snap-1",
+                    "snapshot_status": "complete",
+                }
+            ],
+            {"s1"},
+            {"s1"},
+            measurement_instrument_version=2,
+        )
+
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["status"], "failed")
+        self.assertEqual(result["sessions_missing_sidecar"], 1)
+        self.assertEqual(result["sessions_with_capture_issues"], 1)
 
 
 class BaselineConvergenceContractTests(unittest.TestCase):

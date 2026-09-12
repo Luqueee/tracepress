@@ -446,6 +446,43 @@ class BaselineAnalysisContractTests(unittest.TestCase):
         self.assertEqual(manifest["tracepress_commit"], "70957bba")
         self.assertEqual(manifest["analysis_version"], 1)
 
+    def test_report_aggregates_scheduler_metrics_from_metadata_sidecar(self) -> None:
+        report = ANALYZER.analyze_connection(
+            create_fixture(),
+            measurement_id="baseline-002",
+            cohort_label="n10",
+            cohort_kind="naturalistic",
+            tracepress_commit="a15ac2d",
+            codex_version="0.154.0",
+            runtime_metrics={
+                "sessions": [
+                    {
+                        "session_id": "s1",
+                        "workload": "repo_exploration",
+                        "concurrency_mode": "serial",
+                        "high_water_items": 2,
+                        "high_water_bytes": 176717,
+                        "analysis_wait_us": 666,
+                        "deferred_total": 1,
+                        "processed_deferred_total": 1,
+                        "backlog_capacity_drops": 0,
+                    }
+                ]
+            },
+        )
+
+        scheduler = report["scheduler"]
+        self.assertEqual(scheduler["sessions_with_metrics"], 1)
+        self.assertEqual(scheduler["deferred_total"], 1)
+        self.assertEqual(scheduler["processed_deferred_total"], 1)
+        self.assertEqual(scheduler["backlog_capacity_drops"], 0)
+        self.assertEqual(scheduler["analysis_deferral_rate"], 1.0)
+        self.assertEqual(scheduler["analysis_loss_rate"], 0.0)
+        self.assertEqual(scheduler["high_water_items"]["p90"], 2.0)
+        self.assertEqual(scheduler["analysis_wait_us"]["p50"], 666.0)
+        self.assertEqual(report["missingness"]["by_workload"][0]["name"], "repo_exploration")
+        self.assertEqual(report["missingness"]["unavailable_dimensions"], [])
+
 
 class BaselineConvergenceContractTests(unittest.TestCase):
     @staticmethod
@@ -512,6 +549,25 @@ class BaselineConvergenceContractTests(unittest.TestCase):
         result = CONVERGENCE.evaluate_reports(reports)
         self.assertEqual(result["status"], "NEED_MORE_SESSIONS")
         self.assertIn("missingness is above 5% in an important request stratum", result["reasons"])
+
+    def test_convergence_rejects_scheduler_loss_or_missing_sidecar_sessions(self) -> None:
+        reports = [self.report(20), self.report(30), self.report(40)]
+        for report in reports:
+            report["scheduler"] = {
+                "available": True,
+                "sessions_with_metrics": report["dataset"]["sessions_total"],
+                "analysis_loss_rate": 0.0,
+                "backlog_capacity_drops": 0,
+            }
+        reports[-1]["scheduler"]["analysis_loss_rate"] = 0.02
+        result = CONVERGENCE.evaluate_reports(reports)
+        self.assertEqual(result["status"], "NEED_MORE_SESSIONS")
+        self.assertIn("one or more measurement quality gates failed", result["reasons"])
+
+        reports[-1]["scheduler"]["analysis_loss_rate"] = 0.0
+        reports[-1]["scheduler"]["sessions_with_metrics"] = 39
+        result = CONVERGENCE.evaluate_reports(reports)
+        self.assertEqual(result["status"], "NEED_MORE_SESSIONS")
 
 
 if __name__ == "__main__":

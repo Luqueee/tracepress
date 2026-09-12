@@ -119,6 +119,9 @@ def _missingness_gate(report: dict[str, Any]) -> dict[str, Any]:
         "by_request_size_quartile",
         "by_context_size_quartile",
         "by_observation_status",
+        "by_workload",
+        "by_concurrency_mode",
+        "by_turn_index",
     ):
         for row in missingness.get(dimension, []) or []:
             eligible = _number(row.get("eligible_requests"))
@@ -200,6 +203,31 @@ def _quality_gate(report: dict[str, Any]) -> dict[str, Any]:
         "target": 0,
         "pass": values["context_malformed"] == 0,
     }
+    scheduler = report.get("scheduler")
+    if isinstance(scheduler, dict) and scheduler.get("available"):
+        loss_rate = _number(scheduler.get("analysis_loss_rate"))
+        capacity_drops = _number(scheduler.get("backlog_capacity_drops"))
+        sessions_total = _number(report.get("dataset", {}).get("sessions_total"))
+        sessions_with_metrics = _number(scheduler.get("sessions_with_metrics"))
+        checks["analysis_loss_rate"] = {
+            "value": loss_rate,
+            "target": 0.01,
+            "pass": loss_rate is not None and loss_rate <= 0.01,
+        }
+        checks["backlog_capacity_drops"] = {
+            "value": capacity_drops,
+            "target": 0,
+            "pass": capacity_drops == 0,
+        }
+        checks["scheduler_session_coverage"] = {
+            "value": sessions_with_metrics,
+            "target": sessions_total,
+            "pass": (
+                sessions_total is not None
+                and sessions_with_metrics is not None
+                and sessions_with_metrics == sessions_total
+            ),
+        }
     integrity = report.get("analysis_integrity", {}).get(
         "measurement_integrity",
         report.get("quality", {}).get("measurement_integrity", "passed"),

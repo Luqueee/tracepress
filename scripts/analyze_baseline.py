@@ -662,6 +662,7 @@ def missingness_report(
     ledger: list[dict[str, Any]],
     snapshot_visible_tokens: dict[str, int],
     cohort_kind: str,
+    session_metadata: dict[str, dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     """Describe whether missing analysis is concentrated in observable request strata."""
 
@@ -679,6 +680,7 @@ def missingness_report(
 
     session_counts: Counter[str] = Counter(safe_name(row.get("session_id")) for row in eligible)
     session_indexes: Counter[str] = Counter()
+    session_metadata = session_metadata or {}
     for row in ledger:
         if not row.get("eligible"):
             continue
@@ -690,6 +692,17 @@ def missingness_report(
         row["request_size_quartile"] = _quartile_label(request_size, request_boundaries)
         context_size = snapshot_visible_tokens.get(safe_name(row.get("snapshot_id")))
         row["context_size_quartile"] = _quartile_label(context_size, context_boundaries)
+        metadata = session_metadata.get(session_id, {})
+        row["workload"] = _nullable_name(metadata.get("workload"))
+        row["concurrency_mode"] = _nullable_name(metadata.get("concurrency_mode"))
+
+    workload_available = bool(session_metadata)
+    concurrency_available = bool(session_metadata)
+    unavailable_dimensions = []
+    if not workload_available:
+        unavailable_dimensions.append("workload")
+    if not concurrency_available:
+        unavailable_dimensions.append("concurrency_mode")
 
     return {
         "cohort_kind": cohort_kind,
@@ -702,7 +715,94 @@ def missingness_report(
         "by_turn_index": _outcome_group(eligible, "turn_index"),
         "by_session_request_count": _outcome_group(eligible, "session_request_count"),
         "by_observation_status": _outcome_group(eligible, "observation_status"),
-        "unavailable_dimensions": ["workload", "concurrency_mode"],
+        "by_workload": _outcome_group(eligible, "workload") if workload_available else [],
+        "by_concurrency_mode": (
+            _outcome_group(eligible, "concurrency_mode") if concurrency_available else []
+        ),
+        "unavailable_dimensions": unavailable_dimensions,
+    }
+
+
+def scheduler_report(
+    runtime_metrics: dict[str, Any] | None,
+    analysis_integrity: dict[str, Any],
+    sessions_total: int,
+) -> dict[str, Any]:
+    """Aggregate bounded runtime scheduler evidence from a metadata-only sidecar."""
+
+    raw_sessions = runtime_metrics.get("sessions", []) if isinstance(runtime_metrics, dict) else []
+    sessions = [record for record in raw_sessions if isinstance(record, dict)]
+
+    def session_values(*keys: str) -> list[int]:
+        values = []
+        for session in sessions:
+            value = first_int(session, *keys)
+            if value is not None:
+                values.append(value)
+        return values
+
+    def session_total(*keys: str) -> int:
+        return sum(session_values(*keys))
+
+    deferred_total = session_total("deferred_total", "analysis_deferred_total")
+    admitted_total = session_total("analysis_admitted_total", "admitted_total")
+    processed_total = session_total("processed_deferred_total")
+    capacity_drops = session_total("backlog_capacity_drops")
+    high_water_items = session_values("high_water_items", "deferred_high_water_items")
+    high_water_bytes = session_values("high_water_bytes", "deferred_high_water_bytes")
+    wait_us = session_values("analysis_wait_us")
+    drain_us = session_values("drain_duration_us", "analysis_drain_us")
+    eligible = analysis_integrity["eligible_requests"]
+    dropped = analysis_integrity["dropped_requests"]
+
+    return {
+        "available": bool(sessions),
+        "sessions_with_metrics": len(sessions),
+        "sessions_missing_metrics": max(sessions_total - len(sessions), 0) if sessions else None,
+        "admitted_total": admitted_total if sessions else None,
+        "deferred_total": deferred_total if sessions else None,
+        "processed_deferred_total": processed_total if sessions else None,
+        "backlog_capacity_drops": capacity_drops if sessions else None,
+        "analysis_deferral_rate": ratio(deferred_total, eligible) if sessions else None,
+        "analysis_loss_rate": ratio(dropped, eligible) if sessions else None,
+        "high_water_items": distribution(high_water_items),
+        "high_water_bytes": distribution(high_water_bytes),
+        "analysis_wait_us": distribution(wait_us),
+        "drain_duration_us": distribution(drain_us),
+        "session_metadata": [
+            {
+                key: jsonable(value)
+                for key, value in record.items()
+                if key
+                in {
+                    "session_id",
+                    "workload",
+                    "concurrency_mode",
+                    "high_water_items",
+                    "high_water_bytes",
+                    "analysis_wait_us",
+                    "deferred_total",
+                    "analysis_deferred_total",
+                    "processed_deferred_total",
+                    "backlog_capacity_drops",
+                    "drain_duration_us",
+                    "analysis_drain_us",
+                }
+            }
+            for record in sessions
+        ],
+        "source": "metadata_sidecar",
+        "notes": [
+            "deferral is waiting/admission, not analysis loss",
+            "loss rate is derived from exclusive request outcomes",
+            "high-water values are per-session maxima",
+            "runtime metrics contain no request or response payloads",
+        ],
+        "accounting": {
+            "eligible_requests": eligible,
+            "dropped_requests": dropped,
+            "admitted_total": admitted_total if sessions else None,
+        },
     }
 
 
@@ -1156,6 +1256,7 @@ def analyze_connection(
     tracepress_commit: str = "unknown",
     codex_version: str = "unknown",
     measurement_instrument_version: int = DEFAULT_MEASUREMENT_INSTRUMENT_VERSION,
+    runtime_metrics: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     connection.row_factory = sqlite3.Row
     session_rows = rows(connection, "sessions", ("session_id", "state", "ended_at"))
@@ -1373,10 +1474,21 @@ def analyze_connection(
         "provider_cache_comparison": "descriptive_only",
     }
     unknown = unknown_report(block_rows, snapshot_context)
-    missingness = missingness_report(ledger_rows, snapshot_visible_tokens, cohort_kind)
+    runtime_session_metadata = {
+        safe_name(record.get("session_id")): record
+        for record in (runtime_metrics or {}).get("sessions", [])
+        if isinstance(record, dict) and record.get("session_id") is not None
+    }
+    missingness = missingness_report(
+        ledger_rows,
+        snapshot_visible_tokens,
+        cohort_kind,
+        runtime_session_metadata,
+    )
     estimator_coverage = ratio(len(estimated_block_values), len(block_rows))
     semantic_coverage = ratio(sum(semantic_values), len(semantic_values) * 10_000) if semantic_values else None
     ranking = opportunity_ranking(detected_content, category_details, estimator_coverage, semantic_coverage)
+    scheduler = scheduler_report(runtime_metrics, analysis_integrity, len(session_rows))
     request_kinds = Counter(safe_name(row.get("request_kind")) for row in request_rows)
     usage_cache_ratio = ratio(sum(cached_values), sum(input_total_values)) if input_total_values and cached_values else None
     attempts_with_usage = {safe_name(row.get("attempt_id")) for row in final_usage}
@@ -1462,6 +1574,9 @@ def analyze_connection(
             "snapshot_statuses": dict(distinct_statuses),
             "event_drop_reasons": dict(drop_reasons),
             "event_drop_work": dict(drop_work),
+            "analysis_deferral_rate": scheduler["analysis_deferral_rate"],
+            "analysis_loss_rate": scheduler["analysis_loss_rate"],
+            "backlog_capacity_drops": scheduler["backlog_capacity_drops"],
         },
         "provider_usage": {
             "rows": len(usage_rows),
@@ -1493,6 +1608,7 @@ def analyze_connection(
         "unknown": unknown,
         "repetition": repetition,
         "stable_prefix": stable_prefix,
+        "scheduler": scheduler,
         "compaction": compaction_report(
             request_rows,
             attempts_by_request,
@@ -1590,6 +1706,17 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Token-estimation coverage by blocks: {format_pct(quality['token_estimation_coverage']['by_blocks'])}.",
         f"- Semantic coverage mean: {format_pct(quality['semantic_coverage']['mean'])}.",
         f"- Provider observation partial: {format_number(quality['provider_observation_partial'])}.",
+        f"- Analysis deferral rate: {format_pct(quality['analysis_deferral_rate'])}.",
+        f"- Analysis loss rate: {format_pct(quality['analysis_loss_rate'])}.",
+        f"- Backlog capacity drops: {format_number(quality['backlog_capacity_drops'])}.",
+        "",
+        "## Deferred-analysis scheduler",
+        "",
+        f"- Runtime sidecar available: `{report['scheduler']['available']}`; sessions with metrics: {format_number(report['scheduler']['sessions_with_metrics'])}.",
+        f"- Admitted: {format_number(report['scheduler']['admitted_total'])}; deferred: {format_number(report['scheduler']['deferred_total'])}; processed: {format_number(report['scheduler']['processed_deferred_total'])}.",
+        f"- High-water items P50/P90/P99: {format_number(report['scheduler']['high_water_items']['p50'])}/{format_number(report['scheduler']['high_water_items']['p90'])}/{format_number(report['scheduler']['high_water_items']['p99'])}.",
+        f"- High-water bytes P50/P90/P99: {format_number(report['scheduler']['high_water_bytes']['p50'])}/{format_number(report['scheduler']['high_water_bytes']['p90'])}/{format_number(report['scheduler']['high_water_bytes']['p99'])}.",
+        f"- Analysis wait µs P50/P90/P99: {format_number(report['scheduler']['analysis_wait_us']['p50'])}/{format_number(report['scheduler']['analysis_wait_us']['p90'])}/{format_number(report['scheduler']['analysis_wait_us']['p99'])}.",
         "",
         "## Provider usage",
         "",
@@ -1621,6 +1748,8 @@ def render_markdown(report: dict[str, Any]) -> str:
             f"- Request-size quartile boundaries: `{json.dumps(report['missingness']['request_size_boundaries'])}`.",
             f"- Context-size quartile boundaries: `{json.dumps(report['missingness']['context_size_boundaries'])}`.",
             f"- Unavailable dimensions: `{json.dumps(report['missingness']['unavailable_dimensions'])}`.",
+            f"- Workload strata: `{json.dumps(report['missingness']['by_workload'], sort_keys=True)}`.",
+            f"- Concurrency strata: `{json.dumps(report['missingness']['by_concurrency_mode'], sort_keys=True)}`.",
             "",
             "## Compaction",
             "",
@@ -1700,6 +1829,20 @@ def write_report_artifacts(report: dict[str, Any], output_dir: Path) -> tuple[Pa
     return json_path, markdown_path, manifest_path
 
 
+def read_runtime_metrics(path: Path | None) -> dict[str, Any] | None:
+    """Read a metadata-only scheduler sidecar without accepting payload-bearing records."""
+
+    if path is None:
+        return None
+    try:
+        value = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError(f"invalid runtime metrics sidecar: {path}: {error}") from error
+    if not isinstance(value, dict) or not isinstance(value.get("sessions"), list):
+        raise ValueError("runtime metrics sidecar must contain a sessions list")
+    return value
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", type=Path, default=default_database())
@@ -1709,6 +1852,11 @@ def build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--cohort-kind", choices=COHORT_KINDS, default=DEFAULT_COHORT_KIND)
     parser.add_argument("--tracepress-commit", default=os.environ.get("TRACEPRESS_COMMIT", "unknown"))
     parser.add_argument("--codex-version", default=os.environ.get("CODEX_VERSION", "unknown"))
+    parser.add_argument(
+        "--runtime-metrics",
+        type=Path,
+        help="metadata-only scheduler metrics JSON sidecar captured per session",
+    )
     parser.add_argument(
         "--measurement-instrument-version",
         type=int,
@@ -1728,6 +1876,7 @@ def main(arguments: list[str] | None = None) -> int:
     if not options.database.is_file():
         parser.error(f"database does not exist: {options.database}")
     try:
+        runtime_metrics = read_runtime_metrics(options.runtime_metrics)
         database_uri = f"file:{options.database.resolve()}?mode=ro"
         connection = sqlite3.connect(database_uri, uri=True)
         report = analyze_connection(
@@ -1738,8 +1887,9 @@ def main(arguments: list[str] | None = None) -> int:
             tracepress_commit=options.tracepress_commit,
             codex_version=options.codex_version,
             measurement_instrument_version=options.measurement_instrument_version,
+            runtime_metrics=runtime_metrics,
         )
-    except sqlite3.DatabaseError as error:
+    except (sqlite3.DatabaseError, ValueError) as error:
         print(f"baseline analysis failed: {error}", file=sys.stderr)
         return 1
     finally:

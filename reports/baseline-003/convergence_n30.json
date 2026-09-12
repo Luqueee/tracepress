@@ -1,0 +1,396 @@
+{
+  "current_sessions": 30,
+  "distribution_relative_tolerance": 0.1,
+  "manifest": {
+    "mismatched_report_indexes": [],
+    "pass": true,
+    "reports_with_manifest": 3,
+    "total_reports": 3
+  },
+  "maximum_sessions": 100,
+  "minimum_sessions": 40,
+  "missingness": [
+    {
+      "flagged_strata": [],
+      "pass": true
+    },
+    {
+      "flagged_strata": [],
+      "pass": true
+    },
+    {
+      "flagged_strata": [],
+      "pass": true
+    }
+  ],
+  "quality": [
+    {
+      "checks": {
+        "analysis_coverage": {
+          "pass": true,
+          "target": 0.95,
+          "value": 1.0
+        },
+        "analysis_loss_rate": {
+          "pass": true,
+          "target": 0.01,
+          "value": 0.0
+        },
+        "backlog_capacity_drops": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "context_malformed": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "correlation_coverage": {
+          "pass": true,
+          "target": 0.99,
+          "value": 1.0
+        },
+        "forwarding_errors": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "measurement_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        },
+        "scheduler_counter_consistency": {
+          "pass": true,
+          "target": 0,
+          "value": 0
+        },
+        "scheduler_session_coverage": {
+          "pass": true,
+          "target": 10.0,
+          "value": 10.0
+        },
+        "scheduler_sidecar_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        }
+      },
+      "pass": true
+    },
+    {
+      "checks": {
+        "analysis_coverage": {
+          "pass": true,
+          "target": 0.95,
+          "value": 1.0
+        },
+        "analysis_loss_rate": {
+          "pass": true,
+          "target": 0.01,
+          "value": 0.0
+        },
+        "backlog_capacity_drops": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "context_malformed": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "correlation_coverage": {
+          "pass": true,
+          "target": 0.99,
+          "value": 1.0
+        },
+        "forwarding_errors": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "measurement_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        },
+        "scheduler_counter_consistency": {
+          "pass": true,
+          "target": 0,
+          "value": 0
+        },
+        "scheduler_session_coverage": {
+          "pass": true,
+          "target": 20.0,
+          "value": 20.0
+        },
+        "scheduler_sidecar_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        }
+      },
+      "pass": true
+    },
+    {
+      "checks": {
+        "analysis_coverage": {
+          "pass": true,
+          "target": 0.95,
+          "value": 1.0
+        },
+        "analysis_loss_rate": {
+          "pass": true,
+          "target": 0.01,
+          "value": 0.0
+        },
+        "backlog_capacity_drops": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "context_malformed": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "correlation_coverage": {
+          "pass": true,
+          "target": 0.99,
+          "value": 1.0
+        },
+        "forwarding_errors": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "measurement_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        },
+        "scheduler_counter_consistency": {
+          "pass": true,
+          "target": 0,
+          "value": 0
+        },
+        "scheduler_session_coverage": {
+          "pass": true,
+          "target": 30.0,
+          "value": 30.0
+        },
+        "scheduler_sidecar_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        }
+      },
+      "pass": true
+    }
+  ],
+  "reasons": [
+    "minimum cohort size is 40; current is 30",
+    "latest batch transition is not stable",
+    "the last two batch transitions are not both stable"
+  ],
+  "share_tolerance": 0.02,
+  "status": "NEED_MORE_SESSIONS",
+  "transitions": [
+    {
+      "checks": {
+        "cached_input_ratio": {
+          "current": 0.7558104321725365,
+          "delta": 0.009841505696179254,
+          "previous": 0.7459689264763573,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "candidate_ranking_top3": {
+          "current": [
+            "plain_text",
+            "json",
+            "unknown"
+          ],
+          "previous": [
+            "plain_text",
+            "json",
+            "unknown"
+          ],
+          "stable": true
+        },
+        "estimated_block_size_p50": {
+          "current": 210.0,
+          "previous": 210.0,
+          "relative_delta": 0.0,
+          "stable": true,
+          "tolerance": 0.1
+        },
+        "estimated_block_size_p90": {
+          "current": 5599.0,
+          "previous": 5599.0,
+          "relative_delta": 0.0,
+          "stable": true,
+          "tolerance": 0.1
+        },
+        "exact_repetition_token_share": {
+          "current": 0.6685300127221558,
+          "delta": 0.0030704871068236717,
+          "previous": 0.6654595256153322,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "json_token_share": {
+          "current": 0.3380256182438763,
+          "delta": -0.04233431404907223,
+          "previous": 0.3803599322929485,
+          "stable": false,
+          "tolerance": 0.02
+        },
+        "plain_text_token_share": {
+          "current": 0.4341478262506758,
+          "delta": 0.028622100417355023,
+          "previous": 0.40552572583332075,
+          "stable": false,
+          "tolerance": 0.02
+        },
+        "semantic_repetition_token_share": {
+          "current": 0.4957440399075828,
+          "delta": 0.032801261072231136,
+          "previous": 0.4629427788353517,
+          "stable": false,
+          "tolerance": 0.02
+        },
+        "stable_prefix_share": {
+          "current": 0.0,
+          "delta": 0.0,
+          "previous": 0.0,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "tool_definition_token_share": {
+          "current": 0.0,
+          "delta": 0.0,
+          "previous": 0.0,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "tool_result_token_share": {
+          "current": 0.3380256182438763,
+          "delta": -0.04233431404907223,
+          "previous": 0.3803599322929485,
+          "stable": false,
+          "tolerance": 0.02
+        },
+        "unknown_token_share": {
+          "current": 0.22243420834390523,
+          "delta": 0.014214933934458385,
+          "previous": 0.20821927440944685,
+          "stable": true,
+          "tolerance": 0.02
+        }
+      },
+      "current_sessions": 20,
+      "previous_sessions": 10,
+      "stable": false
+    },
+    {
+      "checks": {
+        "cached_input_ratio": {
+          "current": 0.7641379023180792,
+          "delta": 0.008327470145542692,
+          "previous": 0.7558104321725365,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "candidate_ranking_top3": {
+          "current": [
+            "plain_text",
+            "json",
+            "unknown"
+          ],
+          "previous": [
+            "plain_text",
+            "json",
+            "unknown"
+          ],
+          "stable": true
+        },
+        "estimated_block_size_p50": {
+          "current": 210.0,
+          "previous": 210.0,
+          "relative_delta": 0.0,
+          "stable": true,
+          "tolerance": 0.1
+        },
+        "estimated_block_size_p90": {
+          "current": 5599.0,
+          "previous": 5599.0,
+          "relative_delta": 0.0,
+          "stable": true,
+          "tolerance": 0.1
+        },
+        "exact_repetition_token_share": {
+          "current": 0.6837139638579975,
+          "delta": 0.0151839511358417,
+          "previous": 0.6685300127221558,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "json_token_share": {
+          "current": 0.38799350673570127,
+          "delta": 0.049967888491824985,
+          "previous": 0.3380256182438763,
+          "stable": false,
+          "tolerance": 0.02
+        },
+        "plain_text_token_share": {
+          "current": 0.3997857681083602,
+          "delta": -0.03436205814231558,
+          "previous": 0.4341478262506758,
+          "stable": false,
+          "tolerance": 0.02
+        },
+        "semantic_repetition_token_share": {
+          "current": 0.4722750339643358,
+          "delta": -0.023469005943247023,
+          "previous": 0.4957440399075828,
+          "stable": false,
+          "tolerance": 0.02
+        },
+        "stable_prefix_share": {
+          "current": 0.0,
+          "delta": 0.0,
+          "previous": 0.0,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "tool_definition_token_share": {
+          "current": 0.0,
+          "delta": 0.0,
+          "previous": 0.0,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "tool_result_token_share": {
+          "current": 0.38799350673570127,
+          "delta": 0.049967888491824985,
+          "previous": 0.3380256182438763,
+          "stable": false,
+          "tolerance": 0.02
+        },
+        "unknown_token_share": {
+          "current": 0.20623403103339585,
+          "delta": -0.016200177310509378,
+          "previous": 0.22243420834390523,
+          "stable": true,
+          "tolerance": 0.02
+        }
+      },
+      "current_sessions": 30,
+      "previous_sessions": 20,
+      "stable": false
+    }
+  ]
+}

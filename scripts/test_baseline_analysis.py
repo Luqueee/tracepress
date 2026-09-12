@@ -197,6 +197,36 @@ class BaselineAnalysisContractTests(unittest.TestCase):
             comparison["workloads"]["small_json"]["dispatch_us"]["operationally_acceptable"]
         )
 
+    def test_benchmark_rejects_snapshot_identity_mismatch(self) -> None:
+        measured = {
+            "queue_observability": {
+                "stdout_counters": {
+                    "analysis_requests_seen": 2,
+                    "analysis_requests_complete": 2,
+                    "analysis_requests_partial": 0,
+                    "analysis_requests_dropped": 0,
+                },
+                "durable": {
+                    "phase2_provider_requests": 1,
+                    "context_snapshots": 2,
+                    "context_snapshot_request_ids": 2,
+                    "context_snapshots_without_provider_request": 0,
+                    "terminal_context_snapshots": 2,
+                    "context_analysis_dropped_events": 0,
+                    "context_analysis_event_count": 2,
+                },
+            }
+        }
+
+        with self.assertRaises(BENCHMARK.BenchmarkError):
+            BENCHMARK.validate_analysis_lifecycle(
+                measured,
+                phase="on",
+                analysis_mode="shadow",
+                workload="small_json",
+                burst_width=1,
+            )
+
     def test_report_is_token_weighted_and_keeps_missing_reconciliation_unknown(self) -> None:
         connection = create_fixture()
         connection.execute(

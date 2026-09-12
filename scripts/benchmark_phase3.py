@@ -37,8 +37,8 @@ from statistics import median
 from typing import Any, Iterable
 
 
-BASELINE_TAG = "phase-2-complete"
-EXPECTED_BASELINE_COMMIT = "2b5fd6f"
+BASELINE_TAG = "phase-3.1.2-complete"
+EXPECTED_BASELINE_COMMIT = "70957bb"
 DEFAULT_SAMPLES = 15
 DEFAULT_WARMUP = 3
 DEFAULT_BURST_WIDTHS = (32, 64, 72)
@@ -808,7 +808,10 @@ def durable_queue_metrics(database: Path) -> dict[str, int | None]:
     """
     empty = {
         "context_snapshots": None,
+        "context_snapshot_request_ids": None,
+        "context_snapshots_without_provider_request": None,
         "terminal_context_snapshots": None,
+        "terminal_context_request_ids": None,
         "observer_backpressure_snapshots": None,
         "context_analysis_dropped_events": None,
         "context_analysis_event_count": None,
@@ -826,13 +829,38 @@ def durable_queue_metrics(database: Path) -> dict[str, int | None]:
         }
         if "context_snapshots" not in tables:
             snapshots = None
+            snapshot_request_ids = None
+            snapshots_without_provider_request = None
             terminal = None
+            terminal_request_ids = None
             backpressure = None
         else:
             snapshots = int(connection.execute("SELECT COUNT(*) FROM context_snapshots").fetchone()[0])
+            snapshot_request_ids = int(
+                connection.execute(
+                    "SELECT COUNT(DISTINCT snapshot.provider_request_id) "
+                    "FROM context_snapshots AS snapshot "
+                    "INNER JOIN provider_requests AS request "
+                    "ON request.request_id = snapshot.provider_request_id"
+                ).fetchone()[0]
+            )
+            snapshots_without_provider_request = int(
+                connection.execute(
+                    "SELECT COUNT(*) FROM context_snapshots AS snapshot "
+                    "LEFT JOIN provider_requests AS request "
+                    "ON request.request_id = snapshot.provider_request_id "
+                    "WHERE request.request_id IS NULL"
+                ).fetchone()[0]
+            )
             terminal = int(
                 connection.execute(
                     "SELECT COUNT(*) FROM context_snapshots "
+                    "WHERE completed_at_us IS NOT NULL OR recovered_at_us IS NOT NULL"
+                ).fetchone()[0]
+            )
+            terminal_request_ids = int(
+                connection.execute(
+                    "SELECT COUNT(DISTINCT provider_request_id) FROM context_snapshots "
                     "WHERE completed_at_us IS NOT NULL OR recovered_at_us IS NOT NULL"
                 ).fetchone()[0]
             )
@@ -862,7 +890,10 @@ def durable_queue_metrics(database: Path) -> dict[str, int | None]:
         )
         return {
             "context_snapshots": snapshots,
+            "context_snapshot_request_ids": snapshot_request_ids,
+            "context_snapshots_without_provider_request": snapshots_without_provider_request,
             "terminal_context_snapshots": terminal,
+            "terminal_context_request_ids": terminal_request_ids,
             "observer_backpressure_snapshots": backpressure,
             "context_analysis_dropped_events": dropped,
             "context_analysis_event_count": phase3_events,
@@ -902,6 +933,10 @@ def validate_analysis_lifecycle(
         raise BenchmarkError(f"{label} did not persist any Phase 2 provider request")
 
     snapshots = durable.get("context_snapshots")
+    snapshot_request_ids = durable.get("context_snapshot_request_ids")
+    snapshots_without_provider_request = durable.get(
+        "context_snapshots_without_provider_request"
+    )
     phase3_events = durable.get("context_analysis_event_count")
     if analysis_mode == "off":
         if snapshots != 0 or phase3_events != 0:
@@ -912,6 +947,20 @@ def validate_analysis_lifecycle(
         return
     if analysis_mode != "shadow":
         raise BenchmarkError(f"{label} has unknown analysis mode")
+    if not isinstance(snapshot_request_ids, int) or not isinstance(
+        snapshots_without_provider_request, int
+    ):
+        raise BenchmarkError(f"{label} did not report request-identity lifecycle evidence")
+    if snapshot_request_ids > phase2_requests:
+        raise BenchmarkError(
+            f"{label} has more snapshot request identities than provider requests: "
+            f"snapshots={snapshot_request_ids}, provider_requests={phase2_requests}"
+        )
+    if snapshots_without_provider_request != 0:
+        raise BenchmarkError(
+            f"{label} has snapshots without a matching provider request: "
+            f"count={snapshots_without_provider_request}"
+        )
 
     counters = queue.get("stdout_counters")
     if not isinstance(counters, dict):
@@ -964,6 +1013,9 @@ def run_self_test() -> None:
             "durable": {
                 "phase2_provider_requests": 1,
                 "context_snapshots": 0,
+                "context_snapshot_request_ids": 0,
+                "context_snapshots_without_provider_request": 0,
+                "terminal_context_request_ids": 0,
                 "terminal_context_snapshots": 0,
                 "context_analysis_dropped_events": 0,
                 "context_analysis_event_count": 0,
@@ -994,6 +1046,9 @@ def run_self_test() -> None:
             "durable": {
                 "phase2_provider_requests": 1,
                 "context_snapshots": 1,
+                "context_snapshot_request_ids": 1,
+                "context_snapshots_without_provider_request": 0,
+                "terminal_context_request_ids": 1,
                 "terminal_context_snapshots": 1,
                 "context_analysis_dropped_events": 0,
                 "context_analysis_event_count": 3,
@@ -1013,6 +1068,9 @@ def run_self_test() -> None:
             "durable": {
                 "phase2_provider_requests": 1,
                 "context_snapshots": 0,
+                "context_snapshot_request_ids": 0,
+                "context_snapshots_without_provider_request": 0,
+                "terminal_context_request_ids": 0,
                 "terminal_context_snapshots": 0,
                 "context_analysis_dropped_events": 0,
                 "context_analysis_event_count": 0,
@@ -1038,6 +1096,9 @@ def run_self_test() -> None:
             "durable": {
                 "phase2_provider_requests": 1,
                 "context_snapshots": 0,
+                "context_snapshot_request_ids": 0,
+                "context_snapshots_without_provider_request": 0,
+                "terminal_context_request_ids": 0,
                 "terminal_context_snapshots": 0,
                 "context_analysis_dropped_events": 1,
                 "context_analysis_event_count": 1,

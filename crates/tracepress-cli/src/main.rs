@@ -180,16 +180,18 @@ enum RunEvent {
 /// must defer those compact events instead of rejecting them merely because the recorder is
 /// temporarily busy with `SQLite` work. One tracked pump preserves the bound and avoids creating a
 /// blocking task per event.
-#[derive(Debug)]
 struct DurableEventIngress<T> {
     sender: tokio::sync::mpsc::Sender<T>,
     state: Mutex<DurableEventIngressState<T>>,
+    space: Condvar,
     background: BackgroundTaskSpawner,
+    on_drop: Arc<dyn Fn(T) + Send + Sync>,
 }
 
 #[derive(Debug)]
 struct DurableEventIngressState<T> {
     events: VecDeque<T>,
+    closed: bool,
     pump_running: bool,
 }
 
@@ -197,8 +199,18 @@ impl<T> Default for DurableEventIngressState<T> {
     fn default() -> Self {
         Self {
             events: VecDeque::new(),
+            closed: false,
             pump_running: false,
         }
+    }
+}
+
+impl<T> std::fmt::Debug for DurableEventIngress<T> {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("DurableEventIngress")
+            .field("sender", &self.sender)
+            .finish_non_exhaustive()
     }
 }
 
@@ -206,11 +218,17 @@ impl<T> DurableEventIngress<T>
 where
     T: Send + 'static,
 {
-    fn new(sender: tokio::sync::mpsc::Sender<T>, background: BackgroundTaskSpawner) -> Arc<Self> {
+    fn new(
+        sender: tokio::sync::mpsc::Sender<T>,
+        background: BackgroundTaskSpawner,
+        on_drop: impl Fn(T) + Send + Sync + 'static,
+    ) -> Arc<Self> {
         Arc::new(Self {
             sender,
             state: Mutex::new(DurableEventIngressState::default()),
+            space: Condvar::new(),
             background,
+            on_drop: Arc::new(on_drop),
         })
     }
 
@@ -220,7 +238,42 @@ where
                 .state
                 .lock()
                 .unwrap_or_else(std::sync::PoisonError::into_inner);
-            if state.events.len() >= RECORDER_QUEUE_ITEMS {
+            if state.closed || state.events.len() >= RECORDER_QUEUE_ITEMS {
+                return Err(MetadataSinkError::rejected());
+            }
+            state.events.push_back(event);
+            if state.pump_running {
+                false
+            } else {
+                state.pump_running = true;
+                true
+            }
+        };
+        if start_pump {
+            let ingress = Arc::clone(self);
+            let _spawned = self.background.spawn(async move {
+                ingress.run().await;
+            });
+        }
+        Ok(())
+    }
+
+    /// Sends a request observation through the bounded handoff, waiting for queue space only on
+    /// the detached parser worker. Forwarding never calls this method, so provider admission can
+    /// preserve its request identity without making the agent wait on the recorder.
+    fn send_request(self: &Arc<Self>, event: T) -> Result<(), MetadataSinkError> {
+        let start_pump = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            while !state.closed && state.events.len() >= RECORDER_QUEUE_ITEMS {
+                state = self
+                    .space
+                    .wait(state)
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+            }
+            if state.closed {
                 return Err(MetadataSinkError::rejected());
             }
             state.events.push_back(event);
@@ -249,20 +302,76 @@ where
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
                 let Some(event) = state.events.pop_front() else {
                     state.pump_running = false;
+                    self.space.notify_all();
                     return;
                 };
+                self.space.notify_one();
                 event
             };
-            if self.sender.send(event).await.is_err() {
+            if let Err(error) = self.sender.send(event).await {
+                let mut dropped = vec![error.0];
                 let mut state = self
                     .state
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner);
-                state.events.clear();
+                state.closed = true;
+                dropped.extend(state.events.drain(..));
                 state.pump_running = false;
+                self.space.notify_all();
+                drop(state);
+                for event in dropped {
+                    (self.on_drop)(event);
+                }
                 return;
             }
         }
+    }
+
+    #[cfg(test)]
+    fn queued_len(&self) -> usize {
+        self.state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .events
+            .len()
+    }
+}
+
+const fn dropped_context_reason(
+    outcome: Option<&ContextAnalysisOutcome>,
+) -> ContextAnalysisDropReason {
+    match outcome {
+        Some(ContextAnalysisOutcome::Dropped(reason)) => *reason,
+        Some(ContextAnalysisOutcome::Analyzed(_)) | None => {
+            ContextAnalysisDropReason::CorrelationDegraded
+        }
+        Some(_) => ContextAnalysisDropReason::Unsupported,
+    }
+}
+
+fn account_durable_event_drop(counters: &ContextCounters, analysis_enabled: bool, event: RunEvent) {
+    if !analysis_enabled {
+        return;
+    }
+    match event {
+        RunEvent::RequestContext(observation) => {
+            let forward = observation.forward;
+            counters.ensure_seen(forward);
+            counters.dropped(
+                forward,
+                dropped_context_reason(observation.context.as_ref()),
+            );
+        }
+        RunEvent::ContextAnalysis(forward, outcome, analysis_permit) => {
+            drop(analysis_permit);
+            counters.ensure_seen(forward);
+            counters.dropped(forward, dropped_context_reason(Some(&outcome)));
+        }
+        RunEvent::Transport(_)
+        | RunEvent::Response(_, _, _)
+        | RunEvent::TransportAdmissionFailed(_, _)
+        | RunEvent::TransportFailure(_, _)
+        | RunEvent::Compaction(_) => {}
     }
 }
 
@@ -1165,6 +1274,10 @@ impl RecorderSink {
     fn offer_durable(&self, event: RunEvent) -> Result<(), MetadataSinkError> {
         self.durable.try_send(event)
     }
+
+    fn offer_request(&self, event: RunEvent) -> Result<(), MetadataSinkError> {
+        self.durable.send_request(event)
+    }
 }
 
 impl MetadataSink for RecorderSink {
@@ -1189,7 +1302,7 @@ impl ProviderObservationSink for RecorderSink {
                 _ => ContextAnalysisDropReason::Unsupported,
             },
         );
-        match self.offer_durable(RunEvent::RequestContext(Box::new(observation))) {
+        match self.offer_request(RunEvent::RequestContext(Box::new(observation))) {
             Ok(()) => Ok(()),
             Err(_error) => {
                 if self.analysis_enabled {
@@ -1642,6 +1755,17 @@ impl RunRecorder {
             self.context_counters.ensure_seen(forward);
         }
         // The detached analyzer can finish before the request parser publishes its metadata.
+        // A durable provider receipt takes precedence over correlation tombstones: the forward
+        // may have been retired after its provider record settled while its analysis was still
+        // pending. Consuming that receipt is the only way to preserve the one-outcome partition.
+        if let Some(receipt) = self.pending_context.remove(&forward) {
+            self.enqueue_context(EnqueueContextInput {
+                receipt: &receipt,
+                outcome,
+                analysis_permit,
+            });
+            return;
+        }
         // Admit the identity here so an early analysis outcome is retained and can be joined by
         // the later request/response halves instead of being misclassified as correlation loss.
         // A retired identity is already terminal and must not be re-admitted.
@@ -1653,14 +1777,6 @@ impl RunRecorder {
                 return;
             }
             self.admit(forward).await;
-        }
-        if let Some(receipt) = self.pending_context.remove(&forward) {
-            self.enqueue_context(EnqueueContextInput {
-                receipt: &receipt,
-                outcome,
-                analysis_permit,
-            });
-            return;
         }
         let Some(state) = self.forwards.get_mut(&forward) else {
             self.context_counters
@@ -3051,7 +3167,10 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
         .run(receiver),
     );
     let transport_task = tokio::spawn(run_transport_dispatcher(transport_receiver, sender.clone()));
-    let durable = DurableEventIngress::new(sender, proxy.background_task_spawner());
+    let dropped_context_counters = Arc::clone(&context_counters);
+    let durable = DurableEventIngress::new(sender, proxy.background_task_spawner(), move |event| {
+        account_durable_event_drop(&dropped_context_counters, analysis_enabled, event);
+    });
     let ordering = Arc::new(TransportOrdering::new(transport_sender));
     let proxy = proxy
         .with_metadata_sink(Arc::new(RecorderSink {
@@ -4132,18 +4251,27 @@ async fn main() -> Result<(), String> {
 }
 #[cfg(test)]
 mod tests {
-    use std::{sync::atomic::Ordering, time::Duration};
+    use std::{
+        sync::{
+            Arc,
+            atomic::{AtomicU64, Ordering},
+        },
+        time::Duration,
+    };
 
     use super::{
-        AnalysisSequence, BackgroundTaskSpawner, CONTEXT_INGESTION_QUEUE_HARD_CAP,
-        ContextAnalysisDropReason, ContextCounters, ContextSnapshotId, ContextSnapshotStatus,
-        ControlRequest, DurableEventIngress, ObservationRecord, OperationId,
-        PendingAnalysisEvidence, RequestId, SessionId, TERMINAL_ANALYSIS_IDENTITIES,
-        UuidV7Generator, bounded_record_provider_observation_request, configure_codex_subscription,
-        context_ingestion_queue_capacity, reconcile_pending_context_with,
+        AnalysisSequence, BackgroundTaskSpawner, CONTEXT_INGESTION_QUEUE_HARD_CAP, Config,
+        ContextAnalysisDropReason, ContextAnalysisInput, ContextCounters, ContextReceipt,
+        ContextSnapshotId, ContextSnapshotStatus, ControlRequest, CorrelationCounters,
+        CorrelationStatus, DurableEventIngress, ObservationRecord, OperationId,
+        PendingAnalysisEvidence, RECORDER_QUEUE_ITEMS, RequestId, RunRecorder, SessionId,
+        TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator, bounded_record_provider_observation_request,
+        configure_codex_subscription, context_ingestion_queue_capacity,
+        reconcile_pending_context_with,
     };
 
     use tracepress_provider::{ObservationInput, ObservationLimits, parse_request, parse_response};
+    use tracepress_proxy::{ContextAnalysisOutcome, ForwardId};
 
     #[test]
     fn codex_subscription_overrides_follow_the_exec_subcommand() {
@@ -4181,7 +4309,8 @@ mod tests {
     #[tokio::test]
     async fn durable_event_ingress_defers_when_recorder_channel_is_full() {
         let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
-        let ingress = DurableEventIngress::new(sender.clone(), BackgroundTaskSpawner::new());
+        let ingress =
+            DurableEventIngress::new(sender.clone(), BackgroundTaskSpawner::new(), |_| {});
 
         assert!(sender.send(1).await.is_ok());
         assert!(ingress.try_send(2).is_ok());
@@ -4193,6 +4322,137 @@ mod tests {
         };
         assert_eq!(first, 1);
         assert_eq!(second, 2);
+    }
+
+    #[tokio::test]
+    async fn durable_event_ingress_accounts_events_when_recorder_closes() {
+        let (sender, receiver) = tokio::sync::mpsc::channel(1);
+        let dropped = Arc::new(AtomicU64::new(0));
+        let dropped_for_handler = Arc::clone(&dropped);
+        let ingress = DurableEventIngress::new(
+            sender.clone(),
+            BackgroundTaskSpawner::new(),
+            move |_event: u64| {
+                let _ = dropped_for_handler.fetch_add(1, Ordering::Relaxed);
+            },
+        );
+
+        assert!(sender.send(1).await.is_ok());
+        assert!(ingress.try_send(2).is_ok());
+        assert!(ingress.try_send(3).is_ok());
+        drop(receiver);
+
+        let result = tokio::time::timeout(Duration::from_secs(1), async {
+            loop {
+                if dropped.load(Ordering::Relaxed) == 2 {
+                    break;
+                }
+                tokio::task::yield_now().await;
+            }
+        })
+        .await;
+        assert!(result.is_ok());
+        assert!(ingress.try_send(4).is_err());
+    }
+
+    #[tokio::test]
+    async fn request_admission_waits_for_bounded_ingress_space() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let ingress =
+            DurableEventIngress::new(sender.clone(), BackgroundTaskSpawner::new(), |_| {});
+
+        assert!(sender.send(0).await.is_ok());
+        {
+            let mut state = ingress
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for event in 1..=RECORDER_QUEUE_ITEMS {
+                state.events.push_back(event as u64);
+            }
+        }
+        assert_eq!(ingress.queued_len(), RECORDER_QUEUE_ITEMS);
+
+        let waiting_ingress = Arc::clone(&ingress);
+        let waiting = tokio::task::spawn_blocking(move || {
+            waiting_ingress.send_request((RECORDER_QUEUE_ITEMS + 1) as u64)
+        });
+        tokio::time::sleep(Duration::from_millis(10)).await;
+        assert!(!waiting.is_finished());
+
+        {
+            let mut state = ingress
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            let _removed = state.events.pop_front();
+        }
+        ingress.space.notify_one();
+
+        for _ in 0..=RECORDER_QUEUE_ITEMS {
+            assert!(receiver.recv().await.is_some());
+        }
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), waiting)
+                .await
+                .is_ok()
+        );
+    }
+
+    #[tokio::test]
+    async fn pending_context_receipt_wins_over_retired_identity() {
+        let ids = UuidV7Generator::new();
+        let forward = ForwardId::default();
+        let counters = Arc::new(ContextCounters::default());
+        let (context_sender, _context_receiver) = tokio::sync::mpsc::channel(1);
+        let mut recorder = RunRecorder {
+            config: Config {
+                root: std::path::PathBuf::new(),
+                database: std::path::PathBuf::new(),
+                socket: std::path::PathBuf::new(),
+                credential: std::path::PathBuf::new(),
+                ready: std::path::PathBuf::new(),
+            },
+            session_id: SessionId::generate(&ids),
+            parent_operation_id: OperationId::generate(&ids),
+            context_sender,
+            context_counters: Arc::clone(&counters),
+            forwards: std::collections::BTreeMap::new(),
+            analysis_enabled: true,
+            retired_orphans: std::collections::BTreeMap::new(),
+            pending_context: std::collections::BTreeMap::new(),
+            retired: std::collections::BTreeSet::from([forward]),
+            retired_through: None,
+            counters: Arc::new(CorrelationCounters::default()),
+        };
+        let _previous = recorder.pending_context.insert(
+            forward,
+            ContextReceipt {
+                forward,
+                provider_request_id: RequestId::generate(&ids),
+                attempt_id: tracepress_core::AttemptId::generate(&ids),
+                inference_operation_id: OperationId::generate(&ids),
+                provider_input_tokens: None,
+                provider_usage_comparable: false,
+                correlation: CorrelationStatus::Correlated,
+            },
+        );
+
+        recorder
+            .context_analysis(ContextAnalysisInput {
+                forward,
+                outcome: ContextAnalysisOutcome::Dropped(ContextAnalysisDropReason::Malformed),
+                analysis_permit: None,
+            })
+            .await;
+
+        assert!(recorder.pending_context.is_empty());
+        assert_eq!(counters.analysis_requests_seen.load(Ordering::Relaxed), 1);
+        assert_eq!(
+            counters.analysis_requests_dropped.load(Ordering::Relaxed),
+            1
+        );
+        assert_eq!(counters.correlation_degraded.load(Ordering::Relaxed), 0);
     }
 
     #[test]

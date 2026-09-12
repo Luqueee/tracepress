@@ -73,7 +73,7 @@ const DEFERRED_ANALYSIS_MAX_BYTES: u64 = 64 * 1024 * 1024;
 /// The transport metadata record and every semantic observation of the same forward carry this
 /// scalar, so a consumer joins the two streams by identity instead of arrival order. Values are
 /// monotonic per proxy and contain no request content.
-#[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
+#[derive(Clone, Copy, Debug, Default, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub struct ForwardId(u64);
 
 impl ForwardId {

@@ -71,6 +71,36 @@ The composition token shares use the estimable-token subset; these tables show c
 - Scheduler field coverage: high-water items 85.00%; high-water bytes 85.00%; wait 85.00%.
 - Runtime counter consistency: `False`; reported seen: 190; ledger eligible: 189; delta: 1.
 
+## Scheduler sidecar integrity
+
+- Gate: `failed`; eligible requests: 189; complete snapshots: 189.
+- Sidecar sessions: 20/20; missing: 0; capture issues: 3; counter mismatches: 3.
+- Reported analysis seen: 190; unexplained counter delta: 1.
+- Duplicate sidecar IDs: `[]`; unexpected IDs: `[]`; malformed records: 0.
+
+| Session | Eligible | Complete snapshots | Sidecar | Admitted | Processed + drops | Status | Capture classification | Missing capture fields |
+| --- | ---: | ---: | --- | ---: | ---: | --- | --- | --- |
+| 01a095aa-95bc-7070-8c48-adfddceafc9b | 18 | 18 | True | 18 | 18 | passed | complete | `[]` |
+| 01a095aa-95c5-7081-862c-8f8a48c662f3 | 24 | 24 | True | 24 | 24 | passed | complete | `[]` |
+| 01a095ad-6eff-70a3-ba33-5b5b0afec3ed | 36 | 36 | True | 36 | 36 | passed | complete | `[]` |
+| 01a095ad-6f06-7bf0-a433-802ed60247b5 | 17 | 17 | True | 17 | 17 | passed | complete | `[]` |
+| 01a095b3-4e70-7a70-bddf-112614d88b4c | 33 | 33 | True | 33 | 33 | passed | complete | `[]` |
+| 01a095b3-4e79-75c3-b152-e34981926b47 | 16 | 16 | True | 16 | 16 | passed | complete | `[]` |
+| 01a095c5-ac8f-7111-9197-c342bf4f735c | 3 | 3 | True | 3 | 3 | passed | complete | `[]` |
+| 01a095c5-ac95-7331-955b-ff4ff16ef356 | 2 | 2 | True | 2 | 2 | passed | complete | `[]` |
+| 01a095c6-4a5d-7ef0-9148-4b525137db99 | 7 | 7 | True | 7 | 7 | passed | complete | `[]` |
+| 01a095c6-4a63-7ac1-ad79-fe5a13eb454f | 3 | 3 | True | 3 | 3 | passed | complete | `[]` |
+| 01a095e8-d6a4-7391-924c-d3f4e165f9aa | 6 | 6 | True | 6 | 6 | harness_collection_failure | harness_collection_failure | `["high_water_items", "high_water_bytes", "analysis_wait_us"]` |
+| 01a095e8-d6a4-7391-924c-d40d27981f16 | 6 | 6 | True | 6 | 6 | passed | complete | `[]` |
+| 01a095ea-1401-7143-8519-a18564099145 | 4 | 4 | True | 4 | 4 | harness_collection_failure | harness_collection_failure | `["high_water_items", "high_water_bytes", "analysis_wait_us"]` |
+| 01a095ea-1407-73d2-935e-f78f70067a54 | 4 | 4 | True | 4 | 4 | harness_collection_failure | harness_collection_failure | `["high_water_items", "high_water_bytes", "analysis_wait_us"]` |
+| 01a095eb-4152-7691-8107-46d26ae926cb | 1 | 1 | True | 1 | 1 | passed | complete | `[]` |
+| 01a095eb-4159-7102-aee7-3a95df59bc6b | 1 | 1 | True | 3 | 3 | counter_mismatch | complete | `[]` |
+| 01a095eb-790f-72c1-8205-bc0618a12a57 | 3 | 3 | True | 3 | 3 | passed | complete | `[]` |
+| 01a095eb-7914-7cd2-8def-4d37a2135dc2 | 1 | 1 | True | 1 | 1 | passed | complete | `[]` |
+| 01a095eb-d6f6-7250-b3e4-395c636ac709 | 3 | 3 | True | 1 | 1 | counter_mismatch | complete | `[]` |
+| 01a095eb-d6fe-74f3-85c5-38fa391fa625 | 1 | 1 | True | 2 | 2 | counter_mismatch | complete | `[]` |
+
 ## Provider usage
 
 - Input: 13,478,969; cached: 12,433,152; uncached: 1,045,817.

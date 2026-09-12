@@ -235,6 +235,13 @@ def _quality_gate(report: dict[str, Any]) -> dict[str, Any]:
                 "target": 0,
                 "pass": counter_consistency.get("pass") is True,
             }
+        sidecar_integrity = scheduler.get("sidecar_integrity")
+        if isinstance(sidecar_integrity, dict) and sidecar_integrity.get("available"):
+            checks["scheduler_sidecar_integrity"] = {
+                "value": sidecar_integrity.get("status"),
+                "target": "passed",
+                "pass": sidecar_integrity.get("pass") is True,
+            }
     integrity = report.get("analysis_integrity", {}).get(
         "measurement_integrity",
         report.get("quality", {}).get("measurement_integrity", "passed"),

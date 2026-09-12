@@ -920,6 +920,225 @@ def scheduler_report(
     }
 
 
+def scheduler_sidecar_integrity(
+    runtime_metrics: dict[str, Any] | None,
+    ledger_rows: list[dict[str, Any]],
+    selected_session_ids: set[str],
+    known_session_ids: set[str] | None = None,
+) -> dict[str, Any]:
+    """Audit scheduler sidecar counters against the request ledger per session.
+
+    Sidecar counters are session-scoped evidence, not request outcomes. This audit therefore
+    keeps one row for every selected session, reports capture gaps without filling them with
+    zero, and rejects unexplained per-session counter differences.
+    """
+
+    selected_ids = set(selected_session_ids)
+    known_ids = set(known_session_ids) if known_session_ids is not None else selected_ids
+    eligible_by_session: Counter[str] = Counter()
+    complete_snapshots_by_session: Counter[str] = Counter()
+    for row in ledger_rows:
+        if not row.get("eligible"):
+            continue
+        session_id = _nullable_name(row.get("session_id"))
+        if session_id not in selected_ids:
+            continue
+        eligible_by_session[session_id] += 1
+        if safe_name(row.get("snapshot_status")) == "complete" and row.get("snapshot_id") is not None:
+            complete_snapshots_by_session[session_id] += 1
+
+    def empty_result(status: str) -> dict[str, Any]:
+        return {
+            "available": False,
+            "pass": False,
+            "status": status,
+            "eligible_requests": sum(eligible_by_session.values()),
+            "complete_snapshots": sum(complete_snapshots_by_session.values()),
+            "sessions_selected": len(selected_ids),
+            "sessions_with_sidecar": 0,
+            "sessions_missing_sidecar": len(selected_ids),
+            "sessions_with_capture_issues": len(selected_ids),
+            "counter_mismatch_sessions": 0,
+            "reported_analysis_requests_seen": None,
+            "unexplained_counter_delta": None,
+            "duplicate_sidecar_session_ids": [],
+            "unexpected_sidecar_session_ids": [],
+            "malformed_sidecar_records": [],
+            "per_session": [
+                {
+                    "session_id": session_id,
+                    "eligible_requests": eligible_by_session.get(session_id, 0),
+                    "complete_snapshots": complete_snapshots_by_session.get(session_id, 0),
+                    "sidecar_present": False,
+                    "status": status,
+                }
+                for session_id in sorted(selected_ids)
+            ],
+        }
+
+    if not isinstance(runtime_metrics, dict) or not isinstance(runtime_metrics.get("sessions"), list):
+        return empty_result("sidecar_parse_failed")
+
+    raw_records = runtime_metrics["sessions"]
+    records_by_session: dict[str, dict[str, Any]] = {}
+    duplicate_ids: list[str] = []
+    unexpected_ids: list[str] = []
+    malformed_records: list[dict[str, Any]] = []
+    for index, record in enumerate(raw_records):
+        if not isinstance(record, dict):
+            malformed_records.append({"index": index, "classification": "sidecar_parse_failed"})
+            continue
+        session_id = _nullable_name(record.get("session_id"))
+        if session_id is None:
+            malformed_records.append({"index": index, "classification": "sidecar_parse_failed"})
+            continue
+        if session_id not in known_ids:
+            unexpected_ids.append(session_id)
+            continue
+        if session_id not in selected_ids:
+            continue
+        if session_id in records_by_session:
+            duplicate_ids.append(session_id)
+            continue
+        records_by_session[session_id] = record
+
+    required_counter_keys = (
+        "analysis_admitted_total",
+        "analysis_requests_seen",
+        "processed_deferred_total",
+        "backlog_capacity_drops",
+    )
+    capture_keys = ("high_water_items", "high_water_bytes", "analysis_wait_us")
+    per_session: list[dict[str, Any]] = []
+    for session_id in sorted(selected_ids):
+        eligible = eligible_by_session.get(session_id, 0)
+        complete_snapshots = complete_snapshots_by_session.get(session_id, 0)
+        record = records_by_session.get(session_id)
+        base = {
+            "session_id": session_id,
+            "eligible_requests": eligible,
+            "complete_snapshots": complete_snapshots,
+            "sidecar_present": record is not None,
+        }
+        if record is None:
+            per_session.append({**base, "status": "sidecar_missing"})
+            continue
+
+        missing_counters = [key for key in required_counter_keys if first_int(record, key) is None]
+        missing_capture_fields = [key for key in capture_keys if first_int(record, key) is None]
+        admitted = first_int(record, "analysis_admitted_total", "admitted_total")
+        seen = first_int(record, "analysis_requests_seen")
+        processed = first_int(record, "processed_deferred_total")
+        capacity_drops = first_int(record, "backlog_capacity_drops")
+        processed_plus_drops = (
+            processed + capacity_drops
+            if processed is not None and capacity_drops is not None
+            else None
+        )
+        note = record.get("scheduler_capture_note")
+        capture_issue = bool(note) or bool(missing_capture_fields)
+        capture_classification = (
+            "shutdown_before_capture"
+            if isinstance(note, str) and "shutdown" in note.lower()
+            else "harness_collection_failure"
+            if capture_issue
+            else "complete"
+        )
+        counter_issue = (
+            bool(missing_counters)
+            or (admitted is not None and admitted != eligible)
+            or (seen is not None and seen != eligible)
+            or (processed_plus_drops is not None and admitted is not None and processed_plus_drops != admitted)
+        )
+        if session_id in duplicate_ids:
+            status = "sidecar_duplicate"
+        elif capture_issue:
+            status = "harness_collection_failure"
+        elif counter_issue:
+            status = "counter_mismatch"
+        else:
+            status = "passed"
+        per_session.append(
+            {
+                **base,
+                "status": status,
+                "capture_classification": capture_classification,
+                "analysis_admitted_total": admitted,
+                "analysis_requests_seen": seen,
+                "processed_deferred_total": processed,
+                "backlog_capacity_drops": capacity_drops,
+                "processed_plus_capacity_drops": processed_plus_drops,
+                "admitted_vs_eligible_delta": (
+                    admitted - eligible if admitted is not None else None
+                ),
+                "seen_vs_eligible_delta": seen - eligible if seen is not None else None,
+                "processed_vs_admitted_delta": (
+                    processed_plus_drops - admitted
+                    if processed_plus_drops is not None and admitted is not None
+                    else None
+                ),
+                "missing_counter_fields": missing_counters,
+                "missing_capture_fields": missing_capture_fields,
+                "scheduler_capture_note": jsonable(note),
+            }
+        )
+
+    reported_seen = [
+        row["analysis_requests_seen"]
+        for row in per_session
+        if row.get("analysis_requests_seen") is not None
+    ]
+    session_statuses = Counter(row["status"] for row in per_session)
+    unexplained_delta = (
+        sum(reported_seen) - sum(eligible_by_session.values())
+        if len(reported_seen) == len(per_session)
+        else None
+    )
+    failed_rows = [row for row in per_session if row["status"] != "passed"]
+    all_counter_checks_pass = all(
+        row.get("missing_counter_fields") == []
+        and row.get("admitted_vs_eligible_delta") == 0
+        and row.get("seen_vs_eligible_delta") == 0
+        and row.get("processed_vs_admitted_delta") == 0
+        for row in per_session
+        if row.get("sidecar_present")
+    ) and len(per_session) == len(records_by_session) == len(selected_ids)
+    return {
+        "available": True,
+        "pass": (
+            not failed_rows
+            and not duplicate_ids
+            and not unexpected_ids
+            and not malformed_records
+            and all_counter_checks_pass
+        ),
+        "status": "passed" if not failed_rows and all_counter_checks_pass else "failed",
+        "eligible_requests": sum(eligible_by_session.values()),
+        "complete_snapshots": sum(complete_snapshots_by_session.values()),
+        "sessions_selected": len(selected_ids),
+        "sessions_with_sidecar": len(records_by_session),
+        "sessions_missing_sidecar": len(selected_ids - set(records_by_session)),
+        "sessions_with_capture_issues": sum(
+            1 for row in per_session if row["capture_classification"] != "complete"
+        ),
+        "counter_mismatch_sessions": sum(
+            1
+            for row in per_session
+            if row.get("missing_counter_fields")
+            or row.get("admitted_vs_eligible_delta") not in (None, 0)
+            or row.get("seen_vs_eligible_delta") not in (None, 0)
+            or row.get("processed_vs_admitted_delta") not in (None, 0)
+        ),
+        "reported_analysis_requests_seen": sum(reported_seen) if reported_seen else None,
+        "unexplained_counter_delta": unexplained_delta,
+        "duplicate_sidecar_session_ids": sorted(set(duplicate_ids)),
+        "unexpected_sidecar_session_ids": sorted(set(unexpected_ids)),
+        "malformed_sidecar_records": malformed_records,
+        "session_statuses": dict(session_statuses),
+        "per_session": per_session,
+    }
+
+
 def request_attempts(
     requests: list[dict[str, Any]],
     attempts: list[dict[str, Any]],
@@ -1769,6 +1988,16 @@ def analyze_connection(
         len(session_rows),
         selected_session_ids,
     )
+    scheduler["sidecar_integrity"] = scheduler_sidecar_integrity(
+        runtime_metrics,
+        ledger_rows,
+        selected_session_ids,
+        {
+            safe_name(row.get("session_id"))
+            for row in all_session_rows
+            if row.get("session_id") is not None
+        },
+    )
     request_kinds = Counter(safe_name(row.get("request_kind")) for row in request_rows)
     usage_cache_ratio = ratio(sum(cached_values), sum(input_total_values)) if input_total_values and cached_values else None
     attempts_with_usage = {safe_name(row.get("attempt_id")) for row in final_usage}
@@ -2025,6 +2254,20 @@ def render_markdown(report: dict[str, Any]) -> str:
         f"- Analysis wait µs P50/P90/P99: {format_number(report['scheduler']['analysis_wait_us']['p50'])}/{format_number(report['scheduler']['analysis_wait_us']['p90'])}/{format_number(report['scheduler']['analysis_wait_us']['p99'])}.",
         f"- Scheduler field coverage: high-water items {format_pct(report['scheduler']['field_coverage']['high_water_items']['coverage'])}; high-water bytes {format_pct(report['scheduler']['field_coverage']['high_water_bytes']['coverage'])}; wait {format_pct(report['scheduler']['field_coverage']['analysis_wait_us']['coverage'])}.",
         f"- Runtime counter consistency: `{report['scheduler']['counter_consistency']['pass']}`; reported seen: {format_number(report['scheduler']['counter_consistency']['reported_analysis_requests_seen'])}; ledger eligible: {format_number(report['scheduler']['counter_consistency']['eligible_requests'])}; delta: {format_number(report['scheduler']['counter_consistency']['delta'])}.",
+        "",
+        "## Scheduler sidecar integrity",
+        "",
+        f"- Gate: `{report['scheduler']['sidecar_integrity']['status']}`; eligible requests: {format_number(report['scheduler']['sidecar_integrity']['eligible_requests'])}; complete snapshots: {format_number(report['scheduler']['sidecar_integrity']['complete_snapshots'])}.",
+        f"- Sidecar sessions: {format_number(report['scheduler']['sidecar_integrity']['sessions_with_sidecar'])}/{format_number(report['scheduler']['sidecar_integrity']['sessions_selected'])}; missing: {format_number(report['scheduler']['sidecar_integrity']['sessions_missing_sidecar'])}; capture issues: {format_number(report['scheduler']['sidecar_integrity']['sessions_with_capture_issues'])}; counter mismatches: {format_number(report['scheduler']['sidecar_integrity']['counter_mismatch_sessions'])}.",
+        f"- Reported analysis seen: {format_number(report['scheduler']['sidecar_integrity']['reported_analysis_requests_seen'])}; unexplained counter delta: {format_number(report['scheduler']['sidecar_integrity']['unexplained_counter_delta'])}.",
+        f"- Duplicate sidecar IDs: `{json.dumps(report['scheduler']['sidecar_integrity']['duplicate_sidecar_session_ids'])}`; unexpected IDs: `{json.dumps(report['scheduler']['sidecar_integrity']['unexpected_sidecar_session_ids'])}`; malformed records: {len(report['scheduler']['sidecar_integrity']['malformed_sidecar_records'])}.",
+        "",
+        "| Session | Eligible | Complete snapshots | Sidecar | Admitted | Processed + drops | Status | Capture classification | Missing capture fields |",
+        "| --- | ---: | ---: | --- | ---: | ---: | --- | --- | --- |",
+        *[
+            f"| {row['session_id']} | {format_number(row['eligible_requests'])} | {format_number(row['complete_snapshots'])} | {row['sidecar_present']} | {format_number(row.get('analysis_admitted_total'))} | {format_number(row.get('processed_plus_capacity_drops'))} | {row['status']} | {row.get('capture_classification', 'unknown')} | `{json.dumps(row.get('missing_capture_fields', []))}` |"
+            for row in report['scheduler']['sidecar_integrity']['per_session']
+        ],
         "",
         "## Provider usage",
         "",

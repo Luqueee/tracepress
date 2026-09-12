@@ -66,6 +66,11 @@
           "pass": true,
           "target": 10.0,
           "value": 10.0
+        },
+        "scheduler_sidecar_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
         }
       },
       "pass": true
@@ -116,6 +121,11 @@
           "pass": true,
           "target": 20.0,
           "value": 20.0
+        },
+        "scheduler_sidecar_integrity": {
+          "pass": false,
+          "target": "passed",
+          "value": "failed"
         }
       },
       "pass": false

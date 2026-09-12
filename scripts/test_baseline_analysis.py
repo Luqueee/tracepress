@@ -540,6 +540,114 @@ class BaselineAnalysisContractTests(unittest.TestCase):
         self.assertEqual(scoped["sessions_with_metrics"], 1)
         self.assertEqual(scoped["high_water_items"]["max"], 2.0)
 
+    def test_scheduler_sidecar_integrity_audits_each_session(self) -> None:
+        ledger = [
+            {
+                "session_id": "s1",
+                "provider_request_id": "r1",
+                "eligible": True,
+                "outcome": "Complete",
+                "snapshot_id": "snap-1",
+                "snapshot_status": "complete",
+            },
+            {
+                "session_id": "s1",
+                "provider_request_id": "r2",
+                "eligible": True,
+                "outcome": "Complete",
+                "snapshot_id": "snap-2",
+                "snapshot_status": "complete",
+            },
+            {
+                "session_id": "s2",
+                "provider_request_id": "r3",
+                "eligible": True,
+                "outcome": "Complete",
+                "snapshot_id": "snap-3",
+                "snapshot_status": "complete",
+            },
+        ]
+        result = ANALYZER.scheduler_sidecar_integrity(
+            {
+                "sessions": [
+                    {
+                        "session_id": "s1",
+                        "analysis_admitted_total": 2,
+                        "analysis_requests_seen": 2,
+                        "processed_deferred_total": 2,
+                        "backlog_capacity_drops": 0,
+                        "high_water_items": 1,
+                        "high_water_bytes": 10,
+                        "analysis_wait_us": 5,
+                    },
+                    {
+                        "session_id": "s2",
+                        "analysis_admitted_total": 2,
+                        "analysis_requests_seen": 2,
+                        "processed_deferred_total": 2,
+                        "backlog_capacity_drops": 0,
+                        "high_water_items": 1,
+                        "high_water_bytes": 10,
+                        "analysis_wait_us": 5,
+                        "scheduler_capture_note": "interrupted output capture",
+                    },
+                ]
+            },
+            ledger,
+            {"s1", "s2"},
+        )
+
+        self.assertFalse(result["pass"])
+        self.assertEqual(result["eligible_requests"], 3)
+        self.assertEqual(result["complete_snapshots"], 3)
+        self.assertEqual(result["reported_analysis_requests_seen"], 4)
+        self.assertEqual(result["unexplained_counter_delta"], 1)
+        self.assertEqual(result["sessions_with_sidecar"], 2)
+        self.assertEqual(result["sessions_with_capture_issues"], 1)
+        by_session = {row["session_id"]: row for row in result["per_session"]}
+        self.assertEqual(by_session["s1"]["status"], "passed")
+        self.assertEqual(by_session["s2"]["status"], "harness_collection_failure")
+        self.assertEqual(by_session["s2"]["admitted_vs_eligible_delta"], 1)
+
+        scoped = ANALYZER.scheduler_sidecar_integrity(
+            {
+                "sessions": [
+                    {
+                        "session_id": "s1",
+                        "analysis_admitted_total": 2,
+                        "analysis_requests_seen": 2,
+                        "processed_deferred_total": 2,
+                        "backlog_capacity_drops": 0,
+                        "high_water_items": 1,
+                        "high_water_bytes": 10,
+                        "analysis_wait_us": 5,
+                    },
+                    {
+                        "session_id": "s2",
+                        "analysis_admitted_total": 1,
+                        "analysis_requests_seen": 1,
+                        "processed_deferred_total": 1,
+                        "backlog_capacity_drops": 0,
+                        "high_water_items": 1,
+                        "high_water_bytes": 10,
+                        "analysis_wait_us": 5,
+                    },
+                    {
+                        "session_id": "other-cohort",
+                        "analysis_admitted_total": 99,
+                        "analysis_requests_seen": 99,
+                        "processed_deferred_total": 99,
+                        "backlog_capacity_drops": 0,
+                    },
+                ]
+            },
+            ledger,
+            {"s1", "s2"},
+            {"s1", "s2", "other-cohort"},
+        )
+        self.assertTrue(scoped["pass"])
+        self.assertEqual(scoped["unexpected_sidecar_session_ids"], [])
+
 
 class BaselineConvergenceContractTests(unittest.TestCase):
     @staticmethod
@@ -625,6 +733,24 @@ class BaselineConvergenceContractTests(unittest.TestCase):
         reports[-1]["scheduler"]["sessions_with_metrics"] = 39
         result = CONVERGENCE.evaluate_reports(reports)
         self.assertEqual(result["status"], "NEED_MORE_SESSIONS")
+
+    def test_convergence_rejects_sidecar_integrity_failure(self) -> None:
+        reports = [self.report(20), self.report(30), self.report(40)]
+        for report in reports:
+            report["scheduler"] = {
+                "available": True,
+                "sessions_with_metrics": report["dataset"]["sessions_total"],
+                "analysis_loss_rate": 0.0,
+                "backlog_capacity_drops": 0,
+                "sidecar_integrity": {"available": True, "pass": True},
+            }
+        reports[-1]["scheduler"]["sidecar_integrity"] = {
+            "available": True,
+            "pass": False,
+        }
+        result = CONVERGENCE.evaluate_reports(reports)
+        self.assertEqual(result["status"], "NEED_MORE_SESSIONS")
+        self.assertIn("one or more measurement quality gates failed", result["reasons"])
 
 
 if __name__ == "__main__":

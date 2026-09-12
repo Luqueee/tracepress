@@ -1021,7 +1021,11 @@ def scheduler_sidecar_integrity(
         "processed_deferred_total",
         "backlog_capacity_drops",
     )
-    capture_keys = ("high_water_items", "high_water_bytes", "analysis_wait_us")
+    capture_keys = {
+        "high_water_items": ("high_water_items", "deferred_high_water_items"),
+        "high_water_bytes": ("high_water_bytes", "deferred_high_water_bytes"),
+        "analysis_wait_us": ("analysis_wait_us",),
+    }
     per_session: list[dict[str, Any]] = []
     for session_id in sorted(selected_ids):
         eligible = eligible_by_session.get(session_id, 0)
@@ -1038,7 +1042,9 @@ def scheduler_sidecar_integrity(
             continue
 
         missing_counters = [key for key in required_counter_keys if first_int(record, key) is None]
-        missing_capture_fields = [key for key in capture_keys if first_int(record, key) is None]
+        missing_capture_fields = [
+            field for field, keys in capture_keys.items() if first_int(record, *keys) is None
+        ]
         missing_identity_fields = []
         if identity_required:
             if not isinstance(record.get("measurement_run_id"), str) or not record.get(

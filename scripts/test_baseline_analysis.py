@@ -679,6 +679,45 @@ class BaselineAnalysisContractTests(unittest.TestCase):
             ["measurement_run_id", "tracepress_pid", "capture_complete"],
         )
 
+    def test_scheduler_sidecar_integrity_accepts_v2_high_water_field_names(self) -> None:
+        ledger = [
+            {
+                "session_id": "s1",
+                "provider_request_id": "r1",
+                "eligible": True,
+                "outcome": "Complete",
+                "snapshot_id": "snap-1",
+                "snapshot_status": "complete",
+            }
+        ]
+        result = ANALYZER.scheduler_sidecar_integrity(
+            {
+                "sessions": [
+                    {
+                        "session_id": "s1",
+                        "measurement_run_id": "run-1",
+                        "tracepress_pid": 123,
+                        "capture_complete": True,
+                        "analysis_admitted_total": 1,
+                        "analysis_requests_seen": 1,
+                        "processed_deferred_total": 1,
+                        "backlog_capacity_drops": 0,
+                        "deferred_high_water_items": 1,
+                        "deferred_high_water_bytes": 10,
+                        "analysis_wait_us": 5,
+                    }
+                ]
+            },
+            ledger,
+            {"s1"},
+            {"s1"},
+            measurement_instrument_version=2,
+        )
+
+        self.assertTrue(result["pass"])
+        self.assertEqual(result["per_session"][0]["status"], "passed")
+        self.assertEqual(result["per_session"][0]["missing_capture_fields"], [])
+
 
 class BaselineConvergenceContractTests(unittest.TestCase):
     @staticmethod

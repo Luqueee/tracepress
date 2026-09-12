@@ -9,6 +9,7 @@ import stat
 from pathlib import Path
 import sys
 from tempfile import TemporaryDirectory
+import time
 import unittest
 
 
@@ -196,6 +197,31 @@ class SidecarCollectorTests(unittest.TestCase):
 
             self.assertFalse(result["capture_complete"])
             self.assertIn("capture_timeout", result["capture_reasons"])
+
+    def test_capture_timeout_terminates_descendant_process_group(self) -> None:
+        simulator = """
+import subprocess, sys, time
+marker = sys.argv[1]
+subprocess.Popen([
+    sys.executable,
+    "-c",
+    "import pathlib, sys, time; time.sleep(0.25); pathlib.Path(sys.argv[1]).write_text('alive')",
+    marker,
+])
+time.sleep(2)
+"""
+        with TemporaryDirectory() as directory:
+            marker = Path(directory) / "descendant-alive"
+            result = COLLECTOR.collect_scheduler_metrics(
+                [sys.executable, "-c", simulator, str(marker)],
+                Path(directory),
+                timeout_seconds=0.05,
+            )
+
+            self.assertFalse(result["capture_complete"])
+            self.assertIn("capture_timeout", result["capture_reasons"])
+            time.sleep(0.35)
+            self.assertFalse(marker.exists())
 
     def test_oversized_machine_line_is_rejected(self) -> None:
         command = [

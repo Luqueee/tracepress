@@ -783,6 +783,17 @@ class BaselineConvergenceContractTests(unittest.TestCase):
         self.assertEqual(result["status"], "NEED_MORE_SESSIONS")
         self.assertIn("one or more measurement quality gates failed", result["reasons"])
 
+    def test_v2_convergence_requires_scheduler_sidecar(self) -> None:
+        reports = [self.report(20), self.report(30), self.report(40)]
+        for report in reports:
+            report["manifest"] = {"measurement_instrument_version": 2}
+
+        result = CONVERGENCE.evaluate_reports(reports)
+
+        self.assertEqual(result["status"], "NEED_MORE_SESSIONS")
+        self.assertIn("one or more measurement quality gates failed", result["reasons"])
+        self.assertFalse(result["quality"][-1]["checks"]["scheduler_sidecar_integrity"]["pass"])
+
 
 if __name__ == "__main__":
     raise SystemExit(unittest.main())

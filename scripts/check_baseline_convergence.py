@@ -204,7 +204,17 @@ def _quality_gate(report: dict[str, Any]) -> dict[str, Any]:
         "pass": values["context_malformed"] == 0,
     }
     scheduler = report.get("scheduler")
-    if isinstance(scheduler, dict) and scheduler.get("available"):
+    manifest = report.get("manifest")
+    instrument_version = (
+        _number(manifest.get("measurement_instrument_version"))
+        if isinstance(manifest, dict)
+        else None
+    )
+    requires_scheduler_sidecar = instrument_version is not None and instrument_version >= 2
+    if requires_scheduler_sidecar or (
+        isinstance(scheduler, dict) and scheduler.get("available")
+    ):
+        scheduler = scheduler if isinstance(scheduler, dict) else {}
         loss_rate = _number(scheduler.get("analysis_loss_rate"))
         capacity_drops = _number(scheduler.get("backlog_capacity_drops"))
         sessions_total = _number(report.get("dataset", {}).get("sessions_total"))
@@ -236,11 +246,21 @@ def _quality_gate(report: dict[str, Any]) -> dict[str, Any]:
                 "pass": counter_consistency.get("pass") is True,
             }
         sidecar_integrity = scheduler.get("sidecar_integrity")
-        if isinstance(sidecar_integrity, dict) and sidecar_integrity.get("available"):
+        if requires_scheduler_sidecar or (
+            isinstance(sidecar_integrity, dict) and sidecar_integrity.get("available")
+        ):
             checks["scheduler_sidecar_integrity"] = {
-                "value": sidecar_integrity.get("status"),
+                "value": (
+                    sidecar_integrity.get("status")
+                    if isinstance(sidecar_integrity, dict)
+                    else None
+                ),
                 "target": "passed",
-                "pass": sidecar_integrity.get("pass") is True,
+                "pass": (
+                    isinstance(sidecar_integrity, dict)
+                    and sidecar_integrity.get("available") is True
+                    and sidecar_integrity.get("pass") is True
+                ),
             }
     integrity = report.get("analysis_integrity", {}).get(
         "measurement_integrity",

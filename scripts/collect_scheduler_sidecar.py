@@ -15,6 +15,7 @@ import json
 import os
 from pathlib import Path
 import selectors
+import signal
 import subprocess
 import sys
 import time
@@ -141,10 +142,16 @@ def write_atomic_json(path: Path, value: dict[str, Any]) -> None:
 
 
 def _terminate_process(process: subprocess.Popen[bytes]) -> None:
-    try:
-        process.kill()
-    except ProcessLookupError:
-        pass
+    if os.name == "posix":
+        try:
+            os.killpg(process.pid, signal.SIGKILL)
+        except ProcessLookupError:
+            pass
+    else:
+        try:
+            process.kill()
+        except ProcessLookupError:
+            pass
     process.wait()
 
 
@@ -255,12 +262,14 @@ def collect_scheduler_metrics(
     process_start_error: str | None = None
     capture_error: str | None = None
     try:
-        process = subprocess.Popen(
-            list(command),
-            env=environment,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-        )
+        popen_options: dict[str, Any] = {
+            "env": environment,
+            "stdout": subprocess.PIPE,
+            "stderr": subprocess.DEVNULL,
+        }
+        if os.name == "posix":
+            popen_options["start_new_session"] = True
+        process = subprocess.Popen(list(command), **popen_options)
         assert process.stdout is not None
         for raw_line in _iter_capture_lines(process.stdout, timeout_seconds):
             line = raw_line.rstrip(b"\r")

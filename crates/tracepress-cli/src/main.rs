@@ -3722,6 +3722,8 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
     let _proxy_result = proxy_task.await;
     let (recorded, drain_timed_out) = match tokio::time::timeout(RECORDER_DRAIN_TIMEOUT, async {
         background_proxy.wait_for_background_tasks().await;
+        // The proxy task was aborted above, so this is the scheduler's final drain barrier: no
+        // new forwards can mutate these counters while recorder/context evidence is drained.
         let deferred_metrics = background_proxy.deferred_analysis_metrics();
         println!(
             "deferred_queue_items={}\ndeferred_queue_bytes={}\ndeferred_high_water_items={}\ndeferred_high_water_bytes={}\nanalysis_admitted_total={}\nanalysis_deferred_total={}\nprocessed_deferred_total={}\nbacklog_capacity_drops={}\nanalysis_wait_us={}",

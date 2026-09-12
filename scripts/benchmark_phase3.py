@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""Measure Phase 2 baseline versus current Phase 3 analysis OFF and ON.
+"""Measure a frozen baseline checkout versus current context analysis OFF and ON.
 
 The harness deliberately uses only the Python standard library. It builds the exact
-``phase-2-complete`` tag in a temporary git worktree and a separate Cargo target directory,
+selected baseline tag in a temporary git worktree and a separate Cargo target directory,
 then builds the current checkout with the same release profile. Every arm drives the real
 ``tracepress run`` path against the same deterministic local upstream, with fresh process and
 home isolation per workload/arm. The current binary runs twice with context analysis OFF and
@@ -1228,7 +1228,7 @@ def aa_envelopes(
 
 def render_table(report: dict[str, Any]) -> str:
     lines = [
-        "Phase 2 baseline vs current context analysis OFF/ON",
+        "Frozen baseline vs current context analysis OFF/ON",
         "workload                 metric       baseline med/p95    OFF med/p95        ON med/p95         ON-OFF",
         "-----------------------  -----------  ------------------  ----------------  ----------------  --------",
     ]
@@ -1268,8 +1268,9 @@ def render_table(report: dict[str, Any]) -> str:
         "absolute and relative values without an invented tolerance."
     )
     lines.append(
-        "Queue counters/errors are reported for every arm; analysis concurrency cap=2 and "
-        "heavy context queue cap=4. Idle RSS ON-OFF is the reported process-resident delta."
+        "Queue counters/errors are reported for every arm; analysis concurrency cap=2, "
+        "deferred analysis cap=32 items/64 MiB, and durable ingestion cap=4. Idle RSS ON-OFF "
+        "is the reported process-resident delta."
     )
     return "\n".join(lines)
 
@@ -1278,6 +1279,14 @@ def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--baseline-tag", default=BASELINE_TAG)
+    parser.add_argument(
+        "--expected-baseline-commit",
+        default=EXPECTED_BASELINE_COMMIT,
+        help=(
+            "expected commit prefix for the baseline tag "
+            f"(default: {EXPECTED_BASELINE_COMMIT})"
+        ),
+    )
     parser.add_argument("--samples", type=int, default=DEFAULT_SAMPLES)
     parser.add_argument("--warmup", type=int, default=DEFAULT_WARMUP)
     parser.add_argument("--burst", type=int, help=argparse.SUPPRESS)
@@ -1330,9 +1339,10 @@ def main() -> int:
         return 0
     repo = args.repo_root.resolve()
     baseline_commit = git_output(repo, "rev-parse", f"{args.baseline_tag}^{{commit}}")
-    if not baseline_commit.startswith(EXPECTED_BASELINE_COMMIT):
+    if not baseline_commit.startswith(args.expected_baseline_commit):
         raise BenchmarkError(
-            f"baseline tag {args.baseline_tag} resolved to {baseline_commit}, expected {EXPECTED_BASELINE_COMMIT}"
+            f"baseline tag {args.baseline_tag} resolved to {baseline_commit}, "
+            f"expected {args.expected_baseline_commit}"
         )
     current_commit = git_output(repo, "rev-parse", "HEAD")
     current_worktree_dirty = bool(git_output(repo, "status", "--porcelain"))
@@ -1352,6 +1362,7 @@ def main() -> int:
         "metadata": {
             "baseline_tag": args.baseline_tag,
             "baseline_commit": baseline_commit,
+            "expected_baseline_commit": args.expected_baseline_commit,
             "current_worktree_dirty": current_worktree_dirty,
             "current_commit": current_commit,
             "compiler_profile": "release (Cargo workspace profile; --locked)",
@@ -1361,11 +1372,11 @@ def main() -> int:
             "workloads": args.workloads,
             "upstream": "deterministic local HTTP/1.1 socket server",
             "phase_arms": {
-                "baseline_a": "phase-2-complete tag; Phase 3 env ignored; first A/A arm",
+                "baseline_a": "selected baseline tag; context-analysis env ignored; first A/A arm",
                 "off_a": "current checkout with TRACEPRESS_CONTEXT_ANALYSIS=off; first A/A arm",
                 "on": "current checkout with TRACEPRESS_CONTEXT_ANALYSIS=shadow",
                 "off_b": "current checkout with TRACEPRESS_CONTEXT_ANALYSIS=off; second A/A arm",
-                "baseline_b": "phase-2-complete tag; Phase 3 env ignored; second A/A arm",
+                "baseline_b": "selected baseline tag; context-analysis env ignored; second A/A arm",
             },
             "arm_order": ["baseline_a", "off_a", "on", "off_b", "baseline_b"],
             "aa_comparisons": {
@@ -1383,6 +1394,8 @@ def main() -> int:
             "forwarding_bound": 64,
             "context_analysis_concurrency_cap": 2,
             "context_ingestion_queue_cap": 4,
+            "deferred_analysis_queue_item_cap": 32,
+            "deferred_analysis_queue_byte_cap": 64 * 1024 * 1024,
             "request_errors_must_be_zero": True,
         },
         "results": {},
@@ -1391,8 +1404,8 @@ def main() -> int:
     # control socket below it. The labels remain in report metadata and errors.
     with tempfile.TemporaryDirectory(prefix="tp3-") as temporary:
         temporary_root = Path(temporary)
-        baseline_worktree = temporary_root / "phase-2-complete-worktree"
-        baseline_target = temporary_root / "phase-2-complete-target"
+        baseline_worktree = temporary_root / "baseline-worktree"
+        baseline_target = temporary_root / "baseline-target"
         current_target = temporary_root / "current-target"
         try:
             run_checked(

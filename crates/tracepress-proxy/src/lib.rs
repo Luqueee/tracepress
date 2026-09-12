@@ -7,13 +7,16 @@
 
 pub(crate) mod decoding;
 
-use std::collections::{BTreeMap, BTreeSet};
 use std::num::NonZeroUsize;
 use std::sync::{
     Arc, Mutex,
     atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering},
 };
 use std::time::{Duration, Instant};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    future::Future,
+};
 
 use axum::Router;
 use axum::body::{Body, Bytes, to_bytes};
@@ -187,6 +190,8 @@ pub struct DeferredAnalysisMetrics {
     pub high_water_bytes: u64,
     /// Number of requests admitted to deferred analysis.
     pub deferred_total: u64,
+    /// Number of admitted requests that waited for an active forward to settle.
+    pub deferred_due_to_active_forwards_total: u64,
     /// Number of admitted jobs whose analysis was handed to the sink.
     pub processed_deferred_total: u64,
     /// Number of requests rejected by the item or byte admission bound.
@@ -274,6 +279,34 @@ pub struct BackgroundTaskSpawner {
 }
 
 impl BackgroundTaskSpawner {
+    /// Creates a task spawner with an independent shutdown tracker.
+    #[must_use]
+    pub fn new() -> Self {
+        Self {
+            tracker: BackgroundTracker::new(),
+        }
+    }
+
+    /// Runs one asynchronous auxiliary task while keeping the proxy shutdown barrier live.
+    ///
+    /// The tracker guard is moved into the task before it is submitted, so a shutdown drain
+    /// cannot finish until the task has either completed or exited. Returns `false` only when
+    /// called outside a Tokio runtime.
+    pub fn spawn<F>(&self, task: F) -> bool
+    where
+        F: Future<Output = ()> + Send + 'static,
+    {
+        let Ok(handle) = tokio::runtime::Handle::try_current() else {
+            return false;
+        };
+        let guard = self.tracker.guard();
+        drop(handle.spawn(async move {
+            let _guard = guard;
+            task.await;
+        }));
+        true
+    }
+
     /// Runs one blocking auxiliary task without holding up the forwarding task.
     ///
     /// The tracker guard is moved into the task before it is submitted, so a shutdown drain
@@ -292,6 +325,12 @@ impl BackgroundTaskSpawner {
             task();
         }));
         true
+    }
+}
+
+impl Default for BackgroundTaskSpawner {
+    fn default() -> Self {
+        Self::new()
     }
 }
 
@@ -724,6 +763,7 @@ struct DeferredAnalysisQueue {
     high_water_items: AtomicUsize,
     high_water_bytes: AtomicU64,
     deferred_total: AtomicU64,
+    deferred_due_to_active_forwards_total: AtomicU64,
     processed_deferred_total: AtomicU64,
     backlog_capacity_drops: AtomicU64,
     analysis_wait_us: AtomicU64,
@@ -761,6 +801,7 @@ impl DeferredAnalysisQueue {
             high_water_items: AtomicUsize::new(0),
             high_water_bytes: AtomicU64::new(0),
             deferred_total: AtomicU64::new(0),
+            deferred_due_to_active_forwards_total: AtomicU64::new(0),
             processed_deferred_total: AtomicU64::new(0),
             backlog_capacity_drops: AtomicU64::new(0),
             analysis_wait_us: AtomicU64::new(0),
@@ -854,10 +895,18 @@ impl DeferredAnalysisQueue {
 
     async fn run(self: Arc<Self>) {
         loop {
+            let had_active_forward = self.active_forwards.load(Ordering::Acquire) != 0;
             self.wait_for_forwarding_idle().await;
             let notified = self.notify.notified();
             let job = match self.next_ready() {
-                DeferredAnalysisNext::Ready(job) => *job,
+                DeferredAnalysisNext::Ready(job) => {
+                    if had_active_forward {
+                        let _counted = self
+                            .deferred_due_to_active_forwards_total
+                            .fetch_add(1, Ordering::Relaxed);
+                    }
+                    *job
+                }
                 DeferredAnalysisNext::Waiting => {
                     notified.await;
                     continue;
@@ -926,6 +975,9 @@ impl DeferredAnalysisQueue {
                 .unwrap_or(u64::MAX),
             high_water_bytes: self.high_water_bytes.load(Ordering::Relaxed),
             deferred_total: self.deferred_total.load(Ordering::Relaxed),
+            deferred_due_to_active_forwards_total: self
+                .deferred_due_to_active_forwards_total
+                .load(Ordering::Relaxed),
             processed_deferred_total: self.processed_deferred_total.load(Ordering::Relaxed),
             backlog_capacity_drops: self.backlog_capacity_drops.load(Ordering::Relaxed),
             analysis_wait_us: self.analysis_wait_us.load(Ordering::Relaxed),
@@ -2605,6 +2657,41 @@ mod tests {
             TriggerResult::Analyzed
         );
         assert_eq!(active_forwards.load(Ordering::Acquire), 0);
+    }
+
+    #[tokio::test]
+    async fn shutdown_drain_waits_for_deferred_analysis_worker() {
+        let active_forwards = Arc::new(AtomicU64::new(0));
+        let active_notify = Arc::new(Notify::new());
+        let active = ActiveForwardGuard::acquire(&active_forwards, &active_notify);
+        let background = BackgroundTracker::new();
+        let queue = DeferredAnalysisQueue::new(
+            background.clone(),
+            Arc::clone(&active_forwards),
+            Arc::clone(&active_notify),
+        );
+        let sink = Arc::new(OrderingSink::default());
+        queue.enqueue(deferred_job(&queue, ForwardId(0), Arc::clone(&sink)));
+
+        let drain = tokio::spawn(async move { background.wait().await });
+        tokio::time::sleep(Duration::from_millis(5)).await;
+        assert!(
+            !drain.is_finished(),
+            "shutdown must wait for the active forward"
+        );
+
+        drop(active);
+        assert!(
+            tokio::time::timeout(Duration::from_secs(1), drain)
+                .await
+                .is_ok(),
+            "deferred analysis must drain after forwarding settles"
+        );
+        assert_eq!(
+            sink.forwards.lock().expect("ordering sink lock").as_slice(),
+            &[ForwardId(0)]
+        );
+        assert_eq!(queue.metrics().processed_deferred_total, 1);
     }
 
     #[tokio::test]

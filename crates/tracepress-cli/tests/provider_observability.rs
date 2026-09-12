@@ -97,7 +97,7 @@ data: {{"response":{{"id":"resp_e2e_1","model":"gpt-test","status":"completed","
     ]
 }
 
-/// A completed stream whose usage object cannot fit in one bounded control frame.
+/// A completed stream whose exact usage object is too large for one bounded control frame.
 fn oversized_usage_events() -> Vec<String> {
     let filler = "f".repeat(16 * 1024);
     vec![format!(
@@ -1357,28 +1357,44 @@ fn context_analysis_off_preserves_bytes_and_phase2_provider_rows() -> TestResult
 }
 
 #[test]
-fn observation_rejected_by_the_control_frame_bound_never_disturbs_the_agent() -> TestResult {
+fn oversized_provider_metadata_is_compacted_at_the_control_frame_boundary() -> TestResult {
     let recorded = run_streamed_case(oversized_usage_events())?;
-    // The child asserted byte-exact response bytes, so forwarding survived the rejected record.
+    // The child asserted byte-exact response bytes, so forwarding survived the metadata
+    // compaction at the control boundary.
     assert_upstream_saw_exact_request(&recorded.received, &recorded.request)?;
 
     let root = recorded.directory.path();
     let database = Connection::open(root.join("tracepress.sqlite3"))?;
     assert_eq!(
         integer(&database, "SELECT COUNT(*) FROM provider_requests")?,
-        0,
-        "an untransportable observation must be dropped, not partially recorded"
+        1,
+        "a large raw usage object must not make the provider request disappear"
     );
     assert_eq!(
         integer(&database, "SELECT COUNT(*) FROM provider_attempts")?,
-        0
+        1
     );
     assert_eq!(
         integer(&database, "SELECT COUNT(*) FROM provider_usage")?,
-        0
+        1
     );
-    // The undeliverable semantic record falls back to the transport record, so the forward
-    // still leaves exactly one inference operation behind instead of none or two.
+    assert_eq!(
+        integer(
+            &database,
+            "SELECT CASE WHEN raw_usage_json IS NULL THEN 1 ELSE 0 END FROM provider_usage",
+        )?,
+        1,
+        "only the oversized optional raw usage evidence is omitted"
+    );
+    assert_eq!(
+        text(
+            &database,
+            "SELECT input_total || '|' || output_total || '|' || total || '|' || usage_status FROM provider_usage",
+        )?,
+        "1|1|2|final",
+        "normalized provider usage must remain durable"
+    );
+    // The forward leaves exactly one inference operation behind instead of none or two.
     assert_eq!(
         integer(
             &database,
@@ -1479,8 +1495,7 @@ fn forwards_beyond_the_correlation_bound_keep_one_attempt_each() -> TestResult {
 }
 
 #[test]
-fn context_queue_backpressure_drops_only_analysis_after_all_provider_receipts_commit() -> TestResult
-{
+fn context_queue_overflow_drops_only_analysis_after_all_provider_receipts_commit() -> TestResult {
     let (directory, stdout) = run_context_saturation_case()?;
     let root = directory.path();
     let database = Connection::open(root.join("tracepress.sqlite3"))?;
@@ -1498,28 +1513,37 @@ fn context_queue_backpressure_drops_only_analysis_after_all_provider_receipts_co
         forwards,
         "every provider attempt must survive context queue saturation"
     );
-    let counter = stdout
+    let observer_counter = stdout
         .lines()
         .find_map(|line| line.strip_prefix("context_observer_backpressure_total="))
         .ok_or("run did not report the context backpressure counter")?
         .parse::<u64>()?;
+    assert_eq!(
+        observer_counter, 0,
+        "context ingestion pressure must defer instead of using observer backpressure drops; stdout={stdout}"
+    );
+    let capacity_counter = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("context_deferred_backlog_capacity_total="))
+        .ok_or("run did not report the deferred backlog capacity counter")?
+        .parse::<u64>()?;
     let snapshots = integer(&database, "SELECT COUNT(*) FROM context_snapshots")?;
     assert!(
-        counter > 0,
-        "context queue must saturate deterministically; snapshots={snapshots} stdout={stdout}"
+        capacity_counter > 0,
+        "deferred backlog must saturate deterministically; snapshots={snapshots} stdout={stdout}"
     );
     let payload: Vec<u8> = database.query_row(
         r#"SELECT payload FROM events
            WHERE event_type = 'context.analysis.dropped'
-             AND CAST(payload AS TEXT) LIKE '%"status":"observer_backpressure"%'
+             AND CAST(payload AS TEXT) LIKE '%"reason":"deferred_backlog_capacity"%'
            ORDER BY seq
            LIMIT 1"#,
         [],
         |row| row.get(0),
     )?;
     let payload = String::from_utf8(payload)?;
-    assert!(payload.contains(r#""status":"observer_backpressure""#));
-    assert!(payload.contains(r#""reason":"observer_backpressure""#));
+    assert!(payload.contains(r#""status":"deferred_backlog_capacity""#));
+    assert!(payload.contains(r#""reason":"deferred_backlog_capacity""#));
     assert!(payload.contains(r#""dropped_count":"#));
     assert_no_canaries_in_storage(root)?;
     Ok(())

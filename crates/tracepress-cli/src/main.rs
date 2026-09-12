@@ -15,7 +15,7 @@
 #[cfg(unix)]
 use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::{
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     future::Future,
     path::PathBuf,
     process::Stdio,
@@ -30,7 +30,6 @@ use axum::serve;
 use clap::{Parser, Subcommand};
 use tokio::net::TcpListener;
 use tokio::process::Command;
-use tokio::sync::{OwnedSemaphorePermit, Semaphore};
 use tokio_util::sync::CancellationToken;
 use tracepress_context::{
     ContextAnalysisLimits, ContextAnalysisResult, ContextAnalysisStatus, ContextBlockKind,
@@ -55,7 +54,7 @@ use tracepress_provider::{
     RequestObservation, ResponseObservation,
 };
 use tracepress_proxy::{
-    CompactionObservation, ContextAnalysisDropReason, ContextAnalysisMode,
+    BackgroundTaskSpawner, CompactionObservation, ContextAnalysisDropReason, ContextAnalysisMode,
     ContextAnalysisObservation, ContextAnalysisOutcome, ForwardId, ForwardMetadata, InboundRoute,
     MetadataSink, MetadataSinkError, ObservationSinkError, ProviderObservationSink, ProxyConfig,
     RequestContextObservation, TransparentProxy, TransportFailure,
@@ -163,7 +162,7 @@ enum RunEvent {
     ContextAnalysis(
         ForwardId,
         ContextAnalysisOutcome,
-        Option<OwnedSemaphorePermit>,
+        Option<AnalysisOutputPermit>,
     ),
     /// The interpreted response of one forward, with its correlation status.
     Response(ForwardId, Box<ResponseObservation>, CorrelationStatus),
@@ -173,6 +172,98 @@ enum RunEvent {
     TransportFailure(ForwardId, TransportFailure),
     /// Transport-only evidence for one provider-managed context compaction.
     Compaction(Box<CompactionObservation>),
+}
+
+/// Bounded ingress for durable semantic events.
+///
+/// Provider request/context events are produced by detached observers. A full recorder channel
+/// must defer those compact events instead of rejecting them merely because the recorder is
+/// temporarily busy with `SQLite` work. One tracked pump preserves the bound and avoids creating a
+/// blocking task per event.
+#[derive(Debug)]
+struct DurableEventIngress<T> {
+    sender: tokio::sync::mpsc::Sender<T>,
+    state: Mutex<DurableEventIngressState<T>>,
+    background: BackgroundTaskSpawner,
+}
+
+#[derive(Debug)]
+struct DurableEventIngressState<T> {
+    events: VecDeque<T>,
+    pump_running: bool,
+}
+
+impl<T> Default for DurableEventIngressState<T> {
+    fn default() -> Self {
+        Self {
+            events: VecDeque::new(),
+            pump_running: false,
+        }
+    }
+}
+
+impl<T> DurableEventIngress<T>
+where
+    T: Send + 'static,
+{
+    fn new(sender: tokio::sync::mpsc::Sender<T>, background: BackgroundTaskSpawner) -> Arc<Self> {
+        Arc::new(Self {
+            sender,
+            state: Mutex::new(DurableEventIngressState::default()),
+            background,
+        })
+    }
+
+    fn try_send(self: &Arc<Self>, event: T) -> Result<(), MetadataSinkError> {
+        let start_pump = {
+            let mut state = self
+                .state
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            if state.events.len() >= RECORDER_QUEUE_ITEMS {
+                return Err(MetadataSinkError::rejected());
+            }
+            state.events.push_back(event);
+            if state.pump_running {
+                false
+            } else {
+                state.pump_running = true;
+                true
+            }
+        };
+        if start_pump {
+            let ingress = Arc::clone(self);
+            let _spawned = self.background.spawn(async move {
+                ingress.run().await;
+            });
+        }
+        Ok(())
+    }
+
+    async fn run(self: Arc<Self>) {
+        loop {
+            let event = {
+                let mut state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                let Some(event) = state.events.pop_front() else {
+                    state.pump_running = false;
+                    return;
+                };
+                event
+            };
+            if self.sender.send(event).await.is_err() {
+                let mut state = self
+                    .state
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                state.events.clear();
+                state.pump_running = false;
+                return;
+            }
+        }
+    }
 }
 
 /// Context data handed from the provider recorder to the independent context worker.
@@ -186,10 +277,66 @@ struct ContextIngestionJob {
     attempt_id: AttemptId,
     inference_operation_id: OperationId,
     analysis: ContextAnalysisResult,
-    analysis_permit: Option<OwnedSemaphorePermit>,
+    analysis_permit: Option<AnalysisOutputPermit>,
     provider_input_tokens: Option<u64>,
     provider_usage_comparable: bool,
     correlation: CorrelationStatus,
+}
+
+/// Bounded permits for analyzed outcomes waiting to cross into context ingestion.
+///
+/// A full context-ingestion queue is auxiliary backpressure, not an analysis loss. The permit is
+/// acquired from the detached analysis worker, so that worker waits for the single ingestion
+/// worker to make room while forwarding remains independent. The number of retained analyzed
+/// outcomes remains bounded by the existing hard queue capacity.
+#[derive(Debug)]
+struct AnalysisOutputSlots {
+    available: Mutex<usize>,
+    wake: Condvar,
+}
+
+#[derive(Debug)]
+struct AnalysisOutputPermit {
+    slots: Arc<AnalysisOutputSlots>,
+}
+
+impl AnalysisOutputSlots {
+    fn new(capacity: usize) -> Arc<Self> {
+        Arc::new(Self {
+            available: Mutex::new(capacity.max(1)),
+            wake: Condvar::new(),
+        })
+    }
+
+    /// Waits off the forwarding/runtime path until one bounded outcome can be retained.
+    fn acquire(self: &Arc<Self>) -> AnalysisOutputPermit {
+        let mut available = self
+            .available
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        while *available == 0 {
+            available = self
+                .wake
+                .wait(available)
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+        }
+        *available = available.saturating_sub(1);
+        AnalysisOutputPermit {
+            slots: Arc::clone(self),
+        }
+    }
+}
+
+impl Drop for AnalysisOutputPermit {
+    fn drop(&mut self) {
+        let mut available = self
+            .slots
+            .available
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        *available = available.saturating_add(1);
+        self.slots.wake.notify_one();
+    }
 }
 
 /// Compact provider receipt retained while the detached context outcome is still in flight.
@@ -222,18 +369,18 @@ struct ContextCoverage {
 struct ContextAnalysisInput {
     forward: ForwardId,
     outcome: ContextAnalysisOutcome,
-    analysis_permit: Option<OwnedSemaphorePermit>,
+    analysis_permit: Option<AnalysisOutputPermit>,
 }
 struct ContextFailureInput<'context> {
     forward: ForwardId,
     context: Option<&'context ContextAnalysisOutcome>,
-    analysis_permit: Option<OwnedSemaphorePermit>,
+    analysis_permit: Option<AnalysisOutputPermit>,
 }
 
 struct EnqueueContextInput<'receipt> {
     receipt: &'receipt ContextReceipt,
     outcome: ContextAnalysisOutcome,
-    analysis_permit: Option<OwnedSemaphorePermit>,
+    analysis_permit: Option<AnalysisOutputPermit>,
 }
 
 struct ContextAppendBatchInput {
@@ -652,6 +799,75 @@ impl ContextCounters {
         )
     }
 }
+
+/// Builds a provider observation request that fits the bounded control protocol.
+///
+/// Provider usage is retained exactly up to the durable `SQLite` bound, but `RawProviderUsage` is
+/// serialized as a JSON byte array on IPC. A large, otherwise valid usage object can therefore
+/// exceed the smaller control-body bound. The raw object is optional evidence: normalized usage
+/// remains provider truth and is kept in the observation while only oversized metadata is removed
+/// at this daemon boundary. No request or response wire body passes through this helper.
+fn bounded_record_provider_observation_request(
+    session_id: SessionId,
+    parent_operation_id: OperationId,
+    mut observation: ObservationRecord,
+) -> ControlRequest {
+    let ids = UuidV7Generator::new();
+    let request_id = RequestId::generate(&ids);
+    let maximum_body = MaxRequestBodyBytes::new(BODY_BYTES).ok();
+    let fits = |candidate: &ObservationRecord| {
+        let request = ControlRequest::RecordProviderObservation {
+            session_id,
+            parent_operation_id,
+            observation: Box::new(candidate.clone()),
+        };
+        let Ok(body) = serde_json::to_vec(&request) else {
+            return false;
+        };
+        let body_fits = u64::try_from(body.len()).is_ok_and(|length| length <= BODY_BYTES);
+        let Some(maximum_body) = maximum_body else {
+            return false;
+        };
+        let Ok(ipc_request) = IpcRequest::new(request_id, body, maximum_body) else {
+            return false;
+        };
+        let frame_fits = serde_json::to_vec(&ipc_request).is_ok_and(|frame| {
+            u64::try_from(frame.len()).is_ok_and(|length| length <= FRAME_BYTES)
+        });
+        body_fits && frame_fits
+    };
+
+    if !fits(&observation) {
+        if let Some(response) = observation.response.as_mut() {
+            response.raw_usage = None;
+        }
+    }
+    if !fits(&observation) {
+        if let Some(response) = observation.response.as_mut() {
+            response.provider_response_id = None;
+            response.model = None;
+            response.incomplete_reason = None;
+            response.error_code = None;
+        }
+    }
+    if !fits(&observation) {
+        observation.request.model = None;
+        observation.request.reasoning_effort = None;
+        observation.request.verbosity = None;
+        observation.request.truncation = None;
+    }
+    if !fits(&observation) {
+        observation.response = None;
+        observation.transport_error = None;
+    }
+
+    ControlRequest::RecordProviderObservation {
+        session_id,
+        parent_operation_id,
+        observation: Box::new(observation),
+    }
+}
+
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 struct TransportSequence(u64);
 
@@ -883,12 +1099,12 @@ async fn run_transport_dispatcher(
 /// that FIFO, so accepted transport status always reaches the recorder before its response.
 #[derive(Debug)]
 struct RecorderSink {
-    sender: tokio::sync::mpsc::Sender<RunEvent>,
+    durable: Arc<DurableEventIngress<RunEvent>>,
     ordering: Arc<TransportOrdering>,
     counters: Arc<CorrelationCounters>,
     context_counters: Arc<ContextCounters>,
     /// Bounds analyzed outcomes retained between the recorder channel and the context worker.
-    analysis_slots: Arc<Semaphore>,
+    analysis_slots: Arc<AnalysisOutputSlots>,
     analysis_enabled: bool,
 }
 
@@ -908,7 +1124,7 @@ impl RecorderSink {
         self.counters.degraded(reason);
         // Preserve a content-free degradation marker for routes without a semantic response.
         let _ = self
-            .sender
+            .durable
             .try_send(RunEvent::TransportAdmissionFailed(forward, reason));
         Err(MetadataSinkError::rejected())
     }
@@ -930,9 +1146,9 @@ impl RecorderSink {
                     self.counters.degraded(reason);
                 }
                 let _ = self
-                    .sender
+                    .durable
                     .try_send(RunEvent::TransportAdmissionFailed(forward, reason));
-                self.sender
+                self.durable
                     .try_send(RunEvent::Response(
                         forward,
                         failure.observation,
@@ -943,13 +1159,11 @@ impl RecorderSink {
         }
     }
 
-    /// Provider observations are produced by detached observer tasks, so a full recorder queue
-    /// must reject auxiliary work rather than stall a blocking executor worker. The caller turns
-    /// that rejection into explicit observer/backpressure accounting; it never gates forwarding.
+    /// Provider observations are produced by detached observer tasks. An analyzed outcome may
+    /// wait for a bounded context-ingestion slot here, but this method is never called on the
+    /// forwarding task, so the wait cannot affect forwarding.
     fn offer_durable(&self, event: RunEvent) -> Result<(), MetadataSinkError> {
-        self.sender
-            .try_send(event)
-            .map_err(|_error| MetadataSinkError::rejected())
+        self.durable.try_send(event)
     }
 }
 
@@ -996,18 +1210,7 @@ impl ProviderObservationSink for RecorderSink {
             self.context_counters.ensure_seen(forward);
         }
         let permit = match &observation.outcome {
-            ContextAnalysisOutcome::Analyzed(_) => {
-                match Arc::clone(&self.analysis_slots).try_acquire_owned() {
-                    Ok(permit) => Some(permit),
-                    Err(_error) => {
-                        if self.analysis_enabled {
-                            self.context_counters
-                                .dropped(forward, ContextAnalysisDropReason::ObserverBackpressure);
-                        }
-                        return Err(ObservationSinkError::rejected());
-                    }
-                }
-            }
+            ContextAnalysisOutcome::Analyzed(_) => Some(Arc::clone(&self.analysis_slots).acquire()),
             _ => None,
         };
         match self.offer_durable(RunEvent::ContextAnalysis(
@@ -1069,7 +1272,7 @@ struct ForwardState {
     request: Option<PendingObservation>,
     response: Option<ResponseObservation>,
     context: Option<ContextAnalysisOutcome>,
-    context_analysis_permit: Option<OwnedSemaphorePermit>,
+    context_analysis_permit: Option<AnalysisOutputPermit>,
     status_code: Option<u16>,
     transport_failure: Option<TransportFailure>,
     /// Transport admission failed before status could be joined to this forward.
@@ -1144,7 +1347,7 @@ struct SemanticRecord {
     pending: PendingObservation,
     response: Option<ResponseObservation>,
     context: Option<ContextAnalysisOutcome>,
-    analysis_permit: Option<OwnedSemaphorePermit>,
+    analysis_permit: Option<AnalysisOutputPermit>,
     status_code: Option<u16>,
     transport_failure: Option<TransportFailure>,
 }
@@ -1338,11 +1541,11 @@ impl RunRecorder {
         }
         let response = control(
             &self.config,
-            ControlRequest::RecordProviderObservation {
-                session_id: self.session_id,
-                parent_operation_id: self.parent_operation_id,
-                observation: Box::new(record),
-            },
+            bounded_record_provider_observation_request(
+                self.session_id,
+                self.parent_operation_id,
+                record,
+            ),
         )
         .await;
         match response {
@@ -1437,6 +1640,19 @@ impl RunRecorder {
         } = input;
         if self.analysis_enabled {
             self.context_counters.ensure_seen(forward);
+        }
+        // The detached analyzer can finish before the request parser publishes its metadata.
+        // Admit the identity here so an early analysis outcome is retained and can be joined by
+        // the later request/response halves instead of being misclassified as correlation loss.
+        // A retired identity is already terminal and must not be re-admitted.
+        if !self.forwards.contains_key(&forward) {
+            if self.is_retired(forward) {
+                drop(analysis_permit);
+                self.context_counters
+                    .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
+                return;
+            }
+            self.admit(forward).await;
         }
         if let Some(receipt) = self.pending_context.remove(&forward) {
             self.enqueue_context(EnqueueContextInput {
@@ -1766,11 +1982,11 @@ impl RunRecorder {
         };
         let response = control(
             &self.config,
-            ControlRequest::RecordProviderObservation {
-                session_id: self.session_id,
-                parent_operation_id: self.parent_operation_id,
-                observation: Box::new(observation),
-            },
+            bounded_record_provider_observation_request(
+                self.session_id,
+                self.parent_operation_id,
+                observation,
+            ),
         )
         .await;
         let Ok(ControlResponse::Ok {
@@ -2411,7 +2627,7 @@ async fn flush_context_drops(config: &Config, session_id: SessionId, counters: &
 type ObservationRecordParts = (
     ObservationRecord,
     Option<ContextAnalysisOutcome>,
-    Option<OwnedSemaphorePermit>,
+    Option<AnalysisOutputPermit>,
     Option<u64>,
     bool,
 );
@@ -2806,7 +3022,7 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
     let (context_sender, context_receiver) = tokio::sync::mpsc::channel(context_queue_items);
     let counters = Arc::new(CorrelationCounters::default());
     let context_counters = Arc::new(ContextCounters::default());
-    let analysis_slots = Arc::new(Semaphore::new(context_queue_items));
+    let analysis_slots = AnalysisOutputSlots::new(context_queue_items);
     let context_task = tokio::spawn(
         ContextIngestionWorker {
             config: config.clone(),
@@ -2835,10 +3051,11 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
         .run(receiver),
     );
     let transport_task = tokio::spawn(run_transport_dispatcher(transport_receiver, sender.clone()));
+    let durable = DurableEventIngress::new(sender, proxy.background_task_spawner());
     let ordering = Arc::new(TransportOrdering::new(transport_sender));
     let proxy = proxy
         .with_metadata_sink(Arc::new(RecorderSink {
-            sender: sender.clone(),
+            durable: Arc::clone(&durable),
             ordering: Arc::clone(&ordering),
             counters: Arc::clone(&counters),
             context_counters: Arc::clone(&context_counters),
@@ -2846,7 +3063,7 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
             analysis_enabled,
         }))
         .with_observation_sink(Arc::new(RecorderSink {
-            sender,
+            durable: Arc::clone(&durable),
             ordering,
             counters: Arc::clone(&counters),
             context_counters: Arc::clone(&context_counters),
@@ -3335,12 +3552,13 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         background_proxy.wait_for_background_tasks().await;
         let deferred_metrics = background_proxy.deferred_analysis_metrics();
         println!(
-            "deferred_queue_items={}\ndeferred_queue_bytes={}\ndeferred_high_water_items={}\ndeferred_high_water_bytes={}\ndeferred_total={}\nprocessed_deferred_total={}\nbacklog_capacity_drops={}\nanalysis_wait_us={}",
+            "deferred_queue_items={}\ndeferred_queue_bytes={}\ndeferred_high_water_items={}\ndeferred_high_water_bytes={}\nanalysis_admitted_total={}\nanalysis_deferred_total={}\nprocessed_deferred_total={}\nbacklog_capacity_drops={}\nanalysis_wait_us={}",
             deferred_metrics.queue_items,
             deferred_metrics.queue_bytes,
             deferred_metrics.high_water_items,
             deferred_metrics.high_water_bytes,
             deferred_metrics.deferred_total,
+            deferred_metrics.deferred_due_to_active_forwards_total,
             deferred_metrics.processed_deferred_total,
             deferred_metrics.backlog_capacity_drops,
             deferred_metrics.analysis_wait_us,
@@ -3914,14 +4132,18 @@ async fn main() -> Result<(), String> {
 }
 #[cfg(test)]
 mod tests {
-    use std::sync::atomic::Ordering;
+    use std::{sync::atomic::Ordering, time::Duration};
 
     use super::{
-        AnalysisSequence, CONTEXT_INGESTION_QUEUE_HARD_CAP, ContextAnalysisDropReason,
-        ContextCounters, ContextSnapshotId, ContextSnapshotStatus, PendingAnalysisEvidence,
-        RequestId, TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator, configure_codex_subscription,
+        AnalysisSequence, BackgroundTaskSpawner, CONTEXT_INGESTION_QUEUE_HARD_CAP,
+        ContextAnalysisDropReason, ContextCounters, ContextSnapshotId, ContextSnapshotStatus,
+        ControlRequest, DurableEventIngress, ObservationRecord, OperationId,
+        PendingAnalysisEvidence, RequestId, SessionId, TERMINAL_ANALYSIS_IDENTITIES,
+        UuidV7Generator, bounded_record_provider_observation_request, configure_codex_subscription,
         context_ingestion_queue_capacity, reconcile_pending_context_with,
     };
+
+    use tracepress_provider::{ObservationInput, ObservationLimits, parse_request, parse_response};
 
     #[test]
     fn codex_subscription_overrides_follow_the_exec_subcommand() {
@@ -3954,6 +4176,78 @@ mod tests {
             CONTEXT_INGESTION_QUEUE_HARD_CAP
         );
         assert_eq!(context_ingestion_queue_capacity(128), 4);
+    }
+
+    #[tokio::test]
+    async fn durable_event_ingress_defers_when_recorder_channel_is_full() {
+        let (sender, mut receiver) = tokio::sync::mpsc::channel(1);
+        let ingress = DurableEventIngress::new(sender.clone(), BackgroundTaskSpawner::new());
+
+        assert!(sender.send(1).await.is_ok());
+        assert!(ingress.try_send(2).is_ok());
+
+        let first = receiver.recv().await.unwrap_or(u64::MAX);
+        let second = match tokio::time::timeout(Duration::from_secs(1), receiver.recv()).await {
+            Ok(Some(event)) => event,
+            _ => u64::MAX,
+        };
+        assert_eq!(first, 1);
+        assert_eq!(second, 2);
+    }
+
+    #[test]
+    fn oversized_provider_raw_usage_is_omitted_at_the_ipc_boundary() {
+        let padding = "x".repeat(12_000);
+        let response_body = format!(
+            "{{\"id\":\"resp_1\",\"model\":\"gpt-5.6-luna\",\"status\":\"completed\",\"usage\":{{\"input_tokens\":7,\"output_tokens\":3,\"total_tokens\":10,\"padding\":\"{padding}\"}}}}"
+        );
+        let limits = ObservationLimits::default();
+        let request = parse_request(ObservationInput::new(
+            br#"{"model":"gpt-5.6-luna","stream":true}"#,
+            limits,
+        ));
+        let response = parse_response(ObservationInput::new(response_body.as_bytes(), limits));
+        assert!(response.raw_usage.is_some());
+
+        let ids = UuidV7Generator::new();
+        let observation = ObservationRecord::new(42, request, "unix-ms:1")
+            .with_response(response)
+            .with_ended_at("unix-ms:2");
+        let control_request = bounded_record_provider_observation_request(
+            SessionId::generate(&ids),
+            OperationId::generate(&ids),
+            observation,
+        );
+
+        let frame_fits = serde_json::to_vec(&control_request)
+            .ok()
+            .and_then(|body| {
+                super::MaxRequestBodyBytes::new(super::BODY_BYTES)
+                    .ok()
+                    .and_then(|maximum| {
+                        super::IpcRequest::new(RequestId::generate(&ids), body, maximum).ok()
+                    })
+            })
+            .and_then(|request| serde_json::to_vec(&request).ok())
+            .map(|frame| {
+                u64::try_from(frame.len()).is_ok_and(|length| length <= super::FRAME_BYTES)
+            });
+        assert_eq!(frame_fits, Some(true));
+        let retained = match &control_request {
+            ControlRequest::RecordProviderObservation { observation, .. } => {
+                observation.response.as_ref().map(|response| {
+                    (
+                        response.raw_usage.is_none(),
+                        response
+                            .normalized_usage
+                            .as_ref()
+                            .and_then(|usage| usage.input_total),
+                    )
+                })
+            }
+            _ => None,
+        };
+        assert_eq!(retained, Some((true, Some(7))));
     }
 
     #[test]

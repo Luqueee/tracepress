@@ -265,6 +265,33 @@ class BaselineAnalysisContractTests(unittest.TestCase):
         self.assertEqual(report["unknown"]["estimated_tokens"], 0)
         self.assertEqual(report["unknown"]["block_count"], 1)
 
+    def test_report_can_restrict_accounting_to_selected_database_sessions(self) -> None:
+        connection = create_fixture()
+        connection.executescript(
+            """
+            INSERT INTO sessions VALUES ('s2', 'closed', 'done');
+            INSERT INTO operations VALUES ('op2', 's2', 'llm_inference', 'completed');
+            INSERT INTO provider_requests VALUES
+                ('r2', 'op2', 200, 'turn', 'chatgpt_codex_subscription', 'gpt-5.6-luna', 'xhigh', 1, 'complete', 'zstd', 'decoded', 200, 600);
+            """
+        )
+
+        report = ANALYZER.analyze_connection(
+            connection,
+            measurement_id="baseline-002",
+            cohort_label="n10",
+            cohort_kind="naturalistic",
+            tracepress_commit="a15ac2d",
+            codex_version="0.154.0",
+            session_ids={"s1"},
+        )
+
+        self.assertEqual(report["dataset"]["sessions_total"], 1)
+        self.assertEqual(report["dataset"]["requests_total"], 1)
+        self.assertEqual(report["dataset"]["session_filter"]["excluded_sessions"], 1)
+        self.assertEqual(report["analysis_integrity"]["eligible_requests"], 1)
+        self.assertEqual(report["analysis_integrity"]["measurement_integrity"], "passed")
+
     def test_ledger_partitions_eligible_requests_and_attaches_identified_drop(self) -> None:
         connection = create_fixture()
         connection.executescript(

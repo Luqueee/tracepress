@@ -212,12 +212,20 @@ def block_distribution(records: Iterable[dict[str, Any]], key: str) -> dict[str,
 
 def event_counts(
     connection: sqlite3.Connection,
+    session_ids: set[str] | None = None,
 ) -> tuple[Counter[str], Counter[str], Counter[str]]:
     counts: Counter[str] = Counter()
     drop_reasons: Counter[str] = Counter()
     drop_work: Counter[str] = Counter()
-    event_rows = rows(connection, "events", ("event_type", "payload"))
+    event_rows = rows(connection, "events", ("session_id", "event_type", "payload"))
     for event in event_rows:
+        if session_ids is not None:
+            payload = _payload_object(event.get("payload"))
+            event_session_id = _nullable_name(payload.get("session_id")) or _nullable_name(
+                event.get("session_id")
+            )
+            if event_session_id not in session_ids:
+                continue
         event_type = safe_name(event.get("event_type"))
         counts[event_type] += 1
         if "drop" in event_type or "partial" in event_type:
@@ -297,7 +305,10 @@ def _payload_bool(value: Any) -> bool:
     return value == 1
 
 
-def _drop_event_records(connection: sqlite3.Connection) -> list[dict[str, Any]]:
+def _drop_event_records(
+    connection: sqlite3.Connection,
+    session_ids: set[str] | None = None,
+) -> list[dict[str, Any]]:
     """Read only bounded metadata for context drop events, never their raw payload."""
 
     records: list[dict[str, Any]] = []
@@ -310,6 +321,11 @@ def _drop_event_records(connection: sqlite3.Connection) -> list[dict[str, Any]]:
         if not (event_type.startswith("context.analysis.") and event_type.endswith(".dropped")):
             continue
         payload = _payload_object(event.get("payload"))
+        event_session_id = _nullable_name(payload.get("session_id")) or _nullable_name(
+            event.get("session_id")
+        )
+        if session_ids is not None and event_session_id not in session_ids:
+            continue
         try:
             dropped_work = max(int(payload.get("dropped_count", 1)), 0)
         except (TypeError, ValueError):
@@ -1257,10 +1273,34 @@ def analyze_connection(
     codex_version: str = "unknown",
     measurement_instrument_version: int = DEFAULT_MEASUREMENT_INSTRUMENT_VERSION,
     runtime_metrics: dict[str, Any] | None = None,
+    session_ids: set[str] | None = None,
 ) -> dict[str, Any]:
     connection.row_factory = sqlite3.Row
-    session_rows = rows(connection, "sessions", ("session_id", "state", "ended_at"))
+    all_session_rows = rows(connection, "sessions", ("session_id", "state", "ended_at"))
+    requested_session_ids = sorted(session_ids) if session_ids is not None else None
+    missing_session_ids = (
+        sorted(
+            set(requested_session_ids or ())
+            - {safe_name(row.get("session_id")) for row in all_session_rows}
+        )
+        if requested_session_ids is not None
+        else []
+    )
+    if missing_session_ids:
+        raise ValueError(f"requested session IDs are absent from database: {missing_session_ids}")
+    selected_session_ids = (
+        {safe_name(row.get("session_id")) for row in all_session_rows}
+        if session_ids is None
+        else set(session_ids)
+    )
+    session_rows = [
+        row for row in all_session_rows if safe_name(row.get("session_id")) in selected_session_ids
+    ]
     operation_rows = rows(connection, "operations", ("operation_id", "session_id", "kind", "status"))
+    operation_rows = [
+        row for row in operation_rows if safe_name(row.get("session_id")) in selected_session_ids
+    ]
+    operation_ids = {safe_name(row.get("operation_id")) for row in operation_rows}
     request_rows = rows(
         connection,
         "provider_requests",
@@ -1283,6 +1323,8 @@ def analyze_connection(
             "compaction_trigger",
         ),
     )
+    request_rows = [row for row in request_rows if safe_name(row.get("operation_id")) in operation_ids]
+    request_ids = {safe_name(row.get("request_id")) for row in request_rows}
     attempt_rows = rows(
         connection,
         "provider_attempts",
@@ -1296,6 +1338,8 @@ def analyze_connection(
             "compaction_output_seen",
         ),
     )
+    attempt_rows = [row for row in attempt_rows if safe_name(row.get("request_id")) in request_ids]
+    attempt_ids = {safe_name(row.get("attempt_id")) for row in attempt_rows}
     usage_rows = rows(
         connection,
         "provider_usage",
@@ -1309,6 +1353,7 @@ def analyze_connection(
             "normalizer_version",
         ),
     )
+    usage_rows = [row for row in usage_rows if safe_name(row.get("attempt_id")) in attempt_ids]
     snapshot_rows = rows(
         connection,
         "context_snapshots",
@@ -1325,6 +1370,13 @@ def analyze_connection(
             "explicit_request_complete",
         ),
     )
+    snapshot_rows = [
+        row
+        for row in snapshot_rows
+        if safe_name(row.get("session_id")) in selected_session_ids
+        and safe_name(row.get("provider_request_id")) in request_ids
+    ]
+    snapshot_ids = {safe_name(row.get("snapshot_id")) for row in snapshot_rows}
     metric_rows = rows(
         connection,
         "context_analysis_metrics",
@@ -1338,6 +1390,7 @@ def analyze_connection(
             "estimate_confidence",
         ),
     )
+    metric_rows = [row for row in metric_rows if safe_name(row.get("snapshot_id")) in snapshot_ids]
     block_rows = rows(
         connection,
         "context_block_occurrences",
@@ -1361,6 +1414,7 @@ def analyze_connection(
             "repetition_score",
         ),
     )
+    block_rows = [row for row in block_rows if safe_name(row.get("snapshot_id")) in snapshot_ids]
     delta_rows = rows(
         connection,
         "context_deltas",
@@ -1375,13 +1429,18 @@ def analyze_connection(
             "common_prefix_estimated_tokens",
         ),
     )
+    delta_rows = [row for row in delta_rows if safe_name(row.get("current_snapshot_id")) in snapshot_ids]
     reconciliation_rows = rows(
         connection,
         "token_reconciliations",
         ("snapshot_id", "visible_estimated_tokens", "provider_input_tokens", "residual_tokens", "comparability"),
     )
-    counts, drop_reasons, drop_work = event_counts(connection)
-    drop_events = _drop_event_records(connection)
+    reconciliation_rows = [
+        row for row in reconciliation_rows if safe_name(row.get("snapshot_id")) in snapshot_ids
+    ]
+    event_session_filter = selected_session_ids if session_ids is not None else None
+    counts, drop_reasons, drop_work = event_counts(connection, event_session_filter)
+    drop_events = _drop_event_records(connection, event_session_filter)
     attempts_by_request, forwarding_errors = request_attempts(request_rows, attempt_rows)
 
     operation_session = {safe_name(row.get("operation_id")): safe_name(row.get("session_id")) for row in operation_rows}
@@ -1536,6 +1595,11 @@ def analyze_connection(
             ),
             "request_kinds": dict(request_kinds),
             "request_observation_status": dict(Counter(safe_name(row.get("observation_status")) for row in request_rows)),
+            "session_filter": {
+                "applied": requested_session_ids is not None,
+                "selected_session_ids": requested_session_ids,
+                "excluded_sessions": len(all_session_rows) - len(session_rows),
+            },
         },
         "quality": {
             "analysis_requests_seen": analysis_seen,
@@ -1858,6 +1922,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="metadata-only scheduler metrics JSON sidecar captured per session",
     )
     parser.add_argument(
+        "--include-session-id",
+        action="append",
+        dest="include_session_ids",
+        help="restrict this report to one database session; repeat for a cohort subset",
+    )
+    parser.add_argument(
         "--measurement-instrument-version",
         type=int,
         default=int(
@@ -1888,6 +1958,7 @@ def main(arguments: list[str] | None = None) -> int:
             codex_version=options.codex_version,
             measurement_instrument_version=options.measurement_instrument_version,
             runtime_metrics=runtime_metrics,
+            session_ids=set(options.include_session_ids) if options.include_session_ids else None,
         )
     except (sqlite3.DatabaseError, ValueError) as error:
         print(f"baseline analysis failed: {error}", file=sys.stderr)

@@ -73,11 +73,11 @@ pub struct ActiveRewriteMetrics {
     pub compressor_version: u32,
     /// Terminal attempt state.
     pub status: ActiveRewriteStatus,
-    /// Original full request bytes.
+    /// Bytes of the decoded representation evaluated by the candidate.
     pub input_bytes: u64,
-    /// Rewritten full request bytes, when a rewrite was accepted.
+    /// Bytes of the decoded candidate representation, when a rewrite was accepted.
     pub output_bytes: Option<u64>,
-    /// Positive byte reduction, when a rewrite was accepted.
+    /// Positive decoded-representation reduction, when a rewrite was accepted.
     pub bytes_delta: Option<i64>,
     /// Number of target spans replaced.
     pub rewrites: u32,
@@ -85,14 +85,20 @@ pub struct ActiveRewriteMetrics {
     pub recovery_verified: bool,
     /// Whether repeated transformation produced identical bytes.
     pub deterministic: bool,
-    /// SHA-256 over the original request body.
+    /// SHA-256 over the decoded representation evaluated by the candidate.
     pub original_fingerprint: [u8; 32],
-    /// SHA-256 over the rewritten request body, when a rewrite was accepted.
+    /// SHA-256 over the rewritten decoded representation, when a rewrite was accepted.
     pub rewritten_fingerprint: Option<[u8; 32]>,
-    /// First request-relative byte changed by the accepted rewrite.
+    /// First decoded-request byte changed by the accepted rewrite.
     pub first_modified_offset: Option<u64>,
-    /// Request-relative common prefix length.
+    /// Decoded-request common prefix length.
     pub preserved_prefix_bytes: Option<u64>,
+    /// Original bytes on the transport wire, when a decoded rewrite was reframed.
+    pub wire_input_bytes: Option<u64>,
+    /// Re-encoded bytes on the transport wire, when a decoded rewrite was reframed.
+    pub wire_output_bytes: Option<u64>,
+    /// Signed wire-size delta; a negative value means wire expansion.
+    pub wire_bytes_delta: Option<i64>,
 }
 
 /// Transient result of an active rewrite. The body is intentionally omitted from [`Debug`] and
@@ -134,40 +140,25 @@ impl ActiveRewrite {
     /// Reframes a successful decoded rewrite onto the bytes that will actually cross the wire.
     ///
     /// This is used by transports such as zstd where the compressor operates on decoded JSON but
-    /// the provider receives a re-encoded body. The never-worse guard is applied to the wire
-    /// representation, and fingerprints/prefix evidence are always wire-relative.
+    /// the provider receives a re-encoded body. The never-worse guard belongs to the decoded
+    /// candidate, while the wire size records transport expansion or reduction explicitly.
     #[must_use]
     pub fn reframe(self, original_wire: &[u8], rewritten_wire: Box<[u8]>) -> Self {
         let Self {
             mut metrics,
             body: _body,
         } = self;
-        let input_bytes = u64::try_from(original_wire.len()).unwrap_or(u64::MAX);
-        let output_bytes = u64::try_from(rewritten_wire.len()).unwrap_or(u64::MAX);
-        if output_bytes >= input_bytes {
-            metrics.status = ActiveRewriteStatus::NoImprovement;
-            metrics.input_bytes = input_bytes;
-            metrics.output_bytes = None;
-            metrics.bytes_delta = None;
-            metrics.original_fingerprint = digest(original_wire);
-            metrics.rewritten_fingerprint = None;
-            metrics.first_modified_offset = None;
-            metrics.preserved_prefix_bytes = None;
+        if !matches!(metrics.status, ActiveRewriteStatus::Rewritten) {
             return Self {
                 metrics,
                 body: None,
             };
         }
-        let prefix = common_prefix(original_wire, &rewritten_wire);
-        metrics.status = ActiveRewriteStatus::Rewritten;
-        metrics.input_bytes = input_bytes;
-        metrics.output_bytes = Some(output_bytes);
-        metrics.bytes_delta = signed_delta(input_bytes, output_bytes);
-        metrics.original_fingerprint = digest(original_wire);
-        metrics.rewritten_fingerprint = Some(digest(&rewritten_wire));
-        metrics.first_modified_offset =
-            (prefix < original_wire.len()).then_some(u64::try_from(prefix).unwrap_or(u64::MAX));
-        metrics.preserved_prefix_bytes = Some(u64::try_from(prefix).unwrap_or(u64::MAX));
+        let input_bytes = u64::try_from(original_wire.len()).unwrap_or(u64::MAX);
+        let output_bytes = u64::try_from(rewritten_wire.len()).unwrap_or(u64::MAX);
+        metrics.wire_input_bytes = Some(input_bytes);
+        metrics.wire_output_bytes = Some(output_bytes);
+        metrics.wire_bytes_delta = signed_delta(input_bytes, output_bytes);
         Self {
             metrics,
             body: Some(rewritten_wire),
@@ -207,6 +198,9 @@ pub fn rewrite_json_minify(
             rewritten_fingerprint: None,
             first_modified_offset: None,
             preserved_prefix_bytes: None,
+            wire_input_bytes: None,
+            wire_output_bytes: None,
+            wire_bytes_delta: None,
         },
         body: None,
     };
@@ -375,6 +369,9 @@ pub fn rewrite_json_minify(
             first_modified_offset: (prefix < input.len())
                 .then_some(u64::try_from(prefix).unwrap_or(u64::MAX)),
             preserved_prefix_bytes: Some(u64::try_from(prefix).unwrap_or(u64::MAX)),
+            wire_input_bytes: None,
+            wire_output_bytes: None,
+            wire_bytes_delta: None,
         },
         body: Some(body.into_boxed_slice()),
     }
@@ -465,7 +462,7 @@ mod tests {
     }
 
     #[test]
-    fn reframes_metrics_and_never_worsens_wire_representation() {
+    fn reframes_metrics_and_records_wire_representation() {
         let request = br#"{"output":"{ \"name\": \"a\" }"}"#;
         let span = output_span(request);
         let result = rewrite_json_minify(request, &[span], &limits());
@@ -474,17 +471,32 @@ mod tests {
             b"wire-short".to_vec().into_boxed_slice(),
         );
         assert_eq!(reframed.metrics().status, ActiveRewriteStatus::Rewritten);
-        assert_eq!(reframed.metrics().input_bytes, 18);
-        assert_eq!(reframed.metrics().output_bytes, Some(10));
+        assert_eq!(reframed.metrics().input_bytes, request.len() as u64);
+        assert!(reframed.metrics().output_bytes.unwrap_or_default() < request.len() as u64);
+        assert_eq!(reframed.metrics().wire_input_bytes, Some(18));
+        assert_eq!(reframed.metrics().wire_output_bytes, Some(10));
+        assert_eq!(reframed.metrics().wire_bytes_delta, Some(8));
         assert!(reframed.body().is_some());
 
-        let no_improvement = reframed.reframe(b"wire", b"wire-longer".to_vec().into_boxed_slice());
+        let expanded_wire = reframed.reframe(b"wire", b"wire-longer".to_vec().into_boxed_slice());
+        assert_eq!(
+            expanded_wire.metrics().status,
+            ActiveRewriteStatus::Rewritten
+        );
+        assert_eq!(expanded_wire.metrics().wire_input_bytes, Some(4));
+        assert_eq!(expanded_wire.metrics().wire_output_bytes, Some(11));
+        assert_eq!(expanded_wire.metrics().wire_bytes_delta, Some(-7));
+        assert!(expanded_wire.body().is_some());
+
+        let no_input = br#"{"output":"{\"name\":\"a\"}"}"#;
+        let no_improvement = rewrite_json_minify(no_input, &[output_span(no_input)], &limits());
         assert_eq!(
             no_improvement.metrics().status,
             ActiveRewriteStatus::NoImprovement
         );
-        assert!(no_improvement.body().is_none());
-        assert_eq!(no_improvement.metrics().output_bytes, None);
+        let untouched = no_improvement.reframe(b"wire", b"wire-short".to_vec().into_boxed_slice());
+        assert!(untouched.body().is_none());
+        assert_eq!(untouched.metrics().wire_input_bytes, None);
     }
 
     #[test]

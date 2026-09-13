@@ -13,9 +13,11 @@ TRACEPRESS_ACTIVE_COMPRESSION=json.minify
 The adapter currently supports identity-encoded and bounded `zstd` `/v1/responses` requests, and
 only complete `ToolGenerated + ToolResult + Json` spans returned by the bounded Phase 3 analyser.
 For zstd, it decodes, rewrites, and re-encodes under the active experiment's independent resource
-limits before upstream dispatch. It runs only after the request has been fully buffered under the
-existing body bound. The original body is retained for fail-open behavior; the rewritten body is
-transient and never persisted as candidate content.
+limits before upstream dispatch. The never-worse check is applied to the decoded candidate (the
+representation the provider will parse); decoded and wire byte metrics are reported separately.
+It runs only after the request has been fully buffered under the existing body bound. The original
+body is retained for fail-open behavior; the rewritten body is transient and never persisted as
+candidate content.
 
 ```text
 original body

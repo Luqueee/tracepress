@@ -53,3 +53,25 @@ jobs:
 
       - name: Compile workspace targets
         run: cargo check --workspace --all-targets --all-features --locked
+
+  observatory-web:
+    name: Observatory WASM and frontend build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Install repository Rust toolchain with WASM target
+        uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          target: wasm32-unknown-unknown
+
+      - name: Compile dashboard for WASM
+        run: cargo build -p tracepress-dashboard --target wasm32-unknown-unknown --release --locked
+
+      - name: Install matching Dioxus CLI
+        run: cargo install dioxus-cli --version 0.7.10 --locked
+
+      - name: Build static Observatory assets
+        working-directory: crates/tracepress-dashboard
+        run: dx build --package tracepress-dashboard --platform web --release

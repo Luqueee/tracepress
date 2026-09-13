@@ -27,6 +27,7 @@ tracepress-provider = { path = "../tracepress-provider" }
 tracepress-proxy = { path = "../tracepress-proxy" }
 tracepress-context = { path = "../tracepress-context" }
 tracepress-storage = { path = "../tracepress-storage" }
+tracepress-dashboard-api = { path = "../tracepress-dashboard-api" }
 
 [dev-dependencies]
 tempfile = "3"

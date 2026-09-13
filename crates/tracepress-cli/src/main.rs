@@ -517,6 +517,13 @@ struct RecordObservationInput {
     correlation: CorrelationStatus,
 }
 
+#[derive(Clone, Copy, Debug)]
+struct DashboardOptions {
+    port: u16,
+    fixture: bool,
+    large_fixture: bool,
+}
+
 /// Accounting for context analyses rejected before context persistence.
 #[derive(Debug, Default)]
 struct ContextCounters {
@@ -3229,6 +3236,18 @@ enum CommandKind {
     Context {
         request_id: RequestId,
     },
+    /// Launches the local, read-only Tracepress Observatory.
+    Ui {
+        /// Local loopback port.
+        #[arg(long, default_value_t = tracepress_dashboard_api::DEFAULT_PORT)]
+        port: u16,
+        /// Use synthetic metadata instead of the operational database.
+        #[arg(long)]
+        fixture: bool,
+        /// Generate the 1,000-session / 10,000-request / 100,000-block smoke fixture.
+        #[arg(long, requires = "fixture")]
+        large_fixture: bool,
+    },
     Proxy,
 }
 
@@ -4289,6 +4308,21 @@ async fn main() -> Result<(), String> {
             command: DaemonCommand::Start,
         } => daemon_start(&config).await,
         CommandKind::Context { request_id } => context(&config, request_id).await,
+        CommandKind::Ui {
+            port,
+            fixture,
+            large_fixture,
+        } => {
+            dashboard(
+                &config,
+                DashboardOptions {
+                    port,
+                    fixture,
+                    large_fixture,
+                },
+            )
+            .await
+        }
         CommandKind::Daemon {
             command: DaemonCommand::Stop,
         } => daemon_stop(&config).await,
@@ -4308,6 +4342,57 @@ async fn main() -> Result<(), String> {
         CommandKind::Run { agent, args } => run_agent(&config, agent, args).await,
         CommandKind::Proxy => proxy().await,
     }
+}
+
+async fn dashboard(config: &Config, options: DashboardOptions) -> Result<(), String> {
+    let fixture_database = options
+        .fixture
+        .then(|| tracepress_dashboard_api::fixture_database(options.large_fixture))
+        .transpose()
+        .map_err(|error| error.to_string())?;
+    let database_path = fixture_database.as_ref().map_or_else(
+        || config.database.clone(),
+        |database| database.path().to_path_buf(),
+    );
+    let reports_path = std::env::var_os("TRACEPRESS_REPORTS")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from("reports"));
+    let assets_path = std::env::var_os("TRACEPRESS_DASHBOARD_ASSETS")
+        .map(PathBuf::from)
+        .or_else(discover_dashboard_assets);
+    let bind = std::net::SocketAddr::from(([127, 0, 0, 1], options.port));
+    println!("Tracepress Observatory");
+    println!("http://{bind}");
+    let mut dashboard_config =
+        tracepress_dashboard_api::DashboardConfig::local(database_path, reports_path);
+    dashboard_config.bind = bind;
+    dashboard_config.assets_path = assets_path;
+    tracepress_dashboard_api::serve(dashboard_config)
+        .await
+        .map_err(|error| error.to_string())
+}
+
+fn discover_dashboard_assets() -> Option<PathBuf> {
+    [
+        PathBuf::from("target/dx/tracepress-dashboard/release/web/public"),
+        PathBuf::from(
+            "crates/tracepress-dashboard/target/dx/tracepress-dashboard/release/web/public",
+        ),
+        PathBuf::from("target/dx/tracepress-dashboard/debug/web/public"),
+        PathBuf::from(
+            "crates/tracepress-dashboard/target/dx/tracepress-dashboard/debug/web/public",
+        ),
+        PathBuf::from("target/dx/tracepress-observatory/release/web/public"),
+        PathBuf::from(
+            "crates/tracepress-dashboard/target/dx/tracepress-observatory/release/web/public",
+        ),
+        PathBuf::from("target/dx/tracepress-observatory/debug/web/public"),
+        PathBuf::from(
+            "crates/tracepress-dashboard/target/dx/tracepress-observatory/debug/web/public",
+        ),
+    ]
+    .into_iter()
+    .find(|path| path.join("index.html").is_file())
 }
 #[cfg(test)]
 mod tests {

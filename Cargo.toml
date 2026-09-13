@@ -11,6 +11,9 @@ members = [
     "crates/tracepress-ipc",
     "crates/tracepress-daemon",
     "crates/tracepress-cli",
+    "crates/tracepress-dashboard-types",
+    "crates/tracepress-dashboard-api",
+    "crates/tracepress-dashboard",
 ]
 resolver = "3"
 

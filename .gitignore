@@ -1,4 +1,10 @@
 target/
+**/.dioxus/
+**/dist/
+**/.tailwind-cache/
+fixtures/*.sqlite*
+*.sqlite-wal
+*.sqlite-shm
 /.omo/
 __pycache__/
 *.py[cod]

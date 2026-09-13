@@ -1,0 +1,24 @@
+[application]
+name = "tracepress-observatory"
+default_platform = "web"
+asset_dir = "assets"
+tailwind_input = "tailwind.css"
+tailwind_output = "assets/tailwind.css"
+
+[web.app]
+title = "Tracepress Observatory"
+
+[web.watcher]
+watch_path = ["src", "assets", "tailwind.css"]
+index_on_404 = true
+
+[web.resource]
+style = []
+script = []
+
+[web.resource.dev]
+style = []
+script = []
+
+[[web.proxy]]
+backend = "http://127.0.0.1:4319/api/"

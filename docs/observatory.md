@@ -157,9 +157,10 @@ those require the Phase 4.2 A/B experiment and provider-side validation.
 
 The reproducible local infrastructure smoke is driven by
 `scripts/run_active_compression_pilot.py` and recorded in
-`reports/active-compression-001/TRACEPRESS_ACTIVE_COMPRESSION_001.{json,md}`. It runs a control and
+`reports/active-compression-001/TRACEPRESS_ACTIVE_COMPRESSION_002.{json,md}`. It runs a control and
 an active arm through isolated daemons against a deterministic local upstream; its 20.1% median
-forwarded-byte reduction is local representation evidence only.
+forwarded-byte reduction is local representation evidence only. The earlier `001` artifact is
+retained as the historical run from the pre-zstd-metric runtime.
 
 Errors have a browser-safe shape:
 

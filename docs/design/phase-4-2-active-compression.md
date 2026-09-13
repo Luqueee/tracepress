@@ -74,3 +74,10 @@ active attempts and forwarded the original bytes. That report is historical: the
 has a bounded zstd decode/edit/re-encode path. A subsequent smoke must still be treated as an
 infrastructure check, not a provider A/B result; zstd re-encoding does not establish provider-token
 savings, cache preservation, cost impact, or quality preservation.
+
+The deterministic local A/A infrastructure smoke is recorded in
+`reports/active-compression-001/TRACEPRESS_ACTIVE_COMPRESSION_002.{json,md}`. It exercises ten
+measured samples per arm after one warm-up against an isolated local upstream, with zero request,
+recovery, or determinism failures. Its forwarded-byte reduction and process-lifecycle resource
+measurements are representation/infrastructure evidence only; they are not provider-token, cache,
+cost, or quality evidence.

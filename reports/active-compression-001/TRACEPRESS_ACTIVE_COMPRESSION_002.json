@@ -1,0 +1,333 @@
+{
+  "arms": {
+    "active": "TRACEPRESS_ACTIVE_COMPRESSION=json.minify",
+    "control": "TRACEPRESS_ACTIVE_COMPRESSION=off"
+  },
+  "experiment_id": "active-compression-002",
+  "gates": {
+    "active_candidate": "json.minify",
+    "default_path_unchanged": true,
+    "determinism_failures": 0,
+    "provider_impact_validated": false,
+    "quality_validated": false,
+    "recovery_failures": 0
+  },
+  "limitations": [
+    "The upstream is local and deterministic; this is not provider A/B evidence.",
+    "json.tabular remains shadow-only because TPJ2 is not provider-compatible.",
+    "No token, cache, cost, or quality causal claim is made."
+  ],
+  "median_forwarded_byte_reduction_ratio": 0.20134228187919462,
+  "phase": "4.2_infrastructure_gate",
+  "results": {
+    "active": {
+      "_raw": {
+        "dispatch_us": [
+          831.639,
+          735.28,
+          865.19,
+          540.171,
+          650.03,
+          627.25,
+          641.67,
+          503.76,
+          507.828,
+          500.37
+        ],
+        "duration_us": [
+          4276.398,
+          4199.058,
+          4231.499,
+          3953.819,
+          4041.169,
+          3946.249,
+          3997.189,
+          3832.769,
+          3842.007,
+          3901.188
+        ],
+        "proxy_ttfb_us": [
+          234.17,
+          248.1,
+          199.06,
+          225.15,
+          237.299,
+          177.29,
+          208.529,
+          151.33,
+          148.98,
+          224.2
+        ],
+        "proxy_ttft_us": []
+      },
+      "analysis_mode": "shadow",
+      "burst_width": 1,
+      "children_system_cpu_us": 32313.0,
+      "children_total_cpu_us": 100911.0,
+      "children_user_cpu_us": 68598.0,
+      "dispatch_us": {
+        "median": 634.46,
+        "p95": 865.19,
+        "sample_count": 10
+      },
+      "duration_us": {
+        "median": 3975.504,
+        "p95": 4276.398,
+        "sample_count": 10
+      },
+      "errors": 0,
+      "forwarded_request_bytes": {
+        "median": 238.0,
+        "p95": 238.0,
+        "sample_count": 10
+      },
+      "idle_rss_kib": 412,
+      "missing_upstream_metrics": 0,
+      "peak_rss_delta_kib": 7808,
+      "peak_rss_kib": 8220,
+      "phase": "active-pilot-002-active",
+      "proxy_ttfb_us": {
+        "median": 216.364,
+        "p95": 248.1,
+        "sample_count": 10
+      },
+      "proxy_ttft_us": {
+        "median": null,
+        "p95": null,
+        "sample_count": 0
+      },
+      "queue_observability": {
+        "context_observer_backpressure_total": 0,
+        "durable": {
+          "context_analysis_dropped_events": 0,
+          "context_analysis_event_count": 22,
+          "context_snapshot_request_ids": 11,
+          "context_snapshots": 11,
+          "context_snapshots_without_provider_request": 0,
+          "observer_backpressure_snapshots": 0,
+          "phase2_provider_requests": 11,
+          "terminal_context_request_ids": 11,
+          "terminal_context_snapshots": 11
+        },
+        "stdout_counters": {
+          "active_compression_attempts": 11,
+          "active_compression_determinism_failures": 0,
+          "active_compression_input_bytes": 3278,
+          "active_compression_internal_errors": 0,
+          "active_compression_invalid_inputs": 0,
+          "active_compression_no_improvement": 0,
+          "active_compression_not_applicable": 0,
+          "active_compression_output_bytes": 2618,
+          "active_compression_recovery_failures": 0,
+          "active_compression_reduction_bytes": 660,
+          "active_compression_resource_limits": 0,
+          "active_compression_rewrites": 11,
+          "analysis_admitted_total": 11,
+          "analysis_coverage": 11,
+          "analysis_coverage_complete": 11,
+          "analysis_coverage_dropped": 0,
+          "analysis_coverage_partial": 0,
+          "analysis_deferred_total": 0,
+          "analysis_drop_backpressure": 0,
+          "analysis_drop_cancelled": 0,
+          "analysis_drop_correlation": 0,
+          "analysis_drop_deferred_backlog_capacity": 0,
+          "analysis_drop_malformed": 0,
+          "analysis_drop_resource_limit": 0,
+          "analysis_drop_unsupported": 0,
+          "analysis_requests_complete": 11,
+          "analysis_requests_dropped": 0,
+          "analysis_requests_partial": 0,
+          "analysis_requests_seen": 11,
+          "analysis_wait_us": 55,
+          "backlog_capacity_drops": 0,
+          "compaction_observation_dropped_total": 0,
+          "context_cancelled_total": 0,
+          "context_correlation_degraded_total": 0,
+          "context_deferred_backlog_capacity_total": 0,
+          "context_malformed_total": 0,
+          "context_observer_backpressure_total": 0,
+          "context_resource_limit_total": 0,
+          "context_unsupported_total": 0,
+          "correlation_correlated": 11,
+          "correlation_coverage": 11,
+          "correlation_degraded_inflight_limit": 0,
+          "correlation_degraded_retired_limit": 0,
+          "correlation_degraded_total": 0,
+          "correlation_eligible": 11,
+          "correlation_missing_total": 0,
+          "deferred_high_water_bytes": 238,
+          "deferred_high_water_items": 1,
+          "deferred_queue_bytes": 0,
+          "deferred_queue_items": 0,
+          "processed_deferred_total": 11,
+          "semantic_detection_coverage": 11,
+          "token_estimation_coverage": 11
+        }
+      },
+      "requested_samples": 10,
+      "rss_kib": {
+        "median": 7504.0,
+        "p95": 8220.0,
+        "sample_count": 328
+      }
+    },
+    "control": {
+      "_raw": {
+        "dispatch_us": [
+          584.299,
+          552.959,
+          704.039,
+          569.94,
+          613.61,
+          552.61,
+          791.559,
+          557.451,
+          587.8,
+          462.37
+        ],
+        "duration_us": [
+          4051.838,
+          3944.248,
+          4271.738,
+          4047.818,
+          3942.129,
+          3949.01,
+          4315.688,
+          3978.849,
+          4006.129,
+          3812.719
+        ],
+        "proxy_ttfb_us": [
+          302.04,
+          216.33,
+          299.83,
+          291.83,
+          159.409,
+          172.789,
+          205.78,
+          229.89,
+          238.99,
+          194.66
+        ],
+        "proxy_ttft_us": []
+      },
+      "analysis_mode": "shadow",
+      "burst_width": 1,
+      "children_system_cpu_us": 42710.0,
+      "children_total_cpu_us": 105595.0,
+      "children_user_cpu_us": 62885.0,
+      "dispatch_us": {
+        "median": 577.12,
+        "p95": 791.559,
+        "sample_count": 10
+      },
+      "duration_us": {
+        "median": 3992.489,
+        "p95": 4315.688,
+        "sample_count": 10
+      },
+      "errors": 0,
+      "forwarded_request_bytes": {
+        "median": 298.0,
+        "p95": 298.0,
+        "sample_count": 10
+      },
+      "idle_rss_kib": 404,
+      "missing_upstream_metrics": 0,
+      "peak_rss_delta_kib": 7368,
+      "peak_rss_kib": 7772,
+      "phase": "active-pilot-002-control",
+      "proxy_ttfb_us": {
+        "median": 223.11,
+        "p95": 302.04,
+        "sample_count": 10
+      },
+      "proxy_ttft_us": {
+        "median": null,
+        "p95": null,
+        "sample_count": 0
+      },
+      "queue_observability": {
+        "context_observer_backpressure_total": 0,
+        "durable": {
+          "context_analysis_dropped_events": 0,
+          "context_analysis_event_count": 22,
+          "context_snapshot_request_ids": 11,
+          "context_snapshots": 11,
+          "context_snapshots_without_provider_request": 0,
+          "observer_backpressure_snapshots": 0,
+          "phase2_provider_requests": 11,
+          "terminal_context_request_ids": 11,
+          "terminal_context_snapshots": 11
+        },
+        "stdout_counters": {
+          "active_compression_attempts": 0,
+          "active_compression_determinism_failures": 0,
+          "active_compression_input_bytes": 0,
+          "active_compression_internal_errors": 0,
+          "active_compression_invalid_inputs": 0,
+          "active_compression_no_improvement": 0,
+          "active_compression_not_applicable": 0,
+          "active_compression_output_bytes": 0,
+          "active_compression_recovery_failures": 0,
+          "active_compression_reduction_bytes": 0,
+          "active_compression_resource_limits": 0,
+          "active_compression_rewrites": 0,
+          "analysis_admitted_total": 11,
+          "analysis_coverage": 11,
+          "analysis_coverage_complete": 11,
+          "analysis_coverage_dropped": 0,
+          "analysis_coverage_partial": 0,
+          "analysis_deferred_total": 0,
+          "analysis_drop_backpressure": 0,
+          "analysis_drop_cancelled": 0,
+          "analysis_drop_correlation": 0,
+          "analysis_drop_deferred_backlog_capacity": 0,
+          "analysis_drop_malformed": 0,
+          "analysis_drop_resource_limit": 0,
+          "analysis_drop_unsupported": 0,
+          "analysis_requests_complete": 11,
+          "analysis_requests_dropped": 0,
+          "analysis_requests_partial": 0,
+          "analysis_requests_seen": 11,
+          "analysis_wait_us": 45,
+          "backlog_capacity_drops": 0,
+          "compaction_observation_dropped_total": 0,
+          "context_cancelled_total": 0,
+          "context_correlation_degraded_total": 0,
+          "context_deferred_backlog_capacity_total": 0,
+          "context_malformed_total": 0,
+          "context_observer_backpressure_total": 0,
+          "context_resource_limit_total": 0,
+          "context_unsupported_total": 0,
+          "correlation_correlated": 11,
+          "correlation_coverage": 11,
+          "correlation_degraded_inflight_limit": 0,
+          "correlation_degraded_retired_limit": 0,
+          "correlation_degraded_total": 0,
+          "correlation_eligible": 11,
+          "correlation_missing_total": 0,
+          "deferred_high_water_bytes": 298,
+          "deferred_high_water_items": 1,
+          "deferred_queue_bytes": 0,
+          "deferred_queue_items": 0,
+          "processed_deferred_total": 11,
+          "semantic_detection_coverage": 11,
+          "token_estimation_coverage": 11
+        }
+      },
+      "requested_samples": 10,
+      "rss_kib": {
+        "median": 7300.0,
+        "p95": 7772.0,
+        "sample_count": 328
+      }
+    }
+  },
+  "runtime_commit": "5c0221046d1d8bed3bc6d1e0e804b5f192612985",
+  "samples": 10,
+  "upstream": "deterministic local HTTP/1.1 socket server",
+  "warmup": 1,
+  "workload": "tool_result_json"
+}

@@ -63,3 +63,9 @@ The first usable experiment is a local infrastructure smoke, not a provider effi
 The existing shadow/A-A reports remain the baseline for analysis and scheduler costs. This gate does
 not authorize an adaptive policy or Phase 4.2 production rollout; it only proves that one explicit,
 reversible candidate can be exercised without changing the default path.
+
+The first authenticated Codex subscription smoke is recorded in
+`reports/active-compression-001/TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_SMOKE_001.md`. Codex sent
+`Content-Encoding: zstd` on every request, so the identity-only adapter correctly produced zero
+active attempts and forwarded the original bytes. A bounded zstd decode/edit/re-encode design is
+required before this can become a provider A/B result; zstd re-encoding remains outside Phase 4.1.

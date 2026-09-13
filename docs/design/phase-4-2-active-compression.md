@@ -86,4 +86,8 @@ An authenticated provider follow-up is recorded in
 `reports/active-compression-001/TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_AA_001.{json,md}`. It
 confirmed forwarding reachability, complete analysis, and zero recovery/determinism failures, but
 is explicitly not a paired A/A result because the active and control references have different
-request cardinality. A cardinality-matched provider cohort remains the next gate.
+request cardinality. The subsequent cardinality-matched cohort is recorded in
+`reports/active-compression-001/TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_AA_002.{json,md}`: ten
+invocations per arm and 20 provider requests per arm, all with complete analysis and zero errors.
+It accepted no active rewrite (ten `NoImprovement` and ten `NotApplicable` attempts), so
+provider-token, cache, cost, and quality impact remain unvalidated.

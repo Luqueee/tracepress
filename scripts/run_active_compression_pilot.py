@@ -28,6 +28,10 @@ from benchmark_phase3 import (
 )
 
 
+EXPERIMENT_ID = "active-compression-002"
+PHASE_ID = "active-pilot-002"
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
@@ -86,7 +90,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     daemon=daemon,
                     upstream=upstream,
                     specs=specs,
-                    phase=f"active-pilot-001-{arm}",
+                    phase=f"{PHASE_ID}-{arm}",
                     analysis_mode="shadow",
                     workload="tool_result_json",
                     samples=args.samples,
@@ -101,7 +105,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
                     raise BenchmarkError(f"{arm} reported {measured['errors']} request errors")
                 validate_analysis_lifecycle(
                     measured,
-                    phase=f"active-pilot-001-{arm}",
+                    phase=f"{PHASE_ID}-{arm}",
                     analysis_mode="shadow",
                     workload="tool_result_json",
                     burst_width=1,
@@ -115,7 +119,7 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
     if isinstance(control_size, (int, float)) and isinstance(active_size, (int, float)):
         reduction = (float(control_size) - float(active_size)) / float(control_size)
     return {
-        "experiment_id": "active-compression-001",
+        "experiment_id": EXPERIMENT_ID,
         "phase": "4.2_infrastructure_gate",
         "runtime_commit": current_commit,
         "upstream": "deterministic local HTTP/1.1 socket server",
@@ -153,7 +157,7 @@ def markdown(report: dict[str, Any]) -> str:
     active = report["results"]["active"]
     return "\n".join(
         [
-            "# TRACEPRESS ACTIVE COMPRESSION 001",
+            f"# TRACEPRESS ACTIVE COMPRESSION {EXPERIMENT_ID.rsplit('-', 1)[-1].upper()}",
             "",
             "Infrastructure-only A/B smoke for the explicitly enabled `json.minify` adapter.",
             "",

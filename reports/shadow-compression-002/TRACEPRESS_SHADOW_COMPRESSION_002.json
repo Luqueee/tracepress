@@ -1,0 +1,75 @@
+{
+  "report_id": "TRACEPRESS_SHADOW_COMPRESSION_002",
+  "status": "shadow_pilot_completed_candidate_selected_for_phase_4_2_design",
+  "phase_4_0_base": {
+    "commit": "93ffe0c9c32a0f9a78027c6159e70236b2e6a598",
+    "tag": "phase-4.0-complete"
+  },
+  "experiment": {
+    "id": "shadow-pilot-002",
+    "cohort": "directed_synthetic",
+    "sessions": 10,
+    "requests": 10,
+    "snapshots": 10,
+    "candidate_evaluations": 36,
+    "database": "isolated local fixture database"
+  },
+  "invariants": {
+    "active_request_rewriting": false,
+    "forwarding_mutations": 0,
+    "shadow_drops": 0,
+    "recovery_failures": 0,
+    "determinism_failures": 0,
+    "unknown_transformed": 0,
+    "candidate_content_persisted": false
+  },
+  "candidate_results": [
+    {
+      "id": "json.tabular",
+      "target": "ToolGenerated/ToolResult/Json array<object>",
+      "eligible_blocks": 6,
+      "applicable_blocks": 6,
+      "byte_reduction_ratio": 0.4104202391,
+      "estimated_token_reduction_ratio": 0.4055963054,
+      "recovery_success_rate": 1.0,
+      "determinism_success_rate": 1.0,
+      "processing_p95_us": 2775.0,
+      "cache_risk": { "high": 6 }
+    },
+    {
+      "id": "text.repeated_line",
+      "target": "ToolGenerated/ToolResult/PlainText",
+      "eligible_blocks": 4,
+      "applicable_blocks": 4,
+      "byte_reduction_ratio": 0.4705715098,
+      "recovery_success_rate": 1.0,
+      "determinism_success_rate": 1.0,
+      "processing_p95_us": 309.8,
+      "cache_risk": { "high": 4 }
+    }
+  ],
+  "selected_candidate": {
+    "id": "json.tabular",
+    "decision": "selected_for_phase_4_2_evaluation_only",
+    "rationale": "Primary Phase 4.1 target with material directed reduction, complete recovery/determinism, bounded latency, and zero forwarding mutations."
+  },
+  "quality_gates": {
+    "directed_shadow_pilot": "passed",
+    "naturalistic_distribution_reference": "passed_from_shadow_pilot_001",
+    "compaction_calibration": "passed_from_shadow_pilot_001",
+    "aa_infrastructure": "passed_from_shadow_pilot_001",
+    "resource_comparison": "passed_observational_from_shadow_pilot_001"
+  },
+  "artifacts": {
+    "manifest": "experiment_manifest.json",
+    "full_json": "shadow_pilot_002.json",
+    "full_markdown": "shadow_pilot_002.md"
+  },
+  "limitations": [
+    "This is directed synthetic characterization, not naturalistic workload evidence.",
+    "Local representation reduction is not provider token savings, cost savings, cache preservation, or a quality claim.",
+    "json.tabular must be validated by Phase 4.2 decode/edit/re-encode A/B before any active traffic decision.",
+    "UnknownTransformPolicy remains Never."
+  ],
+  "phase_4_2": "ready_for_design"
+}

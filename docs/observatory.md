@@ -127,6 +127,12 @@ content, and leaves missing estimates as JSON `null`. The manifest is the audita
 workload labels, empirical gate decisions, and the single candidate decision. Passing gates alone
 never causes the analyzer to select a candidate automatically.
 
+The directed follow-up `Shadow Pilot 002` is recorded under
+`reports/shadow-compression-002/`. It selected `json.tabular` as the single candidate for Phase
+4.2 evaluation design; this is local representation evidence only, not provider-token or quality
+evidence. Phase 4.2 must keep request rewriting disabled until its A/B control is explicitly
+implemented and validated.
+
 Errors have a browser-safe shape:
 
 ```json

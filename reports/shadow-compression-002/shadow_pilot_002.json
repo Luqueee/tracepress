@@ -1,0 +1,646 @@
+{
+  "report_id": "TRACEPRESS_SHADOW_PILOT_002_DIRECTED",
+  "report_version": 1,
+  "experiment": {
+    "experiment_id": "shadow-pilot-002",
+    "runtime_sha": null,
+    "status": "completed",
+    "started_at": "unix-ms:1789321350203",
+    "completed_at": "unix-ms:1789321350817",
+    "forwarding_mutations": 0,
+    "shadow_drops": 0,
+    "recovery_failures": 0,
+    "determinism_failures": 0,
+    "compressor_set": [
+      [
+        "json.noop",
+        1
+      ],
+      [
+        "json.minify",
+        1
+      ],
+      [
+        "json.tabular",
+        1
+      ],
+      [
+        "json.repeated_subtree",
+        1
+      ],
+      [
+        "text.noop",
+        1
+      ],
+      [
+        "text.repeated_line",
+        1
+      ],
+      [
+        "text.repeated_run",
+        1
+      ]
+    ],
+    "limits": {
+      "max_candidate_input_bytes": 1048576,
+      "max_candidate_output_bytes": 1048576,
+      "max_candidates_per_block": 6,
+      "max_shadow_work_units": 2000000,
+      "max_shadow_wall_time_ms": 100,
+      "max_shadow_memory_bytes": 4194304
+    }
+  },
+  "scope": {
+    "session_count": 10,
+    "candidate_count": 36,
+    "unknown_transformed": 0,
+    "included_session_ids": [
+      "01a09bdd-0c3a-7971-ab69-2e6e03020884",
+      "01a09bdd-0c81-7273-9fab-660045b7f07b",
+      "01a09bdd-0ccb-7dd1-9a64-bb081bf8880b",
+      "01a09bdd-0d16-7812-a798-bab9ca73fe4e",
+      "01a09bdd-0d57-7593-95cf-b37a1b45bc82",
+      "01a09bdd-0d95-7581-a9fe-692f3cd797f5",
+      "01a09bdd-0dd0-7bd1-8609-604aba6fefd2",
+      "01a09bdd-0e06-7122-9449-ccd66b3b9948",
+      "01a09bdd-0e3b-7782-a259-8dc64fc06237",
+      "01a09bdd-0e71-7321-9eb1-a99505374b02"
+    ],
+    "excluded_session_ids": []
+  },
+  "compressors": [
+    {
+      "id": "json.minify",
+      "version": "1",
+      "control": false,
+      "eligible_blocks": 6,
+      "applicable_blocks": 0,
+      "applicability": 0.0,
+      "status_counts": {
+        "no_improvement": 6
+      },
+      "input_bytes": null,
+      "output_bytes": null,
+      "byte_reduction": null,
+      "byte_reduction_ratio": null,
+      "estimated_input_tokens": null,
+      "estimated_output_tokens": null,
+      "estimated_token_reduction": null,
+      "estimated_token_reduction_ratio": null,
+      "candidate_effective_byte_reduction": null,
+      "unique_candidate_byte_reduction": null,
+      "candidate_effective_estimated_token_reduction": null,
+      "unique_candidate_estimated_token_reduction": null,
+      "processing_us": {
+        "p50": 1723.5,
+        "p90": 1887.0,
+        "p95": 1902.5,
+        "p99": 1914.9
+      },
+      "recovery_success_rate": 1.0,
+      "determinism_success_rate": 1.0,
+      "preserved_prefix_ratio": {
+        "p50": null
+      },
+      "cache_risk": {
+        "medium": 6
+      }
+    },
+    {
+      "id": "json.noop",
+      "version": "1",
+      "control": true,
+      "eligible_blocks": 6,
+      "applicable_blocks": 0,
+      "applicability": 0.0,
+      "status_counts": {
+        "no_improvement": 6
+      },
+      "input_bytes": null,
+      "output_bytes": null,
+      "byte_reduction": null,
+      "byte_reduction_ratio": null,
+      "estimated_input_tokens": null,
+      "estimated_output_tokens": null,
+      "estimated_token_reduction": null,
+      "estimated_token_reduction_ratio": null,
+      "candidate_effective_byte_reduction": null,
+      "unique_candidate_byte_reduction": null,
+      "candidate_effective_estimated_token_reduction": null,
+      "unique_candidate_estimated_token_reduction": null,
+      "processing_us": {
+        "p50": 581.5,
+        "p90": 618.5,
+        "p95": 618.75,
+        "p99": 618.95
+      },
+      "recovery_success_rate": 1.0,
+      "determinism_success_rate": 1.0,
+      "preserved_prefix_ratio": {
+        "p50": null
+      },
+      "cache_risk": {
+        "medium": 6
+      }
+    },
+    {
+      "id": "json.repeated_subtree",
+      "version": "1",
+      "control": false,
+      "eligible_blocks": 6,
+      "applicable_blocks": 0,
+      "applicability": 0.0,
+      "status_counts": {
+        "not_applicable": 6
+      },
+      "input_bytes": null,
+      "output_bytes": null,
+      "byte_reduction": null,
+      "byte_reduction_ratio": null,
+      "estimated_input_tokens": null,
+      "estimated_output_tokens": null,
+      "estimated_token_reduction": null,
+      "estimated_token_reduction_ratio": null,
+      "candidate_effective_byte_reduction": null,
+      "unique_candidate_byte_reduction": null,
+      "candidate_effective_estimated_token_reduction": null,
+      "unique_candidate_estimated_token_reduction": null,
+      "processing_us": {
+        "p50": 2340.0,
+        "p90": 2626.5,
+        "p95": 2664.75,
+        "p99": 2695.35
+      },
+      "recovery_success_rate": null,
+      "determinism_success_rate": null,
+      "preserved_prefix_ratio": {
+        "p50": null
+      },
+      "cache_risk": {
+        "unknown": 6
+      }
+    },
+    {
+      "id": "json.tabular",
+      "version": "1",
+      "control": false,
+      "eligible_blocks": 6,
+      "applicable_blocks": 6,
+      "applicability": 1.0,
+      "status_counts": {
+        "applicable": 6
+      },
+      "input_bytes": 42571,
+      "output_bytes": 25099,
+      "byte_reduction": 17472,
+      "byte_reduction_ratio": 0.41042023912992415,
+      "estimated_input_tokens": 22086,
+      "estimated_output_tokens": 13128,
+      "estimated_token_reduction": 8958,
+      "estimated_token_reduction_ratio": 0.4055963053518066,
+      "candidate_effective_byte_reduction": 17472,
+      "unique_candidate_byte_reduction": 17472,
+      "candidate_effective_estimated_token_reduction": 8958,
+      "unique_candidate_estimated_token_reduction": 8958,
+      "processing_us": {
+        "p50": 2376.5,
+        "p90": 2714.0,
+        "p95": 2775.0,
+        "p99": 2823.8
+      },
+      "recovery_success_rate": 1.0,
+      "determinism_success_rate": 1.0,
+      "preserved_prefix_ratio": {
+        "p50": 0.006
+      },
+      "cache_risk": {
+        "high": 6
+      }
+    },
+    {
+      "id": "text.noop",
+      "version": "1",
+      "control": true,
+      "eligible_blocks": 4,
+      "applicable_blocks": 0,
+      "applicability": 0.0,
+      "status_counts": {
+        "no_improvement": 4
+      },
+      "input_bytes": null,
+      "output_bytes": null,
+      "byte_reduction": null,
+      "byte_reduction_ratio": null,
+      "estimated_input_tokens": null,
+      "estimated_output_tokens": null,
+      "estimated_token_reduction": null,
+      "estimated_token_reduction_ratio": null,
+      "candidate_effective_byte_reduction": null,
+      "unique_candidate_byte_reduction": null,
+      "candidate_effective_estimated_token_reduction": null,
+      "unique_candidate_estimated_token_reduction": null,
+      "processing_us": {
+        "p50": 252.0,
+        "p90": 350.90000000000003,
+        "p95": 371.44999999999993,
+        "p99": 387.89
+      },
+      "recovery_success_rate": 1.0,
+      "determinism_success_rate": 1.0,
+      "preserved_prefix_ratio": {
+        "p50": null
+      },
+      "cache_risk": {
+        "medium": 4
+      }
+    },
+    {
+      "id": "text.repeated_line",
+      "version": "1",
+      "control": false,
+      "eligible_blocks": 4,
+      "applicable_blocks": 4,
+      "applicability": 1.0,
+      "status_counts": {
+        "applicable": 4
+      },
+      "input_bytes": 14068,
+      "output_bytes": 7448,
+      "byte_reduction": 6620,
+      "byte_reduction_ratio": 0.47057150980949675,
+      "estimated_input_tokens": 4080,
+      "estimated_output_tokens": null,
+      "estimated_token_reduction": null,
+      "estimated_token_reduction_ratio": null,
+      "candidate_effective_byte_reduction": 6620,
+      "unique_candidate_byte_reduction": 1655,
+      "candidate_effective_estimated_token_reduction": null,
+      "unique_candidate_estimated_token_reduction": null,
+      "processing_us": {
+        "p50": 223.0,
+        "p90": 296.6,
+        "p95": 309.79999999999995,
+        "p99": 320.36
+      },
+      "recovery_success_rate": 1.0,
+      "determinism_success_rate": 1.0,
+      "preserved_prefix_ratio": {
+        "p50": 0.013
+      },
+      "cache_risk": {
+        "high": 4
+      }
+    },
+    {
+      "id": "text.repeated_run",
+      "version": "1",
+      "control": false,
+      "eligible_blocks": 4,
+      "applicable_blocks": 0,
+      "applicability": 0.0,
+      "status_counts": {
+        "no_improvement": 4
+      },
+      "input_bytes": null,
+      "output_bytes": null,
+      "byte_reduction": null,
+      "byte_reduction_ratio": null,
+      "estimated_input_tokens": null,
+      "estimated_output_tokens": null,
+      "estimated_token_reduction": null,
+      "estimated_token_reduction_ratio": null,
+      "candidate_effective_byte_reduction": null,
+      "unique_candidate_byte_reduction": null,
+      "candidate_effective_estimated_token_reduction": null,
+      "unique_candidate_estimated_token_reduction": null,
+      "processing_us": {
+        "p50": 347.0,
+        "p90": 441.6,
+        "p95": 459.29999999999995,
+        "p99": 473.46
+      },
+      "recovery_success_rate": 1.0,
+      "determinism_success_rate": 1.0,
+      "preserved_prefix_ratio": {
+        "p50": null
+      },
+      "cache_risk": {
+        "high": 4
+      }
+    }
+  ],
+  "workload_distribution": {
+    "available": true,
+    "workloads": [
+      {
+        "workload": "tool_result_json_tabular",
+        "session_count": 6,
+        "candidate_count": 24,
+        "compressors": [
+          {
+            "id": "json.minify",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1723.5,
+              "p90": 1887.0,
+              "p95": 1902.5,
+              "p99": 1914.9
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 6
+            }
+          },
+          {
+            "id": "json.noop",
+            "version": "1",
+            "control": true,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 581.5,
+              "p90": 618.5,
+              "p95": 618.75,
+              "p99": 618.95
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 6
+            }
+          },
+          {
+            "id": "json.repeated_subtree",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "not_applicable": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 2340.0,
+              "p90": 2626.5,
+              "p95": 2664.75,
+              "p99": 2695.35
+            },
+            "recovery_success_rate": null,
+            "determinism_success_rate": null,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "unknown": 6
+            }
+          },
+          {
+            "id": "json.tabular",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 6,
+            "applicable_blocks": 6,
+            "applicability": 1.0,
+            "status_counts": {
+              "applicable": 6
+            },
+            "input_bytes": 42571,
+            "output_bytes": 25099,
+            "byte_reduction": 17472,
+            "byte_reduction_ratio": 0.41042023912992415,
+            "estimated_input_tokens": 22086,
+            "estimated_output_tokens": 13128,
+            "estimated_token_reduction": 8958,
+            "estimated_token_reduction_ratio": 0.4055963053518066,
+            "candidate_effective_byte_reduction": 17472,
+            "unique_candidate_byte_reduction": 17472,
+            "candidate_effective_estimated_token_reduction": 8958,
+            "unique_candidate_estimated_token_reduction": 8958,
+            "processing_us": {
+              "p50": 2376.5,
+              "p90": 2714.0,
+              "p95": 2775.0,
+              "p99": 2823.8
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": 0.006
+            },
+            "cache_risk": {
+              "high": 6
+            }
+          }
+        ]
+      },
+      {
+        "workload": "tool_result_plaintext_lines",
+        "session_count": 4,
+        "candidate_count": 12,
+        "compressors": [
+          {
+            "id": "text.noop",
+            "version": "1",
+            "control": true,
+            "eligible_blocks": 4,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 4
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 252.0,
+              "p90": 350.90000000000003,
+              "p95": 371.44999999999993,
+              "p99": 387.89
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 4
+            }
+          },
+          {
+            "id": "text.repeated_line",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 4,
+            "applicable_blocks": 4,
+            "applicability": 1.0,
+            "status_counts": {
+              "applicable": 4
+            },
+            "input_bytes": 14068,
+            "output_bytes": 7448,
+            "byte_reduction": 6620,
+            "byte_reduction_ratio": 0.47057150980949675,
+            "estimated_input_tokens": 4080,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": 6620,
+            "unique_candidate_byte_reduction": 1655,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 223.0,
+              "p90": 296.6,
+              "p95": 309.79999999999995,
+              "p99": 320.36
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": 0.013
+            },
+            "cache_risk": {
+              "high": 4
+            }
+          },
+          {
+            "id": "text.repeated_run",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 4,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 4
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 347.0,
+              "p90": 441.6,
+              "p95": 459.29999999999995,
+              "p99": 473.46
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "high": 4
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "quality_gates": {
+    "shadow_pilot_n10": "passed",
+    "compaction_calibration": "passed",
+    "aa_infrastructure": "passed",
+    "host_rss_cpu_comparison": "passed",
+    "naturalistic_workload_distributions": "passed"
+  },
+  "measurement_context": {
+    "cohort_kind": "directed_synthetic",
+    "cohort_label": "json_and_plaintext_tool_results_n10",
+    "transport": "openai_public_api_local_upstream",
+    "phase_4_0_base": "93ffe0c9c32a0f9a78027c6159e70236b2e6a598",
+    "experiment_id": "shadow-pilot-002"
+  },
+  "collection_notes": [
+    "Ten isolated sessions used a deterministic local upstream through the real proxy path.",
+    "Six sessions carried homogeneous array<object> ToolResult JSON and four carried repetitive ToolResult PlainText.",
+    "The cohort is directed synthetic characterization; naturalistic workload distribution evidence is inherited from Shadow Pilot 001.",
+    "Gate statuses combine this clean directed run with the Pilot 001 naturalistic cohort, compaction calibration, A/A, and resource artifacts.",
+    "The recommendation is for one future Phase 4.2 evaluation candidate only, never an assertion of provider token or quality impact."
+  ],
+  "invariants": {
+    "active_request_rewriting": false,
+    "forwarding_mutations": 0,
+    "unknown_transform_policy": "never",
+    "candidate_content_persisted": false
+  },
+  "recommended_active_candidate": "json.tabular",
+  "recommendation_rationale": "Select json.tabular as the single Phase 4.2 evaluation candidate: 41.04% byte reduction and 40.56% local estimated-token reduction across six eligible directed JSON blocks, with 100% recovery and determinism and zero forwarding mutations. The signal is synthetic and must be validated by active A/B before any provider or quality claim.",
+  "recommendation_status": "selected_after_all_gates_passed",
+  "phase_4_2": "ready_for_design",
+  "limitations": [
+    "Candidate reduction is local representation evidence, not provider token savings.",
+    "Cache risk is structural evidence, not a provider cache prediction.",
+    "This metadata-only report does not establish model quality preservation."
+  ]
+}

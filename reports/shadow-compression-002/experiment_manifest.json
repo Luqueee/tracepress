@@ -1,0 +1,51 @@
+{
+  "report_id": "TRACEPRESS_SHADOW_PILOT_002_DIRECTED",
+  "measurement_context": {
+    "cohort_kind": "directed_synthetic",
+    "cohort_label": "json_and_plaintext_tool_results_n10",
+    "transport": "openai_public_api_local_upstream",
+    "phase_4_0_base": "93ffe0c9c32a0f9a78027c6159e70236b2e6a598",
+    "experiment_id": "shadow-pilot-002"
+  },
+  "quality_gates": {
+    "shadow_pilot_n10": "passed",
+    "compaction_calibration": "passed",
+    "aa_infrastructure": "passed",
+    "host_rss_cpu_comparison": "passed",
+    "naturalistic_workload_distributions": "passed"
+  },
+  "included_session_ids": [
+    "01a09bdd-0c3a-7971-ab69-2e6e03020884",
+    "01a09bdd-0c81-7273-9fab-660045b7f07b",
+    "01a09bdd-0ccb-7dd1-9a64-bb081bf8880b",
+    "01a09bdd-0d16-7812-a798-bab9ca73fe4e",
+    "01a09bdd-0d57-7593-95cf-b37a1b45bc82",
+    "01a09bdd-0d95-7581-a9fe-692f3cd797f5",
+    "01a09bdd-0dd0-7bd1-8609-604aba6fefd2",
+    "01a09bdd-0e06-7122-9449-ccd66b3b9948",
+    "01a09bdd-0e3b-7782-a259-8dc64fc06237",
+    "01a09bdd-0e71-7321-9eb1-a99505374b02"
+  ],
+  "excluded_session_ids": [],
+  "session_workloads": {
+    "01a09bdd-0c3a-7971-ab69-2e6e03020884": "tool_result_json_tabular",
+    "01a09bdd-0c81-7273-9fab-660045b7f07b": "tool_result_json_tabular",
+    "01a09bdd-0ccb-7dd1-9a64-bb081bf8880b": "tool_result_json_tabular",
+    "01a09bdd-0d16-7812-a798-bab9ca73fe4e": "tool_result_json_tabular",
+    "01a09bdd-0d57-7593-95cf-b37a1b45bc82": "tool_result_json_tabular",
+    "01a09bdd-0d95-7581-a9fe-692f3cd797f5": "tool_result_json_tabular",
+    "01a09bdd-0dd0-7bd1-8609-604aba6fefd2": "tool_result_plaintext_lines",
+    "01a09bdd-0e06-7122-9449-ccd66b3b9948": "tool_result_plaintext_lines",
+    "01a09bdd-0e3b-7782-a259-8dc64fc06237": "tool_result_plaintext_lines",
+    "01a09bdd-0e71-7321-9eb1-a99505374b02": "tool_result_plaintext_lines"
+  },
+  "attempt_notes": [
+    "Ten isolated sessions used a deterministic local upstream through the real proxy path.",
+    "Six sessions carried homogeneous array<object> ToolResult JSON and four carried repetitive ToolResult PlainText.",
+    "The cohort is directed synthetic characterization; naturalistic workload distribution evidence is inherited from Shadow Pilot 001.",
+    "Gate statuses combine this clean directed run with the Pilot 001 naturalistic cohort, compaction calibration, A/A, and resource artifacts.",
+    "The recommendation is for one future Phase 4.2 evaluation candidate only, never an assertion of provider token or quality impact."
+  ],
+  "recommended_active_candidate": "json.tabular",
+  "recommendation_rationale": "Select json.tabular as the single Phase 4.2 evaluation candidate: 41.04% byte reduction and 40.56% local estimated-token reduction across six eligible directed JSON blocks, with 100% recovery and determinism and zero forwarding mutations. The signal is synthetic and must be validated by active A/B before any provider or quality claim."
+}

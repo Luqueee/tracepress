@@ -155,6 +155,14 @@ def run(args: argparse.Namespace) -> dict[str, Any]:
 def markdown(report: dict[str, Any]) -> str:
     control = report["results"]["control"]
     active = report["results"]["active"]
+    active_dispatch = active["dispatch_us"]["median"]
+    control_dispatch = control["dispatch_us"]["median"]
+    active_duration = active["duration_us"]["median"]
+    control_duration = control["duration_us"]["median"]
+    active_rss = active["peak_rss_delta_kib"]
+    control_rss = control["peak_rss_delta_kib"]
+    active_cpu = active["children_total_cpu_us"]
+    control_cpu = control["children_total_cpu_us"]
     return "\n".join(
         [
             f"# TRACEPRESS ACTIVE COMPRESSION {EXPERIMENT_ID.rsplit('-', 1)[-1].upper()}",
@@ -172,6 +180,13 @@ def markdown(report: dict[str, Any]) -> str:
             "",
             f"Median local forwarded-byte reduction: `{report['median_forwarded_byte_reduction_ratio']}`.",
             "This is representation evidence from a local upstream only; it is not provider-token, cache, cost, or quality evidence.",
+            "",
+            "The deterministic performance smoke completed with zero request errors. Active median dispatch was "
+            f"`{active_dispatch:.3f} µs` versus `{control_dispatch:.3f} µs` for control; median total duration was "
+            f"`{active_duration:.3f} µs` versus `{control_duration:.3f} µs`. Peak RSS was "
+            f"`{active_rss} KiB` active versus `{control_rss} KiB` control (a `{active_rss - control_rss} KiB` arm delta), "
+            f"and child CPU was `{active_cpu:.0f} µs` versus `{control_cpu:.0f} µs`. These are process-lifecycle "
+            "measurements on a local upstream, not a production performance SLO.",
             "",
             "The default (`TRACEPRESS_ACTIVE_COMPRESSION=off`) remains byte-exact. `json.tabular` is not sent upstream because its TPJ2 representation has no provider decoding contract.",
             "",

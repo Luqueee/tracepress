@@ -515,6 +515,46 @@ pub enum ContextAnalysisOutcome {
     Dropped(ContextAnalysisDropReason),
 }
 
+/// Ephemeral decoded request bytes retained only for the independent shadow worker.
+///
+/// Debug output reveals only the bounded length. The value is never part of a serialized daemon
+/// command and therefore cannot be persisted by the dashboard schema.
+#[derive(Clone, Eq, PartialEq)]
+pub struct ShadowAnalysisBody(Bytes);
+
+impl ShadowAnalysisBody {
+    const fn new(bytes: Bytes) -> Self {
+        Self(bytes)
+    }
+
+    /// Returns the bounded decoded byte length.
+    #[must_use]
+    pub const fn len(&self) -> usize {
+        self.0.len()
+    }
+
+    /// Reports whether no decoded bytes were retained.
+    #[must_use]
+    pub const fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+}
+
+impl AsRef<[u8]> for ShadowAnalysisBody {
+    fn as_ref(&self) -> &[u8] {
+        &self.0
+    }
+}
+
+impl std::fmt::Debug for ShadowAnalysisBody {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("ShadowAnalysisBody")
+            .field("len", &self.len())
+            .finish()
+    }
+}
+
 /// A detached Phase 3 context-analysis outcome tagged with its forwarding identity.
 ///
 /// The provider recorder accepts this independently from the request observation so provider
@@ -526,6 +566,8 @@ pub struct ContextAnalysisObservation {
     pub forward: ForwardId,
     /// Analysis result or explicit reason it was dropped.
     pub outcome: ContextAnalysisOutcome,
+    /// Ephemeral analysis bytes, available only for successful analysis and never serialized.
+    pub shadow_body: Option<ShadowAnalysisBody>,
 }
 
 /// A parsed request observation and its detached context-analysis outcome for one forward.
@@ -926,25 +968,39 @@ impl DeferredAnalysisQueue {
             } = job;
             let wait_us = u64::try_from(enqueued_at.elapsed().as_micros()).unwrap_or(u64::MAX);
             let _waited = self.analysis_wait_us.fetch_add(wait_us, Ordering::Relaxed);
-            let outcome = tokio::task::spawn_blocking(move || {
+            let (outcome, shadow_body) = tokio::task::spawn_blocking(move || {
                 let _admission = admission;
                 let decoded =
                     BoundedAnalysisDecoder.decode(&wire_body, content_encoding, &decode_limits);
                 decoded.body.map_or_else(
-                    || ContextAnalysisOutcome::Dropped(decode_drop_reason(decoded.status)),
+                    || {
+                        (
+                            ContextAnalysisOutcome::Dropped(decode_drop_reason(decoded.status)),
+                            None,
+                        )
+                    },
                     |body| {
+                        let shadow_body = ShadowAnalysisBody::new(body.clone_bytes());
                         let mut analysis = analyze_responses(body.as_ref(), context_limits);
                         analysis.request_content_hash = wire_content_hash;
-                        ContextAnalysisOutcome::Analyzed(analysis)
+                        (
+                            ContextAnalysisOutcome::Analyzed(analysis),
+                            Some(shadow_body),
+                        )
                     },
                 )
             })
             .await
-            .unwrap_or(ContextAnalysisOutcome::Dropped(
-                ContextAnalysisDropReason::Cancelled,
+            .unwrap_or((
+                ContextAnalysisOutcome::Dropped(ContextAnalysisDropReason::Cancelled),
+                None,
             ));
             let _accepted = tokio::task::spawn_blocking(move || {
-                sink.try_record_context_analysis(ContextAnalysisObservation { forward, outcome })
+                sink.try_record_context_analysis(ContextAnalysisObservation {
+                    forward,
+                    outcome,
+                    shadow_body,
+                })
             })
             .await;
             let _counted = self
@@ -1598,6 +1654,7 @@ impl ContextAnalysisTrigger {
                         outcome: ContextAnalysisOutcome::Dropped(
                             ContextAnalysisDropReason::Cancelled,
                         ),
+                        shadow_body: None,
                     })
                 })
                 .await;
@@ -2448,7 +2505,7 @@ mod tests {
     }
     #[derive(Clone, Copy, Debug, Eq, PartialEq)]
     enum TriggerResult {
-        Analyzed,
+        Analyzed { shadow_body_is_exact: bool },
         Dropped(ContextAnalysisDropReason),
     }
 
@@ -2469,8 +2526,14 @@ mod tests {
             &self,
             observation: ContextAnalysisObservation,
         ) -> Result<(), ObservationSinkError> {
+            let shadow_body_is_exact = observation
+                .shadow_body
+                .as_ref()
+                .is_some_and(|body| body.as_ref() == br#"{"model":"test","input":"value"}"#);
             let result = match observation.outcome {
-                ContextAnalysisOutcome::Analyzed(_) => TriggerResult::Analyzed,
+                ContextAnalysisOutcome::Analyzed(_) => TriggerResult::Analyzed {
+                    shadow_body_is_exact,
+                },
                 ContextAnalysisOutcome::Dropped(reason) => TriggerResult::Dropped(reason),
             };
             self.results.lock().expect("test sink lock").push(result);
@@ -2654,7 +2717,9 @@ mod tests {
         drop(next_forward);
         assert_eq!(
             wait_for_trigger_result(&sink).await,
-            TriggerResult::Analyzed
+            TriggerResult::Analyzed {
+                shadow_body_is_exact: true
+            }
         );
         assert_eq!(active_forwards.load(Ordering::Acquire), 0);
     }
@@ -2702,7 +2767,9 @@ mod tests {
         test_context_trigger(&active_forwards, &active_notify, Arc::clone(&sink)).start();
         assert_eq!(
             wait_for_trigger_result(&sink).await,
-            TriggerResult::Analyzed
+            TriggerResult::Analyzed {
+                shadow_body_is_exact: true
+            }
         );
         assert_eq!(active_forwards.load(Ordering::Acquire), 0);
     }

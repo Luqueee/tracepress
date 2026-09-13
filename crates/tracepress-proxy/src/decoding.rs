@@ -60,6 +60,10 @@ impl AnalysisBody {
     pub(crate) fn as_ref(&self) -> &[u8] {
         &self.0
     }
+
+    pub(crate) fn clone_bytes(&self) -> Bytes {
+        self.0.clone()
+    }
 }
 
 impl fmt::Debug for AnalysisBody {

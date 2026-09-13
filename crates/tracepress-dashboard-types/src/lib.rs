@@ -469,29 +469,138 @@ pub struct OpportunitySummary {
     pub candidate_priority: Option<f64>,
 }
 
-/// Future Shadow Compression result contract. Empty during Phase 4.0.
+/// Metadata-only summary of one shadow experiment.
+#[allow(
+    missing_docs,
+    reason = "field names are the versioned dashboard wire contract"
+)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct CompressionExperimentSummary {
+    pub id: String,
+    pub status: String,
+    pub candidate_count: u64,
+    pub session_count: u64,
+    pub block_count: u64,
+    pub runtime_sha: Option<String>,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+    pub quality: CompressionQuality,
+}
+
+/// Shadow-only integrity counters. Forwarding mutations must remain zero.
+#[allow(
+    missing_docs,
+    reason = "field names are the versioned dashboard wire contract"
+)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct CompressionQuality {
+    pub forwarding_mutations: u64,
+    pub shadow_drops: u64,
+    pub shadow_queue_full_drops: u64,
+    pub shadow_byte_budget_drops: u64,
+    pub shadow_work_budget_drops: u64,
+    pub shadow_worker_closed_drops: u64,
+    pub shadow_persistence_drops: u64,
+    pub recovery_failures: u64,
+    pub determinism_failures: u64,
+}
+
+/// Aggregated evidence for one compressor implementation.
+#[allow(
+    missing_docs,
+    reason = "field names are the versioned dashboard wire contract"
+)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct CompressorSummary {
+    pub compressor: String,
+    pub version: String,
+    pub eligible_blocks: u64,
+    pub applicable_blocks: u64,
+    pub applicability_basis_points: Option<u16>,
+    pub input_bytes: Option<u64>,
+    pub output_bytes: Option<u64>,
+    pub byte_reduction: Option<u64>,
+    pub candidate_effective_byte_reduction: Option<u64>,
+    pub unique_candidate_byte_reduction: Option<u64>,
+    pub byte_reduction_basis_points: Option<u16>,
+    pub estimated_input_tokens: Option<u64>,
+    pub estimated_output_tokens: Option<u64>,
+    pub estimated_reduction: Option<u64>,
+    pub candidate_effective_estimated_token_reduction: Option<u64>,
+    pub unique_candidate_estimated_token_reduction: Option<u64>,
+    pub estimated_reduction_basis_points: Option<u16>,
+    pub recovery_basis_points: Option<u16>,
+    pub deterministic_basis_points: Option<u16>,
+    pub processing_p50_us: Option<u64>,
+    pub processing_p90_us: Option<u64>,
+    pub processing_p95_us: Option<u64>,
+    pub processing_p99_us: Option<u64>,
+    pub cache_risk_low: u64,
+    pub cache_risk_medium: u64,
+    pub cache_risk_high: u64,
+    pub cache_risk_unknown: u64,
+}
+
+/// Complete metadata-only view of one shadow experiment.
+#[allow(
+    missing_docs,
+    reason = "field names are the versioned dashboard wire contract"
+)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct CompressionExperimentDetail {
+    pub summary: CompressionExperimentSummary,
+    pub compressor_set_json: String,
+    pub limits_json: String,
+    pub compressors: Vec<CompressorSummary>,
+    pub reduction_histogram: Vec<CompressionHistogramBucket>,
+    pub latency_histogram: Vec<CompressionHistogramBucket>,
+    pub workload_distribution_available: bool,
+}
+
+/// Bounded distribution bucket with integer boundaries.
+#[allow(
+    missing_docs,
+    reason = "field names are the versioned dashboard wire contract"
+)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct CompressionHistogramBucket {
+    pub label: String,
+    pub lower_inclusive: u64,
+    pub upper_exclusive: Option<u64>,
+    pub count: u64,
+}
+
+/// Metadata-only candidate row; original and transformed content are intentionally absent.
+#[allow(
+    missing_docs,
+    reason = "field names are the versioned dashboard wire contract"
+)]
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct CompressionCandidateSummary {
-    /// Candidate UUID.
     pub id: String,
-    /// Compressor name.
+    pub experiment_id: String,
+    pub snapshot_id: String,
+    pub block_ordinal: u64,
+    pub block_kind: String,
+    pub origin: String,
+    pub detected_kind: Option<String>,
     pub compressor: String,
-    /// Compressor version.
     pub version: String,
-    /// Applicable blocks.
-    pub applicable_blocks: u64,
-    /// Estimated token reduction.
-    pub candidate_reduction: Option<u64>,
-    /// Raw byte reduction.
+    pub status: String,
+    pub input_bytes: u64,
+    pub output_bytes: Option<u64>,
     pub byte_reduction: Option<u64>,
-    /// Recovery result.
-    pub recovery_success: Option<bool>,
-    /// Evaluation latency.
+    pub input_estimated_tokens: Option<u64>,
+    pub output_estimated_tokens: Option<u64>,
+    pub estimated_reduction: Option<u64>,
+    pub recovery_verified: bool,
+    pub deterministic: bool,
     pub latency_us: Option<u64>,
-    /// Whether the stable prefix was preserved.
-    pub prefix_preserved: Option<bool>,
-    /// Cache-risk classification.
-    pub cache_risk: Option<String>,
+    pub preserved_prefix_bytes: Option<u64>,
+    pub preserved_prefix_ratio_basis_points: Option<u16>,
+    pub cache_risk: String,
+    pub exact_repetition: Option<bool>,
+    pub persistence: Option<u64>,
 }
 
 /// Scheduler accounting summary when certified data exists.

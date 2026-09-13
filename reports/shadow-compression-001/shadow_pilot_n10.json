@@ -1,0 +1,1833 @@
+{
+  "report_id": "TRACEPRESS_SHADOW_PILOT_001_N10",
+  "report_version": 1,
+  "experiment": {
+    "experiment_id": "shadow-pilot-001",
+    "runtime_sha": null,
+    "status": "completed",
+    "started_at": "unix-ms:1789314454871",
+    "completed_at": "unix-ms:1789316361415",
+    "forwarding_mutations": 0,
+    "shadow_drops": 15,
+    "recovery_failures": 0,
+    "determinism_failures": 0,
+    "compressor_set": [
+      [
+        "json.noop",
+        1
+      ],
+      [
+        "json.minify",
+        1
+      ],
+      [
+        "json.tabular",
+        1
+      ],
+      [
+        "json.repeated_subtree",
+        1
+      ],
+      [
+        "text.noop",
+        1
+      ],
+      [
+        "text.repeated_line",
+        1
+      ],
+      [
+        "text.repeated_run",
+        1
+      ]
+    ],
+    "limits": {
+      "max_candidate_input_bytes": 1048576,
+      "max_candidate_output_bytes": 1048576,
+      "max_candidates_per_block": 6,
+      "max_shadow_work_units": 2000000,
+      "max_shadow_wall_time_ms": 100,
+      "max_shadow_memory_bytes": 4194304
+    }
+  },
+  "scope": {
+    "session_count": 10,
+    "candidate_count": 1666,
+    "unknown_transformed": 0,
+    "included_session_ids": [
+      "01a09b73-d557-7860-8d43-26634ddfbf8e",
+      "01a09b7a-fe83-7ed2-9920-f4f75521edaf",
+      "01a09b7d-b060-7f01-9e18-e27ebad497fd",
+      "01a09b7f-83c7-78e0-a50e-d0a509c68e33",
+      "01a09b81-5fd5-70e1-bf99-33b0340989bc",
+      "01a09b83-4894-7f20-aadf-81d9f969eeee",
+      "01a09b84-255e-7893-8b39-69ef090700f7",
+      "01a09b8a-1148-70f2-80a8-a4540805ed99",
+      "01a09b8d-dc58-7642-aa05-12045f1c6d9a",
+      "01a09b8f-b2ac-7b00-bdd4-efa5782ecdea"
+    ],
+    "excluded_session_ids": [
+      "01a09b86-c8cf-7953-a2d8-722a63d9da22",
+      "01a09b89-ed11-7a02-a732-e22cf8f3ddc7"
+    ]
+  },
+  "compressors": [
+    {
+      "id": "json.minify",
+      "version": "1",
+      "control": false,
+      "eligible_blocks": 424,
+      "applicable_blocks": 0,
+      "applicability": 0.0,
+      "status_counts": {
+        "no_improvement": 424
+      },
+      "input_bytes": null,
+      "output_bytes": null,
+      "byte_reduction": null,
+      "byte_reduction_ratio": null,
+      "estimated_input_tokens": null,
+      "estimated_output_tokens": null,
+      "estimated_token_reduction": null,
+      "estimated_token_reduction_ratio": null,
+      "candidate_effective_byte_reduction": null,
+      "unique_candidate_byte_reduction": null,
+      "candidate_effective_estimated_token_reduction": null,
+      "unique_candidate_estimated_token_reduction": null,
+      "processing_us": {
+        "p50": 4150.0,
+        "p90": 4796.099999999999,
+        "p95": 5201.749999999999,
+        "p99": 7158.949999999986
+      },
+      "recovery_success_rate": 1.0,
+      "determinism_success_rate": 1.0,
+      "preserved_prefix_ratio": {
+        "p50": null
+      },
+      "cache_risk": {
+        "high": 191,
+        "medium": 233
+      }
+    },
+    {
+      "id": "json.noop",
+      "version": "1",
+      "control": true,
+      "eligible_blocks": 424,
+      "applicable_blocks": 0,
+      "applicability": 0.0,
+      "status_counts": {
+        "no_improvement": 424
+      },
+      "input_bytes": null,
+      "output_bytes": null,
+      "byte_reduction": null,
+      "byte_reduction_ratio": null,
+      "estimated_input_tokens": null,
+      "estimated_output_tokens": null,
+      "estimated_token_reduction": null,
+      "estimated_token_reduction_ratio": null,
+      "candidate_effective_byte_reduction": null,
+      "unique_candidate_byte_reduction": null,
+      "candidate_effective_estimated_token_reduction": null,
+      "unique_candidate_estimated_token_reduction": null,
+      "processing_us": {
+        "p50": 2489.0,
+        "p90": 2898.1,
+        "p95": 3218.6999999999994,
+        "p99": 3758.3199999999997
+      },
+      "recovery_success_rate": 1.0,
+      "determinism_success_rate": 1.0,
+      "preserved_prefix_ratio": {
+        "p50": null
+      },
+      "cache_risk": {
+        "high": 191,
+        "medium": 233
+      }
+    },
+    {
+      "id": "json.repeated_subtree",
+      "version": "1",
+      "control": false,
+      "eligible_blocks": 409,
+      "applicable_blocks": 0,
+      "applicability": 0.0,
+      "status_counts": {
+        "not_applicable": 409
+      },
+      "input_bytes": null,
+      "output_bytes": null,
+      "byte_reduction": null,
+      "byte_reduction_ratio": null,
+      "estimated_input_tokens": null,
+      "estimated_output_tokens": null,
+      "estimated_token_reduction": null,
+      "estimated_token_reduction_ratio": null,
+      "candidate_effective_byte_reduction": null,
+      "unique_candidate_byte_reduction": null,
+      "candidate_effective_estimated_token_reduction": null,
+      "unique_candidate_estimated_token_reduction": null,
+      "processing_us": {
+        "p50": 4044.0,
+        "p90": 4784.0,
+        "p95": 5202.5999999999985,
+        "p99": 6920.040000000002
+      },
+      "recovery_success_rate": null,
+      "determinism_success_rate": null,
+      "preserved_prefix_ratio": {
+        "p50": null
+      },
+      "cache_risk": {
+        "unknown": 409
+      }
+    },
+    {
+      "id": "json.tabular",
+      "version": "1",
+      "control": false,
+      "eligible_blocks": 409,
+      "applicable_blocks": 179,
+      "applicability": 0.43765281173594134,
+      "status_counts": {
+        "applicable": 179,
+        "no_improvement": 230
+      },
+      "input_bytes": 5861803,
+      "output_bytes": 5854504,
+      "byte_reduction": 7299,
+      "byte_reduction_ratio": 0.0012451800239619106,
+      "estimated_input_tokens": 2202217,
+      "estimated_output_tokens": 2198353,
+      "estimated_token_reduction": 3864,
+      "estimated_token_reduction_ratio": 0.0017545954826431727,
+      "candidate_effective_byte_reduction": 7299,
+      "unique_candidate_byte_reduction": 332,
+      "candidate_effective_estimated_token_reduction": 3864,
+      "unique_candidate_estimated_token_reduction": 176,
+      "processing_us": {
+        "p50": 4633.0,
+        "p90": 5394.6,
+        "p95": 5676.4,
+        "p99": 6956.680000000012
+      },
+      "recovery_success_rate": 1.0,
+      "determinism_success_rate": 1.0,
+      "preserved_prefix_ratio": {
+        "p50": 0.3588
+      },
+      "cache_risk": {
+        "high": 222,
+        "medium": 187
+      }
+    }
+  ],
+  "workload_distribution": {
+    "available": true,
+    "workloads": [
+      {
+        "workload": "bug_diagnosis",
+        "session_count": 1,
+        "candidate_count": 40,
+        "compressors": [
+          {
+            "id": "json.minify",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1863.0,
+              "p90": 4041.3,
+              "p95": 4047.15,
+              "p99": 4051.83
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 10
+            }
+          },
+          {
+            "id": "json.noop",
+            "version": "1",
+            "control": true,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1219.5,
+              "p90": 2477.6,
+              "p95": 2484.8,
+              "p99": 2490.56
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 10
+            }
+          },
+          {
+            "id": "json.repeated_subtree",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "not_applicable": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1774.5,
+              "p90": 3844.1,
+              "p95": 3880.5499999999997,
+              "p99": 3909.71
+            },
+            "recovery_success_rate": null,
+            "determinism_success_rate": null,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "unknown": 10
+            }
+          },
+          {
+            "id": "json.tabular",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 2068.5,
+              "p90": 4532.8,
+              "p95": 4536.4,
+              "p99": 4539.28
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "high": 2,
+              "medium": 8
+            }
+          }
+        ]
+      },
+      {
+        "workload": "bug_fix",
+        "session_count": 1,
+        "candidate_count": 40,
+        "compressors": [
+          {
+            "id": "json.minify",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 253.0,
+              "p90": 880.1999999999994,
+              "p95": 1763.0999999999979,
+              "p99": 2469.42
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 10
+            }
+          },
+          {
+            "id": "json.noop",
+            "version": "1",
+            "control": true,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 151.5,
+              "p90": 467.8999999999996,
+              "p95": 1002.9499999999987,
+              "p99": 1430.9900000000002
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 10
+            }
+          },
+          {
+            "id": "json.repeated_subtree",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "not_applicable": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 254.0,
+              "p90": 701.0999999999992,
+              "p95": 1691.5499999999977,
+              "p99": 2483.9100000000003
+            },
+            "recovery_success_rate": null,
+            "determinism_success_rate": null,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "unknown": 10
+            }
+          },
+          {
+            "id": "json.tabular",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 300.5,
+              "p90": 860.299999999999,
+              "p95": 1995.6499999999974,
+              "p99": 2903.9300000000003
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 10
+            }
+          }
+        ]
+      },
+      {
+        "workload": "code_review",
+        "session_count": 1,
+        "candidate_count": 24,
+        "compressors": [
+          {
+            "id": "json.minify",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 2307.5,
+              "p90": 2629.0,
+              "p95": 2647.5,
+              "p99": 2662.3
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 6
+            }
+          },
+          {
+            "id": "json.noop",
+            "version": "1",
+            "control": true,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1275.5,
+              "p90": 1535.0,
+              "p95": 1539.0,
+              "p99": 1542.2
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 6
+            }
+          },
+          {
+            "id": "json.repeated_subtree",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "not_applicable": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 2284.5,
+              "p90": 2721.0,
+              "p95": 2741.0,
+              "p99": 2757.0
+            },
+            "recovery_success_rate": null,
+            "determinism_success_rate": null,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "unknown": 6
+            }
+          },
+          {
+            "id": "json.tabular",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 2906.5,
+              "p90": 3037.0,
+              "p95": 3038.0,
+              "p99": 3038.8
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 6
+            }
+          }
+        ]
+      },
+      {
+        "workload": "compaction_investigation",
+        "session_count": 1,
+        "candidate_count": 24,
+        "compressors": [
+          {
+            "id": "json.minify",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1949.0,
+              "p90": 2153.5,
+              "p95": 2241.75,
+              "p99": 2312.35
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 6
+            }
+          },
+          {
+            "id": "json.noop",
+            "version": "1",
+            "control": true,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1159.5,
+              "p90": 1325.5,
+              "p95": 1387.75,
+              "p99": 1437.55
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 6
+            }
+          },
+          {
+            "id": "json.repeated_subtree",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "not_applicable": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1937.5,
+              "p90": 2175.5,
+              "p95": 2279.75,
+              "p99": 2363.15
+            },
+            "recovery_success_rate": null,
+            "determinism_success_rate": null,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "unknown": 6
+            }
+          },
+          {
+            "id": "json.tabular",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 2235.5,
+              "p90": 2489.5,
+              "p95": 2614.75,
+              "p99": 2714.9500000000003
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 6
+            }
+          }
+        ]
+      },
+      {
+        "workload": "dependency_investigation",
+        "session_count": 1,
+        "candidate_count": 24,
+        "compressors": [
+          {
+            "id": "json.minify",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 4961.0,
+              "p90": 5661.0,
+              "p95": 5687.5,
+              "p99": 5708.7
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 6
+            }
+          },
+          {
+            "id": "json.noop",
+            "version": "1",
+            "control": true,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 3015.0,
+              "p90": 3429.0,
+              "p95": 3437.5,
+              "p99": 3444.3
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 6
+            }
+          },
+          {
+            "id": "json.repeated_subtree",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "not_applicable": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 4711.5,
+              "p90": 5484.0,
+              "p95": 5540.0,
+              "p99": 5584.8
+            },
+            "recovery_success_rate": null,
+            "determinism_success_rate": null,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "unknown": 6
+            }
+          },
+          {
+            "id": "json.tabular",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 6,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 6
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 5473.0,
+              "p90": 6243.5,
+              "p95": 6253.25,
+              "p99": 6261.05
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "high": 1,
+              "medium": 5
+            }
+          }
+        ]
+      },
+      {
+        "workload": "feature_implementation",
+        "session_count": 1,
+        "candidate_count": 40,
+        "compressors": [
+          {
+            "id": "json.minify",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1938.5,
+              "p90": 2843.899999999999,
+              "p95": 3878.4499999999975,
+              "p99": 4706.09
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "high": 1,
+              "medium": 9
+            }
+          },
+          {
+            "id": "json.noop",
+            "version": "1",
+            "control": true,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1192.5,
+              "p90": 1745.2999999999995,
+              "p95": 2444.1499999999983,
+              "p99": 3003.2300000000005
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "high": 1,
+              "medium": 9
+            }
+          },
+          {
+            "id": "json.repeated_subtree",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "not_applicable": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1927.0,
+              "p90": 2972.4999999999995,
+              "p95": 3636.249999999998,
+              "p99": 4167.25
+            },
+            "recovery_success_rate": null,
+            "determinism_success_rate": null,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "unknown": 10
+            }
+          },
+          {
+            "id": "json.tabular",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 2205.0,
+              "p90": 3165.099999999999,
+              "p95": 4173.549999999997,
+              "p99": 4980.31
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "high": 1,
+              "medium": 9
+            }
+          }
+        ]
+      },
+      {
+        "workload": "large_search",
+        "session_count": 1,
+        "candidate_count": 84,
+        "compressors": [
+          {
+            "id": "json.minify",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 21,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 21
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 2240.0,
+              "p90": 2996.0,
+              "p95": 3175.0,
+              "p99": 4134.200000000001
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "high": 3,
+              "medium": 18
+            }
+          },
+          {
+            "id": "json.noop",
+            "version": "1",
+            "control": true,
+            "eligible_blocks": 21,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 21
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1392.0,
+              "p90": 1903.0,
+              "p95": 2289.0,
+              "p99": 2527.4
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "high": 3,
+              "medium": 18
+            }
+          },
+          {
+            "id": "json.repeated_subtree",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 21,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "not_applicable": 21
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 2039.0,
+              "p90": 2697.0,
+              "p95": 3122.0,
+              "p99": 3914.000000000001
+            },
+            "recovery_success_rate": null,
+            "determinism_success_rate": null,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "unknown": 21
+            }
+          },
+          {
+            "id": "json.tabular",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 21,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 21
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 2565.0,
+              "p90": 3117.0,
+              "p95": 3121.0,
+              "p99": 4401.000000000001
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "high": 5,
+              "medium": 16
+            }
+          }
+        ]
+      },
+      {
+        "workload": "refactor",
+        "session_count": 1,
+        "candidate_count": 60,
+        "compressors": [
+          {
+            "id": "json.minify",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 15,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 15
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1596.0,
+              "p90": 2053.0,
+              "p95": 2316.199999999999,
+              "p99": 2788.8399999999992
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 15
+            }
+          },
+          {
+            "id": "json.noop",
+            "version": "1",
+            "control": true,
+            "eligible_blocks": 15,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 15
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 984.0,
+              "p90": 1338.4,
+              "p95": 1446.5999999999997,
+              "p99": 1638.12
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 15
+            }
+          },
+          {
+            "id": "json.repeated_subtree",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 15,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "not_applicable": 15
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1274.0,
+              "p90": 2165.4,
+              "p95": 2378.399999999999,
+              "p99": 2746.8799999999997
+            },
+            "recovery_success_rate": null,
+            "determinism_success_rate": null,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "unknown": 15
+            }
+          },
+          {
+            "id": "json.tabular",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 15,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 15
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 1489.0,
+              "p90": 2422.2,
+              "p95": 2675.899999999999,
+              "p99": 3125.5799999999995
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "high": 1,
+              "medium": 14
+            }
+          }
+        ]
+      },
+      {
+        "workload": "repo_exploration",
+        "session_count": 1,
+        "candidate_count": 1290,
+        "compressors": [
+          {
+            "id": "json.minify",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 330,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 330
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 4286.0,
+              "p90": 4854.2,
+              "p95": 5260.250000000001,
+              "p99": 7396.159999999998
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "high": 187,
+              "medium": 143
+            }
+          },
+          {
+            "id": "json.noop",
+            "version": "1",
+            "control": true,
+            "eligible_blocks": 330,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 330
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 2588.5,
+              "p90": 2922.5,
+              "p95": 3288.85,
+              "p99": 3941.6299999999947
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "high": 187,
+              "medium": 143
+            }
+          },
+          {
+            "id": "json.repeated_subtree",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 315,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "not_applicable": 315
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 4295.0,
+              "p90": 4841.8,
+              "p95": 5239.3,
+              "p99": 7230.280000000004
+            },
+            "recovery_success_rate": null,
+            "determinism_success_rate": null,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "unknown": 315
+            }
+          },
+          {
+            "id": "json.tabular",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 315,
+            "applicable_blocks": 179,
+            "applicability": 0.5682539682539682,
+            "status_counts": {
+              "applicable": 179,
+              "no_improvement": 136
+            },
+            "input_bytes": 5861803,
+            "output_bytes": 5854504,
+            "byte_reduction": 7299,
+            "byte_reduction_ratio": 0.0012451800239619106,
+            "estimated_input_tokens": 2202217,
+            "estimated_output_tokens": 2198353,
+            "estimated_token_reduction": 3864,
+            "estimated_token_reduction_ratio": 0.0017545954826431727,
+            "candidate_effective_byte_reduction": 7299,
+            "unique_candidate_byte_reduction": 332,
+            "candidate_effective_estimated_token_reduction": 3864,
+            "unique_candidate_estimated_token_reduction": 176,
+            "processing_us": {
+              "p50": 4856.0,
+              "p90": 5456.6,
+              "p95": 5759.400000000001,
+              "p99": 7030.76
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": 0.3588
+            },
+            "cache_risk": {
+              "high": 212,
+              "medium": 103
+            }
+          }
+        ]
+      },
+      {
+        "workload": "test_debugging",
+        "session_count": 1,
+        "candidate_count": 40,
+        "compressors": [
+          {
+            "id": "json.minify",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 606.0,
+              "p90": 2439.2,
+              "p95": 2494.1,
+              "p99": 2538.02
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 10
+            }
+          },
+          {
+            "id": "json.noop",
+            "version": "1",
+            "control": true,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 362.0,
+              "p90": 1547.1,
+              "p95": 1786.0499999999995,
+              "p99": 1977.21
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 10
+            }
+          },
+          {
+            "id": "json.repeated_subtree",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "not_applicable": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 597.5,
+              "p90": 2313.2,
+              "p95": 2341.1,
+              "p99": 2363.42
+            },
+            "recovery_success_rate": null,
+            "determinism_success_rate": null,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "unknown": 10
+            }
+          },
+          {
+            "id": "json.tabular",
+            "version": "1",
+            "control": false,
+            "eligible_blocks": 10,
+            "applicable_blocks": 0,
+            "applicability": 0.0,
+            "status_counts": {
+              "no_improvement": 10
+            },
+            "input_bytes": null,
+            "output_bytes": null,
+            "byte_reduction": null,
+            "byte_reduction_ratio": null,
+            "estimated_input_tokens": null,
+            "estimated_output_tokens": null,
+            "estimated_token_reduction": null,
+            "estimated_token_reduction_ratio": null,
+            "candidate_effective_byte_reduction": null,
+            "unique_candidate_byte_reduction": null,
+            "candidate_effective_estimated_token_reduction": null,
+            "unique_candidate_estimated_token_reduction": null,
+            "processing_us": {
+              "p50": 697.5,
+              "p90": 2728.4,
+              "p95": 2734.7,
+              "p99": 2739.74
+            },
+            "recovery_success_rate": 1.0,
+            "determinism_success_rate": 1.0,
+            "preserved_prefix_ratio": {
+              "p50": null
+            },
+            "cache_risk": {
+              "medium": 10
+            }
+          }
+        ]
+      }
+    ]
+  },
+  "quality_gates": {
+    "shadow_pilot_n10": "completed_degraded",
+    "compaction_calibration": "completed_controlled_cohort",
+    "aa_infrastructure": "completed_smoke",
+    "host_rss_cpu_comparison": "pending",
+    "naturalistic_workload_distributions": "completed"
+  },
+  "measurement_context": {
+    "cohort_kind": "naturalistic",
+    "cohort_label": "n10",
+    "codex_version": "0.154.0",
+    "model": "gpt-5.6-luna",
+    "reasoning_effort": "xhigh",
+    "transport": "chatgpt_codex_subscription",
+    "phase_4_0_base": "93ffe0c9c32a0f9a78027c6159e70236b2e6a598"
+  },
+  "collection_notes": [
+    "The first valid session saturated the bounded shadow path and the experiment recorded 15 aggregate shadow drops.",
+    "One code-review attempt was interrupted after its nested review workflow stalled and is excluded from N10.",
+    "One CLI argument-error attempt created no provider requests and is excluded from N10.",
+    "Aggregate experiment counters include excluded attempts because Phase 4.1 does not persist per-session shadow-drop attribution."
+  ],
+  "invariants": {
+    "active_request_rewriting": false,
+    "forwarding_mutations": 0,
+    "unknown_transform_policy": "never",
+    "candidate_content_persisted": false
+  },
+  "recommended_active_candidate": null,
+  "recommendation_rationale": null,
+  "recommendation_status": "blocked_pending_empirical_gates",
+  "phase_4_2": "blocked",
+  "limitations": [
+    "Candidate reduction is local representation evidence, not provider token savings.",
+    "Cache risk is structural evidence, not a provider cache prediction.",
+    "This metadata-only report does not establish model quality preservation."
+  ]
+}

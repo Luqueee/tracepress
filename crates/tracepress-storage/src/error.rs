@@ -48,6 +48,12 @@ pub enum StorageError {
         /// Logical field containing the invalid value.
         field: &'static str,
     },
+    /// A shadow candidate did not resolve to exactly one block in its own snapshot.
+    #[error("invalid shadow candidate association: {message}")]
+    InvalidShadowAssociation {
+        /// Stable metadata-only diagnostic.
+        message: &'static str,
+    },
     /// The configured writer queue exceeds Tokio's bounded channel capacity.
     #[error("writer queue capacity {requested} exceeds Tokio maximum {maximum}")]
     WriterQueueCapacityExceeded {

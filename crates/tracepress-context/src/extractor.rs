@@ -126,6 +126,13 @@ pub struct ContextBlockDraft {
     pub origin: ContextOrigin,
     /// Exact location in the original request.
     pub locator: BlockLocator,
+    /// Exact raw span of the content view used for detection and estimation.
+    ///
+    /// This may differ from `locator` for wrappers such as `function_call_output`. It contains
+    /// offsets only and allows later ephemeral consumers to inspect the same bounded bytes. The
+    /// compact wire name avoids materially reducing the bounded IPC batch capacity.
+    #[serde(default, rename = "cs", skip_serializing_if = "Option::is_none")]
+    pub content_span: Option<[u64; 2]>,
     /// Bytes in the exact raw span.
     pub raw_bytes: u64,
     /// SHA-256 over the exact raw span bytes.
@@ -160,6 +167,7 @@ impl fmt::Debug for ContextBlockDraft {
             .field("role", &self.role)
             .field("origin", &self.origin)
             .field("locator", &self.locator)
+            .field("content_span", &self.content_span)
             .field("raw_bytes", &self.raw_bytes)
             .field("exact_fingerprint", &self.exact_fingerprint)
             .field("semantic_fingerprint", &self.semantic_fingerprint)
@@ -543,6 +551,12 @@ where
             role: candidate.role,
             origin: candidate.origin,
             locator: source.locator().clone(),
+            content_span: index.node(candidate.payload).map(|payload| {
+                [
+                    payload.locator().raw_value_start,
+                    payload.locator().raw_value_end,
+                ]
+            }),
             raw_bytes: source.raw_bytes(),
             exact_fingerprint,
             semantic_fingerprint: measurements.semantic_fingerprint,

@@ -1,0 +1,897 @@
+{
+  "comparison": {
+    "aa": {
+      "baseline_vs_baseline": {
+        "baseline_phase": "baseline_a",
+        "current_phase": "baseline_b",
+        "decision": "no significant positive forwarding delta in baseline_b versus baseline_a",
+        "significant_forwarding_regression": false,
+        "workloads": {
+          "tool_result_json": {
+            "dispatch_us": {
+              "aa_envelope_absolute_us": 345.139,
+              "aa_envelope_relative": 0.65735,
+              "available": true,
+              "baseline_median": 525.05,
+              "bootstrap_median_delta_ci95": {
+                "lower_95_us": -33.41,
+                "significant_positive": false,
+                "upper_95_us": 345.139
+              },
+              "current_median": 606.941,
+              "delta_us": 81.891,
+              "relative_delta": 0.15597
+            },
+            "duration_us": {
+              "aa_envelope_absolute_us": 506.742,
+              "aa_envelope_relative": 0.13074,
+              "available": true,
+              "baseline_median": 3876.062,
+              "bootstrap_median_delta_ci95": {
+                "lower_95_us": -52.13,
+                "significant_positive": false,
+                "upper_95_us": 506.742
+              },
+              "current_median": 4034.213,
+              "delta_us": 158.151,
+              "relative_delta": 0.0408
+            },
+            "idle_rss_kib_delta": -184,
+            "peak_rss_idle_delta_kib": 180,
+            "peak_rss_kib_delta": -4,
+            "proxy_ttfb_us": {
+              "aa_envelope_absolute_us": 226.96,
+              "aa_envelope_relative": 1.2632,
+              "available": true,
+              "baseline_median": 179.67,
+              "bootstrap_median_delta_ci95": {
+                "lower_95_us": -88.949,
+                "significant_positive": false,
+                "upper_95_us": 226.96
+              },
+              "current_median": 170.901,
+              "delta_us": -8.769,
+              "relative_delta": -0.04881
+            },
+            "proxy_ttft_us": {
+              "available": false
+            }
+          }
+        }
+      },
+      "off_vs_off": {
+        "baseline_phase": "off_a",
+        "current_phase": "off_b",
+        "decision": "no significant positive forwarding delta in off_b versus off_a",
+        "significant_forwarding_regression": false,
+        "workloads": {
+          "tool_result_json": {
+            "dispatch_us": {
+              "aa_envelope_absolute_us": 320.259,
+              "aa_envelope_relative": 0.49514,
+              "available": true,
+              "baseline_median": 646.801,
+              "bootstrap_median_delta_ci95": {
+                "lower_95_us": -235.641,
+                "significant_positive": false,
+                "upper_95_us": 320.259
+              },
+              "current_median": 713.38,
+              "delta_us": 66.579,
+              "relative_delta": 0.10294
+            },
+            "duration_us": {
+              "aa_envelope_absolute_us": 590.049,
+              "aa_envelope_relative": 0.14198,
+              "available": true,
+              "baseline_median": 4155.794,
+              "bootstrap_median_delta_ci95": {
+                "lower_95_us": -315.662,
+                "significant_positive": false,
+                "upper_95_us": 590.049
+              },
+              "current_median": 4321.883,
+              "delta_us": 166.089,
+              "relative_delta": 0.03997
+            },
+            "idle_rss_kib_delta": 4,
+            "peak_rss_idle_delta_kib": -184,
+            "peak_rss_kib_delta": -180,
+            "proxy_ttfb_us": {
+              "aa_envelope_absolute_us": 132.538,
+              "aa_envelope_relative": 0.50757,
+              "available": true,
+              "baseline_median": 261.121,
+              "bootstrap_median_delta_ci95": {
+                "lower_95_us": -119.791,
+                "significant_positive": false,
+                "upper_95_us": 132.538
+              },
+              "current_median": 266.091,
+              "delta_us": 4.97,
+              "relative_delta": 0.01903
+            },
+            "proxy_ttft_us": {
+              "available": false
+            }
+          }
+        }
+      }
+    },
+    "decision": "accept: ON-OFF and OFF-baseline cross zero or remain within measured A/A noise",
+    "off_vs_baseline": {
+      "baseline_phase": "baseline_a",
+      "current_phase": "off_a",
+      "decision": "no significant positive forwarding delta in off_a versus baseline_a",
+      "operational_decision": "acceptable: every target CI crosses zero or stays within measured A/A envelope",
+      "operationally_acceptable": true,
+      "significant_forwarding_regression": false,
+      "workloads": {
+        "tool_result_json": {
+          "dispatch_us": {
+            "aa_envelope_absolute_us": 345.139,
+            "aa_envelope_relative": 0.65735,
+            "available": true,
+            "baseline_median": 525.05,
+            "bootstrap_median_delta_ci95": {
+              "lower_95_us": -131.929,
+              "significant_positive": false,
+              "upper_95_us": 302.191
+            },
+            "crosses_zero": true,
+            "current_median": 646.801,
+            "delta_us": 121.751,
+            "operationally_acceptable": true,
+            "relative_delta": 0.23188,
+            "within_aa_envelope": true
+          },
+          "duration_us": {
+            "aa_envelope_absolute_us": 590.049,
+            "aa_envelope_relative": 0.14198,
+            "available": true,
+            "baseline_median": 3876.062,
+            "bootstrap_median_delta_ci95": {
+              "lower_95_us": -144.228,
+              "significant_positive": false,
+              "upper_95_us": 558.84
+            },
+            "crosses_zero": true,
+            "current_median": 4155.794,
+            "delta_us": 279.732,
+            "operationally_acceptable": true,
+            "relative_delta": 0.07217,
+            "within_aa_envelope": true
+          },
+          "idle_rss_kib_delta": -180,
+          "operationally_acceptable": true,
+          "peak_rss_idle_delta_kib": 1232,
+          "peak_rss_kib_delta": 1052,
+          "proxy_ttfb_us": {
+            "aa_envelope_absolute_us": 226.96,
+            "aa_envelope_relative": 1.2632,
+            "available": true,
+            "baseline_median": 179.67,
+            "bootstrap_median_delta_ci95": {
+              "lower_95_us": -32.469,
+              "significant_positive": false,
+              "upper_95_us": 161.76
+            },
+            "crosses_zero": true,
+            "current_median": 261.121,
+            "delta_us": 81.451,
+            "operationally_acceptable": true,
+            "relative_delta": 0.45334,
+            "within_aa_envelope": true
+          },
+          "proxy_ttft_us": {
+            "available": false
+          }
+        }
+      }
+    },
+    "on_vs_off": {
+      "baseline_phase": "off_a",
+      "current_phase": "on",
+      "decision": "no significant positive forwarding delta in on versus off_a",
+      "operational_decision": "acceptable: every target CI crosses zero or stays within measured A/A envelope",
+      "operationally_acceptable": true,
+      "significant_forwarding_regression": false,
+      "workloads": {
+        "tool_result_json": {
+          "dispatch_us": {
+            "aa_envelope_absolute_us": 320.259,
+            "aa_envelope_relative": 0.49514,
+            "available": true,
+            "baseline_median": 646.801,
+            "bootstrap_median_delta_ci95": {
+              "lower_95_us": -270.86,
+              "significant_positive": false,
+              "upper_95_us": 203.46
+            },
+            "crosses_zero": true,
+            "current_median": 556.381,
+            "delta_us": -90.42,
+            "operationally_acceptable": true,
+            "relative_delta": -0.1398,
+            "within_aa_envelope": true
+          },
+          "duration_us": {
+            "aa_envelope_absolute_us": 590.049,
+            "aa_envelope_relative": 0.14198,
+            "available": true,
+            "baseline_median": 4155.794,
+            "bootstrap_median_delta_ci95": {
+              "lower_95_us": -274.088,
+              "significant_positive": false,
+              "upper_95_us": 428.98
+            },
+            "crosses_zero": true,
+            "current_median": 4160.814,
+            "delta_us": 5.02,
+            "operationally_acceptable": true,
+            "relative_delta": 0.00121,
+            "within_aa_envelope": true
+          },
+          "idle_rss_kib_delta": -52,
+          "operationally_acceptable": true,
+          "peak_rss_idle_delta_kib": 492,
+          "peak_rss_kib_delta": 440,
+          "proxy_ttfb_us": {
+            "aa_envelope_absolute_us": 132.538,
+            "aa_envelope_relative": 0.50757,
+            "available": true,
+            "baseline_median": 261.121,
+            "bootstrap_median_delta_ci95": {
+              "lower_95_us": -54.8,
+              "significant_positive": false,
+              "upper_95_us": 157.521
+            },
+            "crosses_zero": true,
+            "current_median": 307.161,
+            "delta_us": 46.04,
+            "operationally_acceptable": true,
+            "relative_delta": 0.17632,
+            "within_aa_envelope": true
+          },
+          "proxy_ttft_us": {
+            "available": false
+          }
+        }
+      }
+    },
+    "operationally_acceptable": true,
+    "significant_forwarding_regression": false
+  },
+  "metadata": {
+    "aa_comparisons": {
+      "baseline": "baseline_a versus baseline_b",
+      "off": "off_a versus off_b"
+    },
+    "arm_order": [
+      "baseline_a",
+      "off_a",
+      "on",
+      "off_b",
+      "baseline_b"
+    ],
+    "baseline_commit": "70957bba79da40744c909ef9580fc0f56dff3684",
+    "baseline_tag": "phase-3.1.2-complete",
+    "burst_widths": [
+      1
+    ],
+    "compiler_profile": "release (Cargo workspace profile; --locked)",
+    "context_analysis_concurrency_cap": 2,
+    "context_ingestion_queue_cap": 4,
+    "current_commit": "93ffe0c9c32a0f9a78027c6159e70236b2e6a598",
+    "current_worktree_dirty": true,
+    "deferred_analysis_queue_byte_cap": 67108864,
+    "deferred_analysis_queue_item_cap": 32,
+    "expected_baseline_commit": "70957bb",
+    "forwarding_bound": 64,
+    "metric_definitions": {
+      "dispatch_us": "client start to deterministic upstream first request byte",
+      "duration_us": "client start to client response end",
+      "proxy_ttfb_us": "deterministic upstream first response body byte to client first body byte",
+      "proxy_ttft_us": "deterministic upstream semantic SSE chunk to client semantic SSE chunk"
+    },
+    "phase_arms": {
+      "baseline_a": "selected baseline tag; context-analysis env ignored; first A/A arm",
+      "baseline_b": "selected baseline tag; context-analysis env ignored; second A/A arm",
+      "off_a": "current checkout with TRACEPRESS_CONTEXT_ANALYSIS=off; first A/A arm",
+      "off_b": "current checkout with TRACEPRESS_CONTEXT_ANALYSIS=off; second A/A arm",
+      "on": "current checkout with TRACEPRESS_CONTEXT_ANALYSIS=shadow and TRACEPRESS_SHADOW_COMPRESSION=on"
+    },
+    "post_response_settle_seconds": 0.05,
+    "request_bytes": {
+      "tool_result_json": 162
+    },
+    "request_errors_must_be_zero": true,
+    "samples_per_workload": 5,
+    "shadow_compression": true,
+    "upstream": "deterministic local HTTP/1.1 socket server",
+    "warmup_per_workload": 2,
+    "workloads": [
+      "tool_result_json"
+    ]
+  },
+  "results": {
+    "tool_result_json": {
+      "baseline": {
+        "analysis_mode": "off",
+        "burst_width": 1,
+        "dispatch_us": {
+          "median": 525.05,
+          "p95": 607.941,
+          "sample_count": 5
+        },
+        "duration_us": {
+          "median": 3876.062,
+          "p95": 4046.393,
+          "sample_count": 5
+        },
+        "errors": 0,
+        "idle_rss_kib": 616,
+        "missing_upstream_metrics": 0,
+        "peak_rss_delta_kib": 5520,
+        "peak_rss_kib": 6136,
+        "phase": "baseline_a",
+        "proxy_ttfb_us": {
+          "median": 179.67,
+          "p95": 259.85,
+          "sample_count": 5
+        },
+        "proxy_ttft_us": {
+          "median": null,
+          "p95": null,
+          "sample_count": 0
+        },
+        "queue_observability": {
+          "context_observer_backpressure_total": 0,
+          "durable": {
+            "context_analysis_dropped_events": 0,
+            "context_analysis_event_count": 0,
+            "context_snapshot_request_ids": 0,
+            "context_snapshots": 0,
+            "context_snapshots_without_provider_request": 0,
+            "observer_backpressure_snapshots": 0,
+            "phase2_provider_requests": 7,
+            "terminal_context_request_ids": 0,
+            "terminal_context_snapshots": 0
+          },
+          "stdout_counters": {
+            "analysis_drop_backpressure": 0,
+            "analysis_drop_cancelled": 0,
+            "analysis_drop_correlation": 0,
+            "analysis_drop_malformed": 0,
+            "analysis_drop_resource_limit": 0,
+            "analysis_drop_unsupported": 0,
+            "analysis_requests_complete": 0,
+            "analysis_requests_dropped": 0,
+            "analysis_requests_partial": 0,
+            "analysis_requests_seen": 0,
+            "compaction_observation_dropped_total": 0,
+            "context_cancelled_total": 0,
+            "context_correlation_degraded_total": 0,
+            "context_malformed_total": 0,
+            "context_observer_backpressure_total": 0,
+            "context_resource_limit_total": 0,
+            "context_unsupported_total": 0,
+            "correlation_correlated": 0,
+            "correlation_degraded_inflight_limit": 0,
+            "correlation_degraded_retired_limit": 0,
+            "correlation_degraded_total": 0,
+            "correlation_eligible": 0,
+            "correlation_missing_total": 0
+          }
+        },
+        "requested_samples": 5,
+        "rss_kib": {
+          "median": 5696.0,
+          "p95": 6136.0,
+          "sample_count": 179
+        }
+      },
+      "baseline_a": {
+        "analysis_mode": "off",
+        "burst_width": 1,
+        "dispatch_us": {
+          "median": 525.05,
+          "p95": 607.941,
+          "sample_count": 5
+        },
+        "duration_us": {
+          "median": 3876.062,
+          "p95": 4046.393,
+          "sample_count": 5
+        },
+        "errors": 0,
+        "idle_rss_kib": 616,
+        "missing_upstream_metrics": 0,
+        "peak_rss_delta_kib": 5520,
+        "peak_rss_kib": 6136,
+        "phase": "baseline_a",
+        "proxy_ttfb_us": {
+          "median": 179.67,
+          "p95": 259.85,
+          "sample_count": 5
+        },
+        "proxy_ttft_us": {
+          "median": null,
+          "p95": null,
+          "sample_count": 0
+        },
+        "queue_observability": {
+          "context_observer_backpressure_total": 0,
+          "durable": {
+            "context_analysis_dropped_events": 0,
+            "context_analysis_event_count": 0,
+            "context_snapshot_request_ids": 0,
+            "context_snapshots": 0,
+            "context_snapshots_without_provider_request": 0,
+            "observer_backpressure_snapshots": 0,
+            "phase2_provider_requests": 7,
+            "terminal_context_request_ids": 0,
+            "terminal_context_snapshots": 0
+          },
+          "stdout_counters": {
+            "analysis_drop_backpressure": 0,
+            "analysis_drop_cancelled": 0,
+            "analysis_drop_correlation": 0,
+            "analysis_drop_malformed": 0,
+            "analysis_drop_resource_limit": 0,
+            "analysis_drop_unsupported": 0,
+            "analysis_requests_complete": 0,
+            "analysis_requests_dropped": 0,
+            "analysis_requests_partial": 0,
+            "analysis_requests_seen": 0,
+            "compaction_observation_dropped_total": 0,
+            "context_cancelled_total": 0,
+            "context_correlation_degraded_total": 0,
+            "context_malformed_total": 0,
+            "context_observer_backpressure_total": 0,
+            "context_resource_limit_total": 0,
+            "context_unsupported_total": 0,
+            "correlation_correlated": 0,
+            "correlation_degraded_inflight_limit": 0,
+            "correlation_degraded_retired_limit": 0,
+            "correlation_degraded_total": 0,
+            "correlation_eligible": 0,
+            "correlation_missing_total": 0
+          }
+        },
+        "requested_samples": 5,
+        "rss_kib": {
+          "median": 5696.0,
+          "p95": 6136.0,
+          "sample_count": 179
+        }
+      },
+      "baseline_b": {
+        "analysis_mode": "off",
+        "burst_width": 1,
+        "dispatch_us": {
+          "median": 606.941,
+          "p95": 761.041,
+          "sample_count": 5
+        },
+        "duration_us": {
+          "median": 4034.213,
+          "p95": 4382.804,
+          "sample_count": 5
+        },
+        "errors": 0,
+        "idle_rss_kib": 432,
+        "missing_upstream_metrics": 0,
+        "peak_rss_delta_kib": 5700,
+        "peak_rss_kib": 6132,
+        "phase": "baseline_b",
+        "proxy_ttfb_us": {
+          "median": 170.901,
+          "p95": 406.63,
+          "sample_count": 5
+        },
+        "proxy_ttft_us": {
+          "median": null,
+          "p95": null,
+          "sample_count": 0
+        },
+        "queue_observability": {
+          "context_observer_backpressure_total": 0,
+          "durable": {
+            "context_analysis_dropped_events": 0,
+            "context_analysis_event_count": 0,
+            "context_snapshot_request_ids": 0,
+            "context_snapshots": 0,
+            "context_snapshots_without_provider_request": 0,
+            "observer_backpressure_snapshots": 0,
+            "phase2_provider_requests": 7,
+            "terminal_context_request_ids": 0,
+            "terminal_context_snapshots": 0
+          },
+          "stdout_counters": {
+            "analysis_drop_backpressure": 0,
+            "analysis_drop_cancelled": 0,
+            "analysis_drop_correlation": 0,
+            "analysis_drop_malformed": 0,
+            "analysis_drop_resource_limit": 0,
+            "analysis_drop_unsupported": 0,
+            "analysis_requests_complete": 0,
+            "analysis_requests_dropped": 0,
+            "analysis_requests_partial": 0,
+            "analysis_requests_seen": 0,
+            "compaction_observation_dropped_total": 0,
+            "context_cancelled_total": 0,
+            "context_correlation_degraded_total": 0,
+            "context_malformed_total": 0,
+            "context_observer_backpressure_total": 0,
+            "context_resource_limit_total": 0,
+            "context_unsupported_total": 0,
+            "correlation_correlated": 0,
+            "correlation_degraded_inflight_limit": 0,
+            "correlation_degraded_retired_limit": 0,
+            "correlation_degraded_total": 0,
+            "correlation_eligible": 0,
+            "correlation_missing_total": 0
+          }
+        },
+        "requested_samples": 5,
+        "rss_kib": {
+          "median": 5688.0,
+          "p95": 6132.0,
+          "sample_count": 180
+        }
+      },
+      "off": {
+        "analysis_mode": "off",
+        "burst_width": 1,
+        "dispatch_us": {
+          "median": 646.801,
+          "p95": 827.241,
+          "sample_count": 5
+        },
+        "duration_us": {
+          "median": 4155.794,
+          "p95": 4434.902,
+          "sample_count": 5
+        },
+        "errors": 0,
+        "idle_rss_kib": 436,
+        "missing_upstream_metrics": 0,
+        "peak_rss_delta_kib": 6752,
+        "peak_rss_kib": 7188,
+        "phase": "off_a",
+        "proxy_ttfb_us": {
+          "median": 261.121,
+          "p95": 341.43,
+          "sample_count": 5
+        },
+        "proxy_ttft_us": {
+          "median": null,
+          "p95": null,
+          "sample_count": 0
+        },
+        "queue_observability": {
+          "context_observer_backpressure_total": 0,
+          "durable": {
+            "context_analysis_dropped_events": 0,
+            "context_analysis_event_count": 0,
+            "context_snapshot_request_ids": 0,
+            "context_snapshots": 0,
+            "context_snapshots_without_provider_request": 0,
+            "observer_backpressure_snapshots": 0,
+            "phase2_provider_requests": 7,
+            "terminal_context_request_ids": 0,
+            "terminal_context_snapshots": 0
+          },
+          "stdout_counters": {
+            "analysis_admitted_total": 0,
+            "analysis_deferred_total": 0,
+            "analysis_drop_backpressure": 0,
+            "analysis_drop_cancelled": 0,
+            "analysis_drop_correlation": 0,
+            "analysis_drop_deferred_backlog_capacity": 0,
+            "analysis_drop_malformed": 0,
+            "analysis_drop_resource_limit": 0,
+            "analysis_drop_unsupported": 0,
+            "analysis_requests_complete": 0,
+            "analysis_requests_dropped": 0,
+            "analysis_requests_partial": 0,
+            "analysis_requests_seen": 0,
+            "analysis_wait_us": 0,
+            "backlog_capacity_drops": 0,
+            "compaction_observation_dropped_total": 0,
+            "context_cancelled_total": 0,
+            "context_correlation_degraded_total": 0,
+            "context_deferred_backlog_capacity_total": 0,
+            "context_malformed_total": 0,
+            "context_observer_backpressure_total": 0,
+            "context_resource_limit_total": 0,
+            "context_unsupported_total": 0,
+            "correlation_correlated": 0,
+            "correlation_degraded_inflight_limit": 0,
+            "correlation_degraded_retired_limit": 0,
+            "correlation_degraded_total": 0,
+            "correlation_eligible": 0,
+            "correlation_missing_total": 0,
+            "deferred_high_water_bytes": 0,
+            "deferred_high_water_items": 0,
+            "deferred_queue_bytes": 0,
+            "deferred_queue_items": 0,
+            "processed_deferred_total": 0
+          }
+        },
+        "requested_samples": 5,
+        "rss_kib": {
+          "median": 6532.0,
+          "p95": 7188.0,
+          "sample_count": 180
+        }
+      },
+      "off_a": {
+        "analysis_mode": "off",
+        "burst_width": 1,
+        "dispatch_us": {
+          "median": 646.801,
+          "p95": 827.241,
+          "sample_count": 5
+        },
+        "duration_us": {
+          "median": 4155.794,
+          "p95": 4434.902,
+          "sample_count": 5
+        },
+        "errors": 0,
+        "idle_rss_kib": 436,
+        "missing_upstream_metrics": 0,
+        "peak_rss_delta_kib": 6752,
+        "peak_rss_kib": 7188,
+        "phase": "off_a",
+        "proxy_ttfb_us": {
+          "median": 261.121,
+          "p95": 341.43,
+          "sample_count": 5
+        },
+        "proxy_ttft_us": {
+          "median": null,
+          "p95": null,
+          "sample_count": 0
+        },
+        "queue_observability": {
+          "context_observer_backpressure_total": 0,
+          "durable": {
+            "context_analysis_dropped_events": 0,
+            "context_analysis_event_count": 0,
+            "context_snapshot_request_ids": 0,
+            "context_snapshots": 0,
+            "context_snapshots_without_provider_request": 0,
+            "observer_backpressure_snapshots": 0,
+            "phase2_provider_requests": 7,
+            "terminal_context_request_ids": 0,
+            "terminal_context_snapshots": 0
+          },
+          "stdout_counters": {
+            "analysis_admitted_total": 0,
+            "analysis_deferred_total": 0,
+            "analysis_drop_backpressure": 0,
+            "analysis_drop_cancelled": 0,
+            "analysis_drop_correlation": 0,
+            "analysis_drop_deferred_backlog_capacity": 0,
+            "analysis_drop_malformed": 0,
+            "analysis_drop_resource_limit": 0,
+            "analysis_drop_unsupported": 0,
+            "analysis_requests_complete": 0,
+            "analysis_requests_dropped": 0,
+            "analysis_requests_partial": 0,
+            "analysis_requests_seen": 0,
+            "analysis_wait_us": 0,
+            "backlog_capacity_drops": 0,
+            "compaction_observation_dropped_total": 0,
+            "context_cancelled_total": 0,
+            "context_correlation_degraded_total": 0,
+            "context_deferred_backlog_capacity_total": 0,
+            "context_malformed_total": 0,
+            "context_observer_backpressure_total": 0,
+            "context_resource_limit_total": 0,
+            "context_unsupported_total": 0,
+            "correlation_correlated": 0,
+            "correlation_degraded_inflight_limit": 0,
+            "correlation_degraded_retired_limit": 0,
+            "correlation_degraded_total": 0,
+            "correlation_eligible": 0,
+            "correlation_missing_total": 0,
+            "deferred_high_water_bytes": 0,
+            "deferred_high_water_items": 0,
+            "deferred_queue_bytes": 0,
+            "deferred_queue_items": 0,
+            "processed_deferred_total": 0
+          }
+        },
+        "requested_samples": 5,
+        "rss_kib": {
+          "median": 6532.0,
+          "p95": 7188.0,
+          "sample_count": 180
+        }
+      },
+      "off_b": {
+        "analysis_mode": "off",
+        "burst_width": 1,
+        "dispatch_us": {
+          "median": 713.38,
+          "p95": 866.212,
+          "sample_count": 5
+        },
+        "duration_us": {
+          "median": 4321.883,
+          "p95": 4348.224,
+          "sample_count": 5
+        },
+        "errors": 0,
+        "idle_rss_kib": 440,
+        "missing_upstream_metrics": 0,
+        "peak_rss_delta_kib": 6568,
+        "peak_rss_kib": 7008,
+        "phase": "off_b",
+        "proxy_ttfb_us": {
+          "median": 266.091,
+          "p95": 359.919,
+          "sample_count": 5
+        },
+        "proxy_ttft_us": {
+          "median": null,
+          "p95": null,
+          "sample_count": 0
+        },
+        "queue_observability": {
+          "context_observer_backpressure_total": 0,
+          "durable": {
+            "context_analysis_dropped_events": 0,
+            "context_analysis_event_count": 0,
+            "context_snapshot_request_ids": 0,
+            "context_snapshots": 0,
+            "context_snapshots_without_provider_request": 0,
+            "observer_backpressure_snapshots": 0,
+            "phase2_provider_requests": 7,
+            "terminal_context_request_ids": 0,
+            "terminal_context_snapshots": 0
+          },
+          "stdout_counters": {
+            "analysis_admitted_total": 0,
+            "analysis_deferred_total": 0,
+            "analysis_drop_backpressure": 0,
+            "analysis_drop_cancelled": 0,
+            "analysis_drop_correlation": 0,
+            "analysis_drop_deferred_backlog_capacity": 0,
+            "analysis_drop_malformed": 0,
+            "analysis_drop_resource_limit": 0,
+            "analysis_drop_unsupported": 0,
+            "analysis_requests_complete": 0,
+            "analysis_requests_dropped": 0,
+            "analysis_requests_partial": 0,
+            "analysis_requests_seen": 0,
+            "analysis_wait_us": 0,
+            "backlog_capacity_drops": 0,
+            "compaction_observation_dropped_total": 0,
+            "context_cancelled_total": 0,
+            "context_correlation_degraded_total": 0,
+            "context_deferred_backlog_capacity_total": 0,
+            "context_malformed_total": 0,
+            "context_observer_backpressure_total": 0,
+            "context_resource_limit_total": 0,
+            "context_unsupported_total": 0,
+            "correlation_correlated": 0,
+            "correlation_degraded_inflight_limit": 0,
+            "correlation_degraded_retired_limit": 0,
+            "correlation_degraded_total": 0,
+            "correlation_eligible": 0,
+            "correlation_missing_total": 0,
+            "deferred_high_water_bytes": 0,
+            "deferred_high_water_items": 0,
+            "deferred_queue_bytes": 0,
+            "deferred_queue_items": 0,
+            "processed_deferred_total": 0
+          }
+        },
+        "requested_samples": 5,
+        "rss_kib": {
+          "median": 6388.0,
+          "p95": 7008.0,
+          "sample_count": 180
+        }
+      },
+      "on": {
+        "analysis_mode": "shadow",
+        "burst_width": 1,
+        "dispatch_us": {
+          "median": 556.381,
+          "p95": 777.911,
+          "sample_count": 5
+        },
+        "duration_us": {
+          "median": 4160.814,
+          "p95": 4381.613,
+          "sample_count": 5
+        },
+        "errors": 0,
+        "idle_rss_kib": 384,
+        "missing_upstream_metrics": 0,
+        "peak_rss_delta_kib": 7244,
+        "peak_rss_kib": 7628,
+        "phase": "on",
+        "proxy_ttfb_us": {
+          "median": 307.161,
+          "p95": 350.521,
+          "sample_count": 5
+        },
+        "proxy_ttft_us": {
+          "median": null,
+          "p95": null,
+          "sample_count": 0
+        },
+        "queue_observability": {
+          "context_observer_backpressure_total": 0,
+          "durable": {
+            "context_analysis_dropped_events": 0,
+            "context_analysis_event_count": 14,
+            "context_snapshot_request_ids": 7,
+            "context_snapshots": 7,
+            "context_snapshots_without_provider_request": 0,
+            "observer_backpressure_snapshots": 0,
+            "phase2_provider_requests": 7,
+            "terminal_context_request_ids": 7,
+            "terminal_context_snapshots": 7
+          },
+          "stdout_counters": {
+            "analysis_admitted_total": 7,
+            "analysis_coverage": 7,
+            "analysis_coverage_complete": 7,
+            "analysis_coverage_dropped": 0,
+            "analysis_coverage_partial": 0,
+            "analysis_deferred_total": 0,
+            "analysis_drop_backpressure": 0,
+            "analysis_drop_cancelled": 0,
+            "analysis_drop_correlation": 0,
+            "analysis_drop_deferred_backlog_capacity": 0,
+            "analysis_drop_malformed": 0,
+            "analysis_drop_resource_limit": 0,
+            "analysis_drop_unsupported": 0,
+            "analysis_requests_complete": 7,
+            "analysis_requests_dropped": 0,
+            "analysis_requests_partial": 0,
+            "analysis_requests_seen": 7,
+            "analysis_wait_us": 24,
+            "backlog_capacity_drops": 0,
+            "compaction_observation_dropped_total": 0,
+            "context_cancelled_total": 0,
+            "context_correlation_degraded_total": 0,
+            "context_deferred_backlog_capacity_total": 0,
+            "context_malformed_total": 0,
+            "context_observer_backpressure_total": 0,
+            "context_resource_limit_total": 0,
+            "context_unsupported_total": 0,
+            "correlation_correlated": 7,
+            "correlation_coverage": 7,
+            "correlation_degraded_inflight_limit": 0,
+            "correlation_degraded_retired_limit": 0,
+            "correlation_degraded_total": 0,
+            "correlation_eligible": 7,
+            "correlation_missing_total": 0,
+            "deferred_high_water_bytes": 162,
+            "deferred_high_water_items": 1,
+            "deferred_queue_bytes": 0,
+            "deferred_queue_items": 0,
+            "processed_deferred_total": 7,
+            "semantic_detection_coverage": 7,
+            "token_estimation_coverage": 7
+          }
+        },
+        "requested_samples": 5,
+        "rss_kib": {
+          "median": 6356.0,
+          "p95": 7476.0,
+          "sample_count": 180
+        }
+      }
+    }
+  }
+}

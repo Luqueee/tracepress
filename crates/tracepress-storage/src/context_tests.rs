@@ -1,9 +1,9 @@
 use rusqlite::{Connection, ErrorCode};
 use tempfile::TempDir;
 use tracepress_core::{
-    AttemptId, ContextBlockOccurrenceId, ContextSnapshotId, InferenceStatus, MaxIpcQueueItems,
-    OperationId, OperationKind, OperationStatus, RequestId, RequestMetadata, SessionId,
-    SessionState, UuidV7Generator,
+    AttemptId, CompressionCandidateId, ContextBlockOccurrenceId, ContextSnapshotId,
+    InferenceStatus, MaxIpcQueueItems, OperationId, OperationKind, OperationStatus, RequestId,
+    RequestMetadata, SessionId, SessionState, UuidV7Generator,
 };
 
 use crate::test_support::TestResult;
@@ -11,8 +11,9 @@ use crate::{
     CONTEXT_INSPECTION_MAX_BLOCKS, ContextAnalysisStatus, ContextBlockKind,
     ContextCorrelationStatus, ContextOrigin, ContextRole, Durability, EstimatedTokenComposition,
     EstimatedTokensByKind, EstimatedTokensByOrigin, EstimatedTokensByRole, LogicalContextStatus,
-    ReconciliationStatus, RecoveryReceipt, StorageConfig, StorageError, StorageWriter, WriteBatch,
-    WriteCommand, WriteReceipt,
+    ReconciliationStatus, RecoveryReceipt, ShadowCacheRisk, ShadowCandidateRecord,
+    ShadowCandidateStatus, StorageConfig, StorageError, StorageWriter, WriteBatch, WriteCommand,
+    WriteReceipt,
 };
 
 const ALL_KINDS: [ContextBlockKind; 15] = [
@@ -894,5 +895,78 @@ async fn context_inspection_returns_only_bounded_largest_blocks() -> TestResult 
     );
     assert!(serde_json::to_vec(&inspection)?.len() < 32_768);
     writer.shutdown().await?;
+    Ok(())
+}
+
+#[tokio::test]
+async fn shadow_candidate_persists_metadata_only_and_resolves_its_own_block() -> TestResult {
+    let directory = TempDir::new()?;
+    let database = directory.path().join("shadow-candidate.sqlite3");
+    let generator = UuidV7Generator::new();
+    let writer = open_writer(&database).await?;
+    let (fixture, batch) = ancestry(&generator);
+    let block_id = ContextBlockOccurrenceId::generate(&generator);
+    let _setup = writer
+        .submit_batch(batch.and(unknown_block(block_id, fixture.snapshot, 7)))
+        .await?;
+    let _experiment = writer
+        .submit(WriteCommand::ShadowCompressionExperiment {
+            experiment_id: "shadow-test-001".to_owned(),
+            compressor_set_json: r#"[{"id":"json.minify","version":"1"}]"#.to_owned(),
+            runtime_sha: Some("0123456789abcdef".to_owned()),
+            limits_json: r#"{"max_candidate_input_bytes":4096}"#.to_owned(),
+            status: "running".to_owned(),
+            started_at: "2026-09-13T00:00:00Z".to_owned(),
+            completed_at: None,
+        })
+        .await?;
+    let fingerprint = vec![17_u8; 32].into_boxed_slice();
+    let candidate_id = CompressionCandidateId::generate(&generator);
+    let _candidate = writer
+        .submit(WriteCommand::ShadowCompressionCandidate {
+            candidate: ShadowCandidateRecord {
+                candidate_id,
+                experiment_id: "shadow-test-001".to_owned(),
+                snapshot_id: fixture.snapshot,
+                block_ordinal: 7,
+                compressor_id: "json.minify".to_owned(),
+                compressor_version: "1".to_owned(),
+                status: ShadowCandidateStatus::Applicable,
+                input_bytes: 3_968,
+                output_bytes: Some(1_984),
+                bytes_delta: Some(1_984),
+                input_estimated_tokens: None,
+                output_estimated_tokens: None,
+                estimated_token_delta: None,
+                processing_us: 30,
+                reversible: true,
+                recovery_verified: true,
+                deterministic: true,
+                original_fingerprint: fingerprint.clone(),
+                candidate_fingerprint: Some(vec![23_u8; 32].into_boxed_slice()),
+                recovered_fingerprint: Some(fingerprint),
+                first_modified_offset: Some(4),
+                preserved_prefix_bytes: Some(4),
+                preserved_prefix_ratio_basis_points: Some(10),
+                cache_risk: ShadowCacheRisk::High,
+                verified_at_us: Some(1_757_721_600_000_000),
+            },
+        })
+        .await?;
+    writer.shutdown().await?;
+
+    let connection = Connection::open(database)?;
+    let persisted_block: String = connection.query_row(
+        "SELECT block_occurrence_id FROM compression_candidates WHERE candidate_id = ?1",
+        [candidate_id.to_string()],
+        |row| row.get(0),
+    )?;
+    assert_eq!(persisted_block, block_id.to_string());
+    let content_columns: i64 = connection.query_row(
+        "SELECT COUNT(*) FROM pragma_table_info('compression_candidates') WHERE lower(name) LIKE '%content%' OR lower(name) LIKE '%payload%' OR lower(name) LIKE '%body%'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(content_columns, 0);
     Ok(())
 }

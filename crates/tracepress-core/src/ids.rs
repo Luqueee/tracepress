@@ -227,4 +227,5 @@ define_uuid_v7_ids!(
     EventId => "An append-only domain event identity.",
     ContextSnapshotId => "A shadow context analysis snapshot identity.",
     ContextBlockOccurrenceId => "An observed context block occurrence identity.",
+    CompressionCandidateId => "A shadow compression candidate identity.",
 );

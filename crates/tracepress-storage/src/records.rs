@@ -9,7 +9,7 @@ use rusqlite::{Connection, Transaction, TransactionBehavior, params};
 
 use crate::{
     ContextAnalysisStatus, ContextBlockKind, ContextOrigin, ContextRole, RecoveryReceipt,
-    StorageError, WriteBatch, WriteCommand, WriteReceipt,
+    ShadowCacheRisk, ShadowCandidateStatus, StorageError, WriteBatch, WriteCommand, WriteReceipt,
     encode::{
         analysis_decode_status_text, causal_relationship, content_encoding_text, content_kind,
         content_role, context_analysis_status_text, context_block_kind_text,
@@ -182,6 +182,95 @@ fn insert(
     command: &WriteCommand,
 ) -> Result<WriteReceipt, StorageError> {
     match command {
+        WriteCommand::ShadowCompressionExperiment {
+            experiment_id,
+            compressor_set_json,
+            runtime_sha,
+            limits_json,
+            status,
+            started_at,
+            completed_at,
+        } => committed(sqlite(transaction.execute(
+            "INSERT INTO compression_experiments(experiment_id, compressor_set_json, runtime_sha, limits_json, status, started_at, completed_at) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7) ON CONFLICT(experiment_id) DO UPDATE SET status = excluded.status, completed_at = excluded.completed_at",
+            params![experiment_id, compressor_set_json, runtime_sha, limits_json, status, started_at, completed_at],
+        ))?),
+        WriteCommand::ShadowCompressionCandidate { candidate } => {
+            let inserted = sqlite(transaction.execute(
+                "INSERT INTO compression_candidates(candidate_id, experiment_id, snapshot_id, block_occurrence_id, compressor_id, compressor_version, status, original_fingerprint, candidate_fingerprint, first_modified_offset, preserved_prefix_bytes, cache_risk) SELECT ?1, ?2, ?3, block_occurrence_id, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12 FROM context_block_occurrences WHERE snapshot_id = ?3 AND ordinal = ?4",
+                params![
+                    candidate.candidate_id.to_string(),
+                    candidate.experiment_id,
+                    candidate.snapshot_id.to_string(),
+                    sqlite_u64(candidate.block_ordinal, "shadow_block_ordinal")?,
+                    candidate.compressor_id,
+                    candidate.compressor_version,
+                    shadow_candidate_status_text(candidate.status),
+                    candidate.original_fingerprint.as_ref(),
+                    candidate.candidate_fingerprint.as_deref(),
+                    sqlite_optional(candidate.first_modified_offset, "first_modified_offset")?,
+                    sqlite_optional(candidate.preserved_prefix_bytes, "preserved_prefix_bytes")?,
+                    shadow_cache_risk_text(candidate.cache_risk),
+                ],
+            ))?;
+            if inserted != 1 {
+                return Err(StorageError::InvalidShadowAssociation {
+                    message: "snapshot and block ordinal did not resolve",
+                });
+            }
+            let _metrics = sqlite(transaction.execute(
+                "INSERT INTO compression_candidate_metrics(candidate_id, input_bytes, output_bytes, bytes_delta, input_estimated_tokens, output_estimated_tokens, estimated_token_delta, processing_us, reversible, recovery_verified, deterministic, preserved_prefix_ratio_basis_points) VALUES (?1, ?2, ?3, ?4, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12)",
+                params![
+                    candidate.candidate_id.to_string(),
+                    sqlite_u64(candidate.input_bytes, "candidate_input_bytes")?,
+                    sqlite_optional(candidate.output_bytes, "candidate_output_bytes")?,
+                    sqlite_optional(candidate.bytes_delta, "candidate_bytes_delta")?,
+                    sqlite_optional(candidate.input_estimated_tokens, "candidate_input_estimated_tokens")?,
+                    sqlite_optional(candidate.output_estimated_tokens, "candidate_output_estimated_tokens")?,
+                    sqlite_optional(candidate.estimated_token_delta, "candidate_estimated_token_delta")?,
+                    sqlite_u64(candidate.processing_us, "candidate_processing_us")?,
+                    candidate.reversible,
+                    candidate.recovery_verified,
+                    candidate.deterministic,
+                    candidate.preserved_prefix_ratio_basis_points.map(i64::from),
+                ],
+            ))?;
+            let _recovery = sqlite(transaction.execute(
+                "INSERT INTO compression_recoveries(candidate_id, verified, recovered_fingerprint, verified_at_us) VALUES (?1, ?2, ?3, ?4)",
+                params![
+                    candidate.candidate_id.to_string(),
+                    candidate.recovery_verified,
+                    candidate.recovered_fingerprint.as_deref(),
+                    sqlite_optional(candidate.verified_at_us, "candidate_verified_at_us")?,
+                ],
+            ))?;
+            committed(3)
+        }
+        WriteCommand::ShadowCompressionExperimentCounters {
+            experiment_id,
+            forwarding_mutations,
+            shadow_drops,
+            shadow_queue_full_drops,
+            shadow_byte_budget_drops,
+            shadow_work_budget_drops,
+            shadow_worker_closed_drops,
+            shadow_persistence_drops,
+            recovery_failures,
+            determinism_failures,
+        } => committed(sqlite(transaction.execute(
+            "UPDATE compression_experiments SET forwarding_mutations = forwarding_mutations + ?2, shadow_drops = shadow_drops + ?3, shadow_queue_full_drops = shadow_queue_full_drops + ?4, shadow_byte_budget_drops = shadow_byte_budget_drops + ?5, shadow_work_budget_drops = shadow_work_budget_drops + ?6, shadow_worker_closed_drops = shadow_worker_closed_drops + ?7, shadow_persistence_drops = shadow_persistence_drops + ?8, recovery_failures = recovery_failures + ?9, determinism_failures = determinism_failures + ?10 WHERE experiment_id = ?1",
+            params![
+                experiment_id,
+                sqlite_u64(*forwarding_mutations, "forwarding_mutations")?,
+                sqlite_u64(*shadow_drops, "shadow_drops")?,
+                sqlite_u64(*shadow_queue_full_drops, "shadow_queue_full_drops")?,
+                sqlite_u64(*shadow_byte_budget_drops, "shadow_byte_budget_drops")?,
+                sqlite_u64(*shadow_work_budget_drops, "shadow_work_budget_drops")?,
+                sqlite_u64(*shadow_worker_closed_drops, "shadow_worker_closed_drops")?,
+                sqlite_u64(*shadow_persistence_drops, "shadow_persistence_drops")?,
+                sqlite_u64(*recovery_failures, "recovery_failures")?,
+                sqlite_u64(*determinism_failures, "determinism_failures")?,
+            ],
+        ))?),
         WriteCommand::Session {
             session_id,
             started_at,
@@ -793,4 +882,25 @@ fn committed(rows_changed: usize) -> Result<WriteReceipt, StorageError> {
             value: u64::MAX,
         })?;
     Ok(WriteReceipt::Committed { rows_changed })
+}
+
+const fn shadow_candidate_status_text(status: ShadowCandidateStatus) -> &'static str {
+    match status {
+        ShadowCandidateStatus::Applicable => "applicable",
+        ShadowCandidateStatus::NotApplicable => "not_applicable",
+        ShadowCandidateStatus::NoImprovement => "no_improvement",
+        ShadowCandidateStatus::ResourceLimit => "resource_limit",
+        ShadowCandidateStatus::InvalidInput => "invalid_input",
+        ShadowCandidateStatus::RecoveryFailed => "recovery_failed",
+        ShadowCandidateStatus::InternalError => "internal_error",
+    }
+}
+
+const fn shadow_cache_risk_text(risk: ShadowCacheRisk) -> &'static str {
+    match risk {
+        ShadowCacheRisk::Low => "low",
+        ShadowCacheRisk::Medium => "medium",
+        ShadowCacheRisk::High => "high",
+        ShadowCacheRisk::Unknown => "unknown",
+    }
 }

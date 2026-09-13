@@ -1,0 +1,223 @@
+{
+  "report_id": "TRACEPRESS_SHADOW_COMPRESSION_001",
+  "status": "shadow_pilot_completed_degraded_remaining_gates_pending",
+  "phase_4_0_base": {
+    "commit": "93ffe0c9c32a0f9a78027c6159e70236b2e6a598",
+    "tag": "phase-4.0-complete"
+  },
+  "invariants": {
+    "active_request_rewriting": false,
+    "forwarding_mutations": 0,
+    "unknown_transform_policy": "never",
+    "candidate_content_persisted": false
+  },
+  "candidate_definitions": [
+    { "id": "json.noop", "version": 1, "target": "ToolGenerated/ToolResult/Json", "control": true },
+    { "id": "json.minify", "version": 1, "target": "ToolGenerated/ToolResult/Json", "control": false },
+    { "id": "json.tabular", "version": 1, "target": "homogeneous ToolGenerated/ToolResult/Json array<object>", "control": false },
+    { "id": "json.repeated_subtree", "version": 1, "target": "ToolGenerated/ToolResult/Json with exact repeated subtrees", "control": false },
+    { "id": "text.noop", "version": 1, "target": "ToolGenerated/ToolResult/PlainText", "control": true },
+    { "id": "text.repeated_line", "version": 1, "target": "ToolGenerated/ToolResult/PlainText with consecutive repeated lines", "control": false },
+    { "id": "text.repeated_run", "version": 1, "target": "ToolGenerated/ToolResult/PlainText with bounded repeated runs", "control": false }
+  ],
+  "controlled_e2e_validation": {
+    "experiment_id": "shadow-e2e-final",
+    "sessions": 1,
+    "blocks": 1,
+    "workload": "synthetic homogeneous JSON ToolResult",
+    "original_forwarded_bytes": 327,
+    "forwarding_mutations": 0,
+    "shadow_drops": 0,
+    "recovery_failures": 0,
+    "determinism_failures": 0,
+    "candidates": [
+      { "id": "json.noop", "status": "no_improvement", "input_bytes": 190, "output_bytes": 190, "byte_reduction": 0, "recovery_verified": true },
+      { "id": "json.minify", "status": "applicable", "input_bytes": 190, "output_bytes": 75, "byte_reduction": 115, "recovery_verified": true },
+      { "id": "json.tabular", "status": "applicable", "input_bytes": 190, "output_bytes": 63, "byte_reduction": 127, "recovery_verified": true },
+      { "id": "json.repeated_subtree", "status": "not_applicable", "input_bytes": 190, "output_bytes": null, "byte_reduction": null, "recovery_verified": false }
+    ]
+  },
+  "shadow_pilot_n10": {
+    "experiment_id": "shadow-pilot-001",
+    "status": "completed_degraded",
+    "valid_sessions": 10,
+    "excluded_attempts": 2,
+    "provider_requests": 75,
+    "complete_snapshots": 75,
+    "candidate_evaluations": 1666,
+    "forwarding_mutations": 0,
+    "shadow_drops": 15,
+    "recovery_failures": 0,
+    "determinism_failures": 0,
+    "unknown_transformed": 0,
+    "candidate_results": [
+      {
+        "id": "json.minify",
+        "eligible_blocks": 424,
+        "applicable_blocks": 0,
+        "status": "no_improvement",
+        "p95_processing_us": 5201.75
+      },
+      {
+        "id": "json.repeated_subtree",
+        "eligible_blocks": 409,
+        "applicable_blocks": 0,
+        "status": "not_applicable",
+        "p95_processing_us": 5202.6
+      },
+      {
+        "id": "json.tabular",
+        "eligible_blocks": 409,
+        "applicable_blocks": 179,
+        "applicability_ratio": 0.43765281173594134,
+        "effective_byte_reduction": 7299,
+        "effective_byte_reduction_ratio": 0.0012451800239619106,
+        "estimated_token_reduction": 3864,
+        "estimated_token_reduction_ratio": 0.0017545954826431727,
+        "unique_fingerprint_byte_reduction": 332,
+        "p95_processing_us": 5676.4,
+        "recovery_success_rate": 1.0,
+        "determinism_success_rate": 1.0,
+        "applicable_workloads": ["repo_exploration"]
+      }
+    ],
+    "result_artifacts": {
+      "manifest": "experiment_manifest.json",
+      "json": "shadow_pilot_n10.json",
+      "markdown": "shadow_pilot_n10.md"
+    }
+  },
+  "post_hardening_confirmation_smoke": {
+    "experiment_id": "shadow-post-hardening-smoke",
+    "upstream": "deterministic local HTTP/1.1 socket server",
+    "forwarding_mutations": 0,
+    "shadow_drops": 0,
+    "reason_counters_sum_to_total": true,
+    "candidate_metadata_persisted": true,
+    "recovery_failures": 0,
+    "request_bytes_verified_equal": true
+  },
+  "aa_infrastructure_smoke": {
+    "experiment_id": "shadow-aa-post-hardening",
+    "arms": ["shadow_off", "shadow_on_no_request_mutation"],
+    "provider_observation_tuple_equal": true,
+    "forwarding_mutations": 0,
+    "recovery_failures": 0,
+    "determinism_failures": 0,
+    "shadow_drops": 0
+  },
+  "compaction_calibration": {
+    "artifact": "compaction_calibration.json",
+    "status": "completed_controlled_cohort",
+    "sessions": 5,
+    "requests": 15,
+    "sequence": ["normal_turn", "manual_compact", "post_compaction_turn"],
+    "compaction_requests": 5,
+    "complete_context_snapshots": 15,
+    "tool_result_candidate_observations": true,
+    "forwarding_mutations": 0,
+    "candidate_content_persisted": false
+  },
+  "phase3_context_aa_smoke": {
+    "artifact": "phase3_aa_smoke.json",
+    "status": "completed_reference_only",
+    "workload": "small_json",
+    "samples_per_arm": 1,
+    "errors": 0,
+    "shadow_context_analysis_off": {
+      "dispatch_median_us": 9824.149,
+      "proxy_ttfb_median_us": 458.291,
+      "idle_rss_kib": 452,
+      "peak_rss_kib": 6856
+    },
+    "shadow_context_analysis_on": {
+      "dispatch_median_us": 9768.738,
+      "proxy_ttfb_median_us": 240.791,
+      "idle_rss_kib": 440,
+      "peak_rss_kib": 7028
+    },
+    "note": "This measures Phase 3 context analysis, not Shadow Compression; it is not the Phase 4.1 resource gate."
+  },
+  "shadow_compression_resource_smoke": {
+    "artifact": "shadow_compression_resource_smoke.json",
+    "status": "completed_partial_resource_smoke",
+    "workload": "tool_result_json",
+    "samples_per_arm": 2,
+    "warmup_per_arm": 1,
+    "errors": 0,
+    "on_minus_off": {
+      "dispatch_median_us": -218.154,
+      "proxy_ttfb_median_us": -162.76,
+      "duration_median_us": -416.089,
+      "idle_rss_kib": -12,
+      "peak_rss_kib": 396
+    },
+    "forwarding_mutations": 0,
+    "note": "CPU was not measured and this small sample is not a final performance gate."
+  },
+  "shadow_compression_resource_aa_n5_cpu": {
+    "artifact": "shadow_compression_resource_aa_n5_cpu.json",
+    "status": "completed_observational_resource_comparison",
+    "workload": "tool_result_json",
+    "samples_per_arm": 5,
+    "warmup_per_arm": 2,
+    "errors": 0,
+    "on_minus_off": {
+      "dispatch_median_us": 38.03,
+      "proxy_ttfb_median_us": -31.84,
+      "duration_median_us": 23.15,
+      "idle_rss_kib": 4,
+      "peak_rss_kib": 384,
+      "children_total_cpu_delta_us": 13953.0,
+      "children_user_cpu_delta_us": 26284.0,
+      "children_system_cpu_delta_us": -12331.0
+    },
+    "forwarding_mutations": 0,
+    "operational_decision": "acceptable: ON-OFF timing confidence intervals cross zero or remain within measured A/A noise",
+    "note": "Child CPU is an observational per-arm delta including bounded process startup and teardown; it is not a host-wide CPU SLO or provider-impact claim."
+  },
+  "security_review": {
+    "scan_id": "505e56ef-05c4-48f0-ac68-43fd92a5cfdf",
+    "finding": "repeated-subtree retained-byte accounting",
+    "severity": "low",
+    "status": "remediated_in_working_tree",
+    "remediation": "retained encodings are charged before insertion; recovery inputs and allocation lengths are bounded before parsing or reserve",
+    "post_pilot_findings": [
+      {
+        "finding": "candidate input could exceed max_shadow_memory_bytes before JSON parsing",
+        "status": "remediated_with_regression_test"
+      },
+      {
+        "finding": "the tenth recovery varint byte accepted payload bits above the single valid high bit",
+        "status": "remediated_with_regression_test"
+      },
+      {
+        "finding": "plain-text recovery varints lacked the same tenth-byte overflow guard",
+        "status": "remediated_with_regression_test"
+      }
+    ],
+    "final_gate": "passed_post_hardening_confirmation_smoke"
+  },
+  "quality_gates": {
+    "unit_integration_and_builds": "passed",
+    "controlled_end_to_end": "passed",
+    "shadow_pilot_n10": "completed_degraded",
+    "compaction_calibration": "completed_controlled_cohort",
+    "aa_infrastructure": "completed_smoke",
+    "host_rss_cpu_comparison": "completed_observational",
+    "naturalistic_workload_distributions": "completed",
+    "reason_specific_shadow_drop_accounting": "completed",
+    "post_hardening_confirmation_smoke": "completed"
+  },
+  "limitations": [
+    "The N10 pilot characterizes this workload mix but is too small and workload-concentrated to establish stable reduction distributions.",
+    "The 15 shadow drops cannot yet be attributed to queue, byte budget, work budget, worker closure, or persistence failure.",
+    "The five-sample resource A/A records a 384 KiB peak RSS and 13.95 ms child-CPU ON-minus-OFF delta for the synthetic ToolResult JSON workload; CPU includes process lifecycle overhead and needs a larger cohort before interpretation.",
+    "No safe candidate demonstrated material local reduction in the pilot; json.tabular reduced effective bytes by 0.12 percent and only in repo_exploration.",
+    "Local candidate reduction is not provider token savings, cost savings, cache preservation, or evidence that quality is preserved.",
+    "Provider A/B and active request rewriting remain out of scope for Phase 4.1."
+  ],
+  "recommended_active_candidate": null,
+  "recommendation_status": "blocked_no_material_candidate_and_remaining_empirical_gates",
+  "phase_4_2": "blocked"
+}

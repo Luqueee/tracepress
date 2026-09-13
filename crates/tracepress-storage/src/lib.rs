@@ -28,8 +28,9 @@ pub use models::{
     ContextSnapshotStatus, DetectedContentKind, EstimateConfidence, EstimatedTokenComposition,
     EstimatedTokensByKind, EstimatedTokensByOrigin, EstimatedTokensByRole, FidelityClass,
     LogicalContextStatus, ObservationStatus, OpportunitySignal, ProviderKind, ProviderProtocol,
-    ProviderResponseState, ProviderTransport, ReconciliationStatus, RecoveryReceipt, WriteBatch,
-    WriteCommand, WriteReceipt,
+    ProviderResponseState, ProviderTransport, ReconciliationStatus, RecoveryReceipt,
+    ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus, WriteBatch, WriteCommand,
+    WriteReceipt,
 };
 
 /// Bounded key used by the daemon's lifecycle reconciliation read.

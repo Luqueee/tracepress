@@ -1,0 +1,19 @@
+{
+  "report_id": "TRACEPRESS_SHADOW_COMPACTION_CALIBRATION_001",
+  "status": "completed_controlled_cohort",
+  "cohort_kind": "synthetic_local_upstream",
+  "sessions": 5,
+  "requests_per_session": 3,
+  "provider_requests": 15,
+  "sequence": ["normal_turn", "manual_compact", "post_compaction_turn"],
+  "compaction_requests": 5,
+  "complete_context_snapshots": 15,
+  "tool_result_candidate_observations": true,
+  "candidate_content_persisted": false,
+  "forwarding_mutations": 0,
+  "limitations": [
+    "This is a controlled calibration cohort, not naturalistic workload evidence.",
+    "It validates lifecycle, block survival, and shadow admission around compaction; it does not establish provider cache or quality impact."
+  ],
+  "test": "compaction_calibration_cohort_preserves_tool_results_and_candidates"
+}

@@ -2,10 +2,12 @@ use std::{path::PathBuf, sync::Arc, time::Duration};
 
 use rusqlite::{Connection, OpenFlags, OptionalExtension, params};
 use tracepress_dashboard_types::{
-    ContextBlockSummary, ContextCategoryStats, ContextComposition, ContextExplorer,
-    ContextGrowthPoint, ContextMatrixCell, MeasurementQuality, Metric, MetricSource, Overview,
-    Page, Percentiles, ProviderRequestSummary, RepetitionSummary, SessionContext, SessionDetail,
-    SessionSummary, UnknownSummary, UsageSummary,
+    CompressionCandidateSummary, CompressionExperimentDetail, CompressionExperimentSummary,
+    CompressionHistogramBucket, CompressionQuality, CompressorSummary, ContextBlockSummary,
+    ContextCategoryStats, ContextComposition, ContextExplorer, ContextGrowthPoint,
+    ContextMatrixCell, MeasurementQuality, Metric, MetricSource, Overview, Page, Percentiles,
+    ProviderRequestSummary, RepetitionSummary, SessionContext, SessionDetail, SessionSummary,
+    UnknownSummary, UsageSummary,
 };
 
 use crate::{ApiFailure, SessionsQuery, SessionsSort};
@@ -742,6 +744,374 @@ pub(crate) fn unknown(connection: &Connection) -> Result<UnknownSummary, rusqlit
         },
         persistence: finite(persistence),
     })
+}
+
+pub(crate) fn compression_experiments(
+    connection: &Connection,
+) -> Result<Vec<CompressionExperimentSummary>, rusqlite::Error> {
+    if !table_exists(connection, "compression_experiments")? {
+        return Ok(Vec::new());
+    }
+    let mut statement = connection.prepare(
+        "SELECT e.experiment_id, e.status, e.runtime_sha, e.started_at, e.completed_at,
+                e.forwarding_mutations, e.shadow_drops, e.shadow_queue_full_drops,
+                e.shadow_byte_budget_drops, e.shadow_work_budget_drops,
+                e.shadow_worker_closed_drops, e.shadow_persistence_drops,
+                e.recovery_failures, e.determinism_failures,
+                COUNT(c.candidate_id), COUNT(DISTINCT c.block_occurrence_id), COUNT(DISTINCT s.session_id)
+         FROM compression_experiments e
+         LEFT JOIN compression_candidates c ON c.experiment_id = e.experiment_id
+         LEFT JOIN context_snapshots cs ON cs.snapshot_id = c.snapshot_id
+         LEFT JOIN sessions s ON s.session_id = cs.session_id
+         GROUP BY e.experiment_id
+         ORDER BY e.started_at DESC, e.experiment_id DESC",
+    )?;
+    statement
+        .query_map([], |row| {
+            Ok(CompressionExperimentSummary {
+                id: row.get(0)?,
+                status: row.get(1)?,
+                runtime_sha: row.get(2)?,
+                started_at: row.get(3)?,
+                completed_at: row.get(4)?,
+                quality: CompressionQuality {
+                    forwarding_mutations: nonnegative(row.get(5)?),
+                    shadow_drops: nonnegative(row.get(6)?),
+                    shadow_queue_full_drops: nonnegative(row.get(7)?),
+                    shadow_byte_budget_drops: nonnegative(row.get(8)?),
+                    shadow_work_budget_drops: nonnegative(row.get(9)?),
+                    shadow_worker_closed_drops: nonnegative(row.get(10)?),
+                    shadow_persistence_drops: nonnegative(row.get(11)?),
+                    recovery_failures: nonnegative(row.get(12)?),
+                    determinism_failures: nonnegative(row.get(13)?),
+                },
+                candidate_count: nonnegative(row.get(14)?),
+                block_count: nonnegative(row.get(15)?),
+                session_count: nonnegative(row.get(16)?),
+            })
+        })?
+        .collect()
+}
+
+pub(crate) fn compression_experiment(
+    connection: &Connection,
+    experiment_id: &str,
+) -> Result<Option<CompressionExperimentDetail>, rusqlite::Error> {
+    let Some(summary) = compression_experiments(connection)?
+        .into_iter()
+        .find(|experiment| experiment.id == experiment_id)
+    else {
+        return Ok(None);
+    };
+    let (compressor_set_json, limits_json) = connection.query_row(
+        "SELECT compressor_set_json, limits_json FROM compression_experiments WHERE experiment_id = ?1",
+        [experiment_id],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    let compressors = compressor_summaries(connection, experiment_id)?;
+    Ok(Some(CompressionExperimentDetail {
+        summary,
+        compressor_set_json,
+        limits_json,
+        compressors,
+        reduction_histogram: compression_histogram(connection, experiment_id, false)?,
+        latency_histogram: compression_histogram(connection, experiment_id, true)?,
+        workload_distribution_available: false,
+    }))
+}
+
+fn compressor_summaries(
+    connection: &Connection,
+    experiment_id: &str,
+) -> Result<Vec<CompressorSummary>, rusqlite::Error> {
+    let mut statement = connection.prepare(
+        "SELECT c.compressor_id, c.compressor_version, COUNT(*),
+                SUM(c.status = 'applicable'),
+                SUM(CASE WHEN c.status = 'applicable' THEN m.input_bytes END),
+                SUM(CASE WHEN c.status = 'applicable' THEN m.output_bytes END),
+                SUM(CASE WHEN c.status = 'applicable' THEN m.bytes_delta END),
+                SUM(CASE WHEN c.status = 'applicable' THEN m.input_estimated_tokens END),
+                SUM(CASE WHEN c.status = 'applicable' THEN m.output_estimated_tokens END),
+                SUM(CASE WHEN c.status = 'applicable' THEN m.estimated_token_delta END),
+                SUM(CASE WHEN m.reversible = 1 AND m.output_bytes IS NOT NULL
+                         THEN m.recovery_verified END),
+                SUM(m.reversible = 1 AND m.output_bytes IS NOT NULL),
+                SUM(CASE WHEN m.output_bytes IS NOT NULL THEN m.deterministic END),
+                SUM(m.output_bytes IS NOT NULL),
+                SUM(c.cache_risk = 'low'), SUM(c.cache_risk = 'medium'),
+                SUM(c.cache_risk = 'high'), SUM(c.cache_risk = 'unknown')
+         FROM compression_candidates c
+         JOIN compression_candidate_metrics m ON m.candidate_id = c.candidate_id
+         WHERE c.experiment_id = ?1
+         GROUP BY c.compressor_id, c.compressor_version
+         ORDER BY c.compressor_id",
+    )?;
+    let rows = statement.query_map([experiment_id], |row| {
+        let eligible = nonnegative(row.get(2)?);
+        let applicable = nonnegative(row.get(3)?);
+        let input_bytes = row.get::<_, Option<i64>>(4)?.and_then(to_u64);
+        let output_bytes = row.get::<_, Option<i64>>(5)?.and_then(to_u64);
+        let byte_reduction = row.get::<_, Option<i64>>(6)?.and_then(to_u64);
+        let estimated_input_tokens = row.get::<_, Option<i64>>(7)?.and_then(to_u64);
+        let estimated_output_tokens = row.get::<_, Option<i64>>(8)?.and_then(to_u64);
+        let estimated_reduction = row.get::<_, Option<i64>>(9)?.and_then(to_u64);
+        Ok((
+            CompressorSummary {
+                compressor: row.get(0)?,
+                version: row.get(1)?,
+                eligible_blocks: eligible,
+                applicable_blocks: applicable,
+                applicability_basis_points: ratio_basis_points(applicable, eligible),
+                input_bytes,
+                output_bytes,
+                byte_reduction,
+                candidate_effective_byte_reduction: byte_reduction,
+                unique_candidate_byte_reduction: None,
+                byte_reduction_basis_points: input_bytes
+                    .zip(byte_reduction)
+                    .and_then(|(total, reduction)| ratio_basis_points(reduction, total)),
+                estimated_input_tokens,
+                estimated_output_tokens,
+                estimated_reduction,
+                candidate_effective_estimated_token_reduction: estimated_reduction,
+                unique_candidate_estimated_token_reduction: None,
+                estimated_reduction_basis_points: estimated_input_tokens
+                    .zip(estimated_reduction)
+                    .and_then(|(total, reduction)| ratio_basis_points(reduction, total)),
+                recovery_basis_points: ratio_basis_points(
+                    nonnegative(row.get::<_, Option<i64>>(10)?.unwrap_or(0)),
+                    nonnegative(row.get(11)?),
+                ),
+                deterministic_basis_points: ratio_basis_points(
+                    nonnegative(row.get::<_, Option<i64>>(12)?.unwrap_or(0)),
+                    nonnegative(row.get(13)?),
+                ),
+                processing_p50_us: None,
+                processing_p90_us: None,
+                processing_p95_us: None,
+                processing_p99_us: None,
+                cache_risk_low: nonnegative(row.get(14)?),
+                cache_risk_medium: nonnegative(row.get(15)?),
+                cache_risk_high: nonnegative(row.get(16)?),
+                cache_risk_unknown: nonnegative(row.get(17)?),
+            },
+            eligible,
+        ))
+    })?;
+    let mut summaries = Vec::new();
+    for row in rows {
+        let (mut summary, count) = row?;
+        summary.processing_p50_us =
+            compressor_percentile(connection, experiment_id, &summary.compressor, count, 50)?;
+        summary.processing_p90_us =
+            compressor_percentile(connection, experiment_id, &summary.compressor, count, 90)?;
+        summary.processing_p95_us =
+            compressor_percentile(connection, experiment_id, &summary.compressor, count, 95)?;
+        summary.processing_p99_us =
+            compressor_percentile(connection, experiment_id, &summary.compressor, count, 99)?;
+        let (unique_bytes, unique_tokens) =
+            unique_candidate_reductions(connection, experiment_id, &summary.compressor)?;
+        summary.unique_candidate_byte_reduction = unique_bytes;
+        summary.unique_candidate_estimated_token_reduction = unique_tokens;
+        summaries.push(summary);
+    }
+    Ok(summaries)
+}
+
+fn unique_candidate_reductions(
+    connection: &Connection,
+    experiment_id: &str,
+    compressor: &str,
+) -> Result<(Option<u64>, Option<u64>), rusqlite::Error> {
+    connection.query_row(
+        "SELECT SUM(bytes_delta), SUM(estimated_token_delta)
+         FROM (
+             SELECT c.original_fingerprint,
+                    MAX(m.bytes_delta) AS bytes_delta,
+                    MAX(m.estimated_token_delta) AS estimated_token_delta
+             FROM compression_candidates c
+             JOIN compression_candidate_metrics m ON m.candidate_id = c.candidate_id
+             WHERE c.experiment_id = ?1 AND c.compressor_id = ?2
+               AND c.status = 'applicable'
+             GROUP BY c.original_fingerprint
+         )",
+        params![experiment_id, compressor],
+        |row| {
+            Ok((
+                row.get::<_, Option<i64>>(0)?.and_then(to_u64),
+                row.get::<_, Option<i64>>(1)?.and_then(to_u64),
+            ))
+        },
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "bounded percentile query keeps scope explicit"
+)]
+fn compressor_percentile(
+    connection: &Connection,
+    experiment_id: &str,
+    compressor: &str,
+    count: u64,
+    percentile: u64,
+) -> Result<Option<u64>, rusqlite::Error> {
+    if count == 0 {
+        return Ok(None);
+    }
+    let offset = count.saturating_sub(1).saturating_mul(percentile) / 100;
+    connection
+        .query_row(
+            "SELECT m.processing_us FROM compression_candidates c JOIN compression_candidate_metrics m ON m.candidate_id = c.candidate_id WHERE c.experiment_id = ?1 AND c.compressor_id = ?2 ORDER BY m.processing_us LIMIT 1 OFFSET ?3",
+            params![experiment_id, compressor, i64::try_from(offset).unwrap_or(i64::MAX)],
+            |row| row.get::<_, i64>(0),
+        )
+        .optional()
+        .map(|value| value.and_then(to_u64))
+}
+
+fn compression_histogram(
+    connection: &Connection,
+    experiment_id: &str,
+    latency: bool,
+) -> Result<Vec<CompressionHistogramBucket>, rusqlite::Error> {
+    let buckets: &[(&str, u64, Option<u64>)] = if latency {
+        &[
+            ("<100 us", 0, Some(100)),
+            ("100-499 us", 100, Some(500)),
+            ("500-999 us", 500, Some(1_000)),
+            ("1-5 ms", 1_000, Some(5_000)),
+            (">=5 ms", 5_000, None),
+        ]
+    } else {
+        &[
+            ("0-4%", 0, Some(500)),
+            ("5-14%", 500, Some(1_500)),
+            ("15-29%", 1_500, Some(3_000)),
+            ("30-49%", 3_000, Some(5_000)),
+            (">=50%", 5_000, None),
+        ]
+    };
+    let mut result = Vec::new();
+    for (label, lower, upper) in buckets {
+        let (expression, status_filter) = if latency {
+            ("m.processing_us", "")
+        } else {
+            (
+                "CASE WHEN m.input_bytes > 0 THEN m.bytes_delta * 10000 / m.input_bytes END",
+                "AND c.status = 'applicable'",
+            )
+        };
+        let upper_filter =
+            upper.map_or_else(String::new, |value| format!("AND {expression} < {value}"));
+        let sql = format!(
+            "SELECT COUNT(*) FROM compression_candidates c JOIN compression_candidate_metrics m ON m.candidate_id = c.candidate_id WHERE c.experiment_id = ?1 {status_filter} AND {expression} >= ?2 {upper_filter}"
+        );
+        let count = connection.query_row(
+            &sql,
+            params![experiment_id, i64::try_from(*lower).unwrap_or(i64::MAX)],
+            |row| row.get::<_, i64>(0),
+        )?;
+        result.push(CompressionHistogramBucket {
+            label: (*label).to_owned(),
+            lower_inclusive: *lower,
+            upper_exclusive: *upper,
+            count: nonnegative(count),
+        });
+    }
+    Ok(result)
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "bounded page query keeps experiment scope explicit"
+)]
+pub(crate) fn compression_candidates(
+    connection: &Connection,
+    experiment_id: &str,
+    limit: u32,
+    offset: u64,
+) -> Result<Page<CompressionCandidateSummary>, rusqlite::Error> {
+    let mut statement = connection.prepare(
+        "SELECT c.candidate_id, c.experiment_id, c.snapshot_id, b.ordinal, b.kind, b.origin,
+                b.detected_kind, c.compressor_id, c.compressor_version, c.status,
+                m.input_bytes, m.output_bytes, m.bytes_delta, m.input_estimated_tokens,
+                m.output_estimated_tokens, m.estimated_token_delta, m.recovery_verified,
+                m.deterministic, m.processing_us, c.preserved_prefix_bytes,
+                m.preserved_prefix_ratio_basis_points, c.cache_risk,
+                CASE WHEN b.exact_fingerprint IS NULL THEN NULL ELSE
+                    (SELECT COUNT(*) > 1 FROM context_block_occurrences bx WHERE bx.exact_fingerprint = b.exact_fingerprint) END,
+                CASE WHEN b.exact_fingerprint IS NULL THEN NULL ELSE
+                    (SELECT COUNT(*) FROM context_block_occurrences bx WHERE bx.exact_fingerprint = b.exact_fingerprint) END
+         FROM compression_candidates c
+         JOIN compression_candidate_metrics m ON m.candidate_id = c.candidate_id
+         JOIN context_block_occurrences b ON b.block_occurrence_id = c.block_occurrence_id
+         WHERE c.experiment_id = ?1
+         ORDER BY c.candidate_id
+         LIMIT ?2 OFFSET ?3",
+    )?;
+    let requested = u64::from(limit).saturating_add(1);
+    let rows = statement.query_map(
+        params![
+            experiment_id,
+            i64::try_from(requested).unwrap_or(i64::MAX),
+            i64::try_from(offset).unwrap_or(i64::MAX)
+        ],
+        |row| {
+            Ok(CompressionCandidateSummary {
+                id: row.get(0)?,
+                experiment_id: row.get(1)?,
+                snapshot_id: row.get(2)?,
+                block_ordinal: nonnegative(row.get(3)?),
+                block_kind: row.get(4)?,
+                origin: row.get(5)?,
+                detected_kind: row.get(6)?,
+                compressor: row.get(7)?,
+                version: row.get(8)?,
+                status: row.get(9)?,
+                input_bytes: nonnegative(row.get(10)?),
+                output_bytes: row.get::<_, Option<i64>>(11)?.and_then(to_u64),
+                byte_reduction: row.get::<_, Option<i64>>(12)?.and_then(to_u64),
+                input_estimated_tokens: row.get::<_, Option<i64>>(13)?.and_then(to_u64),
+                output_estimated_tokens: row.get::<_, Option<i64>>(14)?.and_then(to_u64),
+                estimated_reduction: row.get::<_, Option<i64>>(15)?.and_then(to_u64),
+                recovery_verified: row.get(16)?,
+                deterministic: row.get(17)?,
+                latency_us: row.get::<_, Option<i64>>(18)?.and_then(to_u64),
+                preserved_prefix_bytes: row.get::<_, Option<i64>>(19)?.and_then(to_u64),
+                preserved_prefix_ratio_basis_points: row
+                    .get::<_, Option<i64>>(20)?
+                    .and_then(to_u64)
+                    .and_then(|value| u16::try_from(value).ok()),
+                cache_risk: row.get(21)?,
+                exact_repetition: row.get(22)?,
+                persistence: row.get::<_, Option<i64>>(23)?.and_then(to_u64),
+            })
+        },
+    )?;
+    let mut items = rows.collect::<Result<Vec<_>, _>>()?;
+    let has_more = items.len() > usize::try_from(limit).unwrap_or(usize::MAX);
+    items.truncate(usize::try_from(limit).unwrap_or(usize::MAX));
+    Ok(Page {
+        items,
+        next_cursor: has_more.then(|| offset.saturating_add(u64::from(limit)).to_string()),
+    })
+}
+
+fn table_exists(connection: &Connection, table: &str) -> Result<bool, rusqlite::Error> {
+    connection.query_row(
+        "SELECT EXISTS(SELECT 1 FROM sqlite_schema WHERE type = 'table' AND name = ?1)",
+        [table],
+        |row| row.get(0),
+    )
+}
+
+fn ratio_basis_points(numerator: u64, denominator: u64) -> Option<u16> {
+    if denominator == 0 {
+        return None;
+    }
+    let value = numerator.saturating_mul(10_000) / denominator;
+    u16::try_from(value.min(10_000)).ok()
 }
 
 fn provider_metric(value: Option<u64>) -> Metric<u64> {

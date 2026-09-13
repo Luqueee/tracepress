@@ -1,9 +1,78 @@
 use tracepress_core::{
-    AttemptId, CausalEdge, ContentId, ContentObject, ContentOccurrence, ContextBinding,
-    ContextBlockOccurrenceId, ContextSnapshotId, DecisionId, EvaluationId, EventId, HttpStatusCode,
-    InferenceStatus, OperationId, OperationKind, OperationStatus, PolicyAssignmentId, RecoveryId,
-    RequestId, RequestMetadata, SessionId, SessionState, UsageStatus,
+    AttemptId, CausalEdge, CompressionCandidateId, ContentId, ContentObject, ContentOccurrence,
+    ContextBinding, ContextBlockOccurrenceId, ContextSnapshotId, DecisionId, EvaluationId, EventId,
+    HttpStatusCode, InferenceStatus, OperationId, OperationKind, OperationStatus,
+    PolicyAssignmentId, RecoveryId, RequestId, RequestMetadata, SessionId, SessionState,
+    UsageStatus,
 };
+
+/// Durable terminal classification for one shadow candidate evaluation.
+#[allow(
+    missing_docs,
+    reason = "status names are the complete persisted contract"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ShadowCandidateStatus {
+    Applicable,
+    NotApplicable,
+    NoImprovement,
+    ResourceLimit,
+    InvalidInput,
+    RecoveryFailed,
+    InternalError,
+}
+
+/// Structural cache-risk evidence; this is not a provider cache prediction.
+#[allow(
+    missing_docs,
+    reason = "risk names are the complete persisted contract"
+)]
+#[derive(Clone, Copy, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[serde(rename_all = "snake_case")]
+#[non_exhaustive]
+pub enum ShadowCacheRisk {
+    Low,
+    Medium,
+    High,
+    Unknown,
+}
+
+/// Metadata-only result produced by a shadow compressor.
+#[allow(missing_docs, reason = "fields mirror the documented additive schema")]
+#[allow(
+    clippy::exhaustive_structs,
+    reason = "private daemon wire record is versioned with the schema"
+)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+pub struct ShadowCandidateRecord {
+    pub candidate_id: CompressionCandidateId,
+    pub experiment_id: String,
+    pub snapshot_id: ContextSnapshotId,
+    pub block_ordinal: u64,
+    pub compressor_id: String,
+    pub compressor_version: String,
+    pub status: ShadowCandidateStatus,
+    pub input_bytes: u64,
+    pub output_bytes: Option<u64>,
+    pub bytes_delta: Option<u64>,
+    pub input_estimated_tokens: Option<u64>,
+    pub output_estimated_tokens: Option<u64>,
+    pub estimated_token_delta: Option<u64>,
+    pub processing_us: u64,
+    pub reversible: bool,
+    pub recovery_verified: bool,
+    pub deterministic: bool,
+    pub original_fingerprint: Box<[u8]>,
+    pub candidate_fingerprint: Option<Box<[u8]>>,
+    pub recovered_fingerprint: Option<Box<[u8]>>,
+    pub first_modified_offset: Option<u64>,
+    pub preserved_prefix_bytes: Option<u64>,
+    pub preserved_prefix_ratio_basis_points: Option<u16>,
+    pub cache_risk: ShadowCacheRisk,
+    pub verified_at_us: Option<u64>,
+}
 
 /// Provider family recorded by semantic observations.
 #[allow(
@@ -766,6 +835,31 @@ pub struct ContextInspectionBlock {
 #[derive(Debug)]
 #[non_exhaustive]
 pub enum WriteCommand {
+    /// Starts or updates the metadata manifest for one shadow experiment.
+    ShadowCompressionExperiment {
+        experiment_id: String,
+        compressor_set_json: String,
+        runtime_sha: Option<String>,
+        limits_json: String,
+        status: String,
+        started_at: String,
+        completed_at: Option<String>,
+    },
+    /// Inserts one candidate and its metrics without candidate or recovery content.
+    ShadowCompressionCandidate { candidate: ShadowCandidateRecord },
+    /// Adds bounded experiment-health counters.
+    ShadowCompressionExperimentCounters {
+        experiment_id: String,
+        forwarding_mutations: u64,
+        shadow_drops: u64,
+        shadow_queue_full_drops: u64,
+        shadow_byte_budget_drops: u64,
+        shadow_work_budget_drops: u64,
+        shadow_worker_closed_drops: u64,
+        shadow_persistence_drops: u64,
+        recovery_failures: u64,
+        determinism_failures: u64,
+    },
     /// Inserts one session.
     Session {
         session_id: SessionId,

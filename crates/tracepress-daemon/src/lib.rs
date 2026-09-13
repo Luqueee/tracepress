@@ -34,9 +34,108 @@ use tracepress_provider::{
 use tracepress_storage::{
     AnalysisDecodeStatus, ContentEncoding, ContextInspection, ContextSnapshotStatus,
     ObservationStatus, ProviderKind, ProviderProtocol,
-    ProviderResponseState as StorageResponseState, ProviderTransport, StorageError, StorageWriter,
-    WriteBatch, WriteCommand, WriteReceipt,
+    ProviderResponseState as StorageResponseState, ProviderTransport, ShadowCandidateRecord,
+    StorageError, StorageWriter, WriteBatch, WriteCommand, WriteReceipt,
 };
+
+/// Metadata-only identity and configuration for one shadow experiment.
+#[allow(
+    missing_docs,
+    reason = "fields mirror the private versioned control contract"
+)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[non_exhaustive]
+pub struct ShadowExperimentManifest {
+    pub experiment_id: String,
+    pub compressor_set_json: String,
+    pub runtime_sha: Option<String>,
+    pub limits_json: String,
+    pub status: String,
+    pub started_at: String,
+    pub completed_at: Option<String>,
+}
+
+impl ShadowExperimentManifest {
+    /// Creates one metadata-only experiment manifest.
+    #[must_use]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the private manifest wire fields are explicit"
+    )]
+    pub const fn new(
+        experiment_id: String,
+        compressor_set_json: String,
+        runtime_sha: Option<String>,
+        limits_json: String,
+        status: String,
+        started_at: String,
+        completed_at: Option<String>,
+    ) -> Self {
+        Self {
+            experiment_id,
+            compressor_set_json,
+            runtime_sha,
+            limits_json,
+            status,
+            started_at,
+            completed_at,
+        }
+    }
+}
+
+/// Additive health counters for one shadow experiment.
+#[allow(
+    missing_docs,
+    reason = "fields mirror the private versioned control contract"
+)]
+#[derive(Clone, Debug, Eq, PartialEq, serde::Deserialize, serde::Serialize)]
+#[non_exhaustive]
+pub struct ShadowExperimentCounters {
+    pub experiment_id: String,
+    pub forwarding_mutations: u64,
+    pub shadow_drops: u64,
+    pub shadow_queue_full_drops: u64,
+    pub shadow_byte_budget_drops: u64,
+    pub shadow_work_budget_drops: u64,
+    pub shadow_worker_closed_drops: u64,
+    pub shadow_persistence_drops: u64,
+    pub recovery_failures: u64,
+    pub determinism_failures: u64,
+}
+
+impl ShadowExperimentCounters {
+    /// Creates one additive shadow quality-counter update.
+    #[must_use]
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the independent health counters stay explicit"
+    )]
+    pub const fn new(
+        experiment_id: String,
+        forwarding_mutations: u64,
+        shadow_drops: u64,
+        shadow_queue_full_drops: u64,
+        shadow_byte_budget_drops: u64,
+        shadow_work_budget_drops: u64,
+        shadow_worker_closed_drops: u64,
+        shadow_persistence_drops: u64,
+        recovery_failures: u64,
+        determinism_failures: u64,
+    ) -> Self {
+        Self {
+            experiment_id,
+            forwarding_mutations,
+            shadow_drops,
+            shadow_queue_full_drops,
+            shadow_byte_budget_drops,
+            shadow_work_budget_drops,
+            shadow_worker_closed_drops,
+            shadow_persistence_drops,
+            recovery_failures,
+            determinism_failures,
+        }
+    }
+}
 
 /// Failure returned by the daemon lifecycle boundary.
 #[allow(
@@ -798,6 +897,76 @@ pub struct DaemonService {
 }
 
 impl DaemonService {
+    /// Records or completes one metadata-only shadow experiment manifest.
+    ///
+    /// # Errors
+    /// Returns a storage error when the daemon-owned writer cannot commit the manifest.
+    pub async fn record_shadow_experiment(
+        &self,
+        manifest: ShadowExperimentManifest,
+    ) -> Result<(), DaemonError> {
+        let _receipt = self
+            .writer
+            .submit(WriteCommand::ShadowCompressionExperiment {
+                experiment_id: manifest.experiment_id,
+                compressor_set_json: manifest.compressor_set_json,
+                runtime_sha: manifest.runtime_sha,
+                limits_json: manifest.limits_json,
+                status: manifest.status,
+                started_at: manifest.started_at,
+                completed_at: manifest.completed_at,
+            })
+            .await?;
+        Ok(())
+    }
+
+    /// Persists a bounded set of candidate metadata atomically.
+    ///
+    /// # Errors
+    /// Returns a storage error when any candidate association or write is invalid.
+    pub async fn record_shadow_candidates(
+        &self,
+        candidates: Vec<ShadowCandidateRecord>,
+    ) -> Result<(), DaemonError> {
+        let mut candidates = candidates.into_iter();
+        let Some(first) = candidates.next() else {
+            return Ok(());
+        };
+        let mut batch =
+            WriteBatch::new(WriteCommand::ShadowCompressionCandidate { candidate: first });
+        for candidate in candidates {
+            batch = batch.and(WriteCommand::ShadowCompressionCandidate { candidate });
+        }
+        let _receipt = self.writer.submit_batch(batch).await?;
+        Ok(())
+    }
+
+    /// Adds shadow-only quality counters without affecting provider observations.
+    ///
+    /// # Errors
+    /// Returns a storage error when the daemon-owned writer cannot update the counters.
+    pub async fn record_shadow_counters(
+        &self,
+        counters: ShadowExperimentCounters,
+    ) -> Result<(), DaemonError> {
+        let _receipt = self
+            .writer
+            .submit(WriteCommand::ShadowCompressionExperimentCounters {
+                experiment_id: counters.experiment_id,
+                forwarding_mutations: counters.forwarding_mutations,
+                shadow_drops: counters.shadow_drops,
+                shadow_queue_full_drops: counters.shadow_queue_full_drops,
+                shadow_byte_budget_drops: counters.shadow_byte_budget_drops,
+                shadow_work_budget_drops: counters.shadow_work_budget_drops,
+                shadow_worker_closed_drops: counters.shadow_worker_closed_drops,
+                shadow_persistence_drops: counters.shadow_persistence_drops,
+                recovery_failures: counters.recovery_failures,
+                determinism_failures: counters.determinism_failures,
+            })
+            .await?;
+        Ok(())
+    }
+
     /// Opens a daemon service and marks interrupted sessions from a prior process stale.
     ///
     /// # Errors
@@ -2099,6 +2268,14 @@ pub enum ControlRequest {
     FinalizeContextAnalysis {
         summary: Box<context::ContextAnalysisFinalize>,
     },
+    /// Starts or completes a shadow experiment manifest.
+    RecordShadowExperiment { manifest: ShadowExperimentManifest },
+    /// Persists a bounded metadata-only candidate batch.
+    RecordShadowCandidates {
+        candidates: Vec<ShadowCandidateRecord>,
+    },
+    /// Adds shadow worker health counters.
+    RecordShadowCounters { counters: ShadowExperimentCounters },
 }
 
 /// Response returned by the daemon control protocol.

@@ -75,6 +75,34 @@ fn request_body() -> String {
     )
 }
 
+fn tool_result_request_body() -> String {
+    r#"{"model":"gpt-test","stream":true,"input":[{"type":"function_call_output","call_id":"call_shadow","output":"{\"name\":\"a\",\"status\":\"ok\",\"size\":10}"}]}"#
+        .to_owned()
+}
+
+fn provider_observation(path: &Path) -> Result<(i64, i64, i64, i64, i64), rusqlite::Error> {
+    let database = Connection::open(path.join("tracepress.sqlite3"))?;
+    database.query_row(
+        "SELECT pr.request_bytes, pu.input_total, pu.cache_read,
+                pu.output_total, pu.reasoning
+           FROM provider_requests pr
+           JOIN provider_attempts pa ON pa.request_id = pr.request_id
+           JOIN provider_usage pu ON pu.attempt_id = pa.attempt_id
+          ORDER BY pa.started_at, pr.request_id
+          LIMIT 1",
+        [],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+            ))
+        },
+    )
+}
+
 fn stream_events() -> Vec<String> {
     vec![
         r#"event: response.created
@@ -118,23 +146,67 @@ struct Recorded {
     stdout: String,
 }
 
+#[derive(Default)]
+struct StreamedCaseOptions {
+    request_override: Option<String>,
+    shadow_experiment_id: Option<String>,
+}
+
 fn run_streamed_case(events: Vec<String>) -> SetupResult<Recorded> {
     run_streamed_case_with_mode(events, "shadow")
 }
 
 fn run_streamed_case_with_mode(events: Vec<String>, analysis_mode: &str) -> SetupResult<Recorded> {
+    run_streamed_case_with_options(events, analysis_mode, StreamedCaseOptions::default())
+}
+
+fn run_streamed_case_with_shadow_compression(
+    events: Vec<String>,
+    request: String,
+    experiment_id: &str,
+) -> SetupResult<Recorded> {
+    run_streamed_case_with_options(
+        events,
+        "shadow",
+        StreamedCaseOptions {
+            request_override: Some(request),
+            shadow_experiment_id: Some(experiment_id.to_owned()),
+        },
+    )
+}
+
+fn run_streamed_case_with_request(
+    events: Vec<String>,
+    analysis_mode: &str,
+    request: String,
+) -> SetupResult<Recorded> {
+    run_streamed_case_with_options(
+        events,
+        analysis_mode,
+        StreamedCaseOptions {
+            request_override: Some(request),
+            ..Default::default()
+        },
+    )
+}
+
+fn run_streamed_case_with_options(
+    events: Vec<String>,
+    analysis_mode: &str,
+    options: StreamedCaseOptions,
+) -> SetupResult<Recorded> {
     let directory = TempDir::new()?;
     let upstream = TcpListener::bind("127.0.0.1:0")?;
     let upstream_address = upstream.local_addr()?;
     let stream = events.concat();
     let server = thread::spawn(move || serve_streamed_sse(&upstream, &events));
 
-    let request = request_body();
+    let request = options.request_override.unwrap_or_else(request_body);
     let fixture = Fixture::new(directory.path())?;
     fixture.run(["init"])?;
     fixture.run(["daemon", "start"])?;
-    let output = fixture
-        .command()
+    let mut command = fixture.command();
+    let _configured = command
         .env(
             "TRACEPRESS_UPSTREAM",
             format!("http://{upstream_address}/v1/responses"),
@@ -142,7 +214,13 @@ fn run_streamed_case_with_mode(events: Vec<String>, analysis_mode: &str) -> Setu
         .env("TRACEPRESS_E2E_REQUEST", &request)
         .env("TRACEPRESS_E2E_STREAM", &stream)
         .env("TRACEPRESS_E2E_AUTH", AUTH_CANARY)
-        .env("TRACEPRESS_CONTEXT_ANALYSIS", analysis_mode)
+        .env("TRACEPRESS_CONTEXT_ANALYSIS", analysis_mode);
+    if let Some(experiment_id) = options.shadow_experiment_id.as_deref() {
+        let _configured = command
+            .env("TRACEPRESS_SHADOW_COMPRESSION", "on")
+            .env("TRACEPRESS_SHADOW_EXPERIMENT_ID", experiment_id);
+    }
+    let output = command
         .args(["run", "python3", "--", "-c", AGENT_SCRIPT])
         .output()?;
     assert!(
@@ -302,6 +380,151 @@ for index in range(int(os.environ['TRACEPRESS_E2E_COUNT'])):
     received = urllib.request.urlopen(request).read()
     assert received == expected, (index, received)
 ";
+
+const CALIBRATION_AGENT_SCRIPT: &str = r"
+import os, urllib.request
+
+url = os.environ['TRACEPRESS_RESPONSES_URL']
+for index in range(3):
+    body = os.environ['TRACEPRESS_CALIBRATION_REQUEST_' + str(index)].encode()
+    expected = os.environ['TRACEPRESS_CALIBRATION_STREAM_' + str(index)].encode()
+    request = urllib.request.Request(url, data=body, headers={'Content-Type': 'application/json'})
+    received = urllib.request.urlopen(request).read()
+    assert received == expected, (index, received)
+";
+
+const CALIBRATION_COMPACTION_REQUEST: &str = r#"{"model":"gpt-calibration","stream":true,"input":[{"type":"message","role":"user","content":[{"type":"input_text","text":"compact now"}]},{"type":"compaction_trigger"}]}"#;
+
+const CALIBRATION_COMPACTION_STREAM: &str = concat!(
+    "event: response.output_item.done\n",
+    "data: {\"item\":{\"type\":\"compaction\",\"encrypted_content\":\"calibration-private\"}}\n\n",
+    "event: response.completed\n",
+    "data: {\"response\":{\"id\":\"resp_calibration_compact\",\"model\":\"gpt-calibration\",\"status\":\"completed\",\"usage\":{\"input_tokens\":320,\"output_tokens\":12,\"total_tokens\":332}}}\n\n"
+);
+
+fn run_compaction_calibration_session(index: usize) -> SetupResult<()> {
+    let directory = TempDir::new()?;
+    let upstream = TcpListener::bind("127.0.0.1:0")?;
+    let upstream_address = upstream.local_addr()?;
+    let requests = vec![
+        tool_result_request_body(),
+        CALIBRATION_COMPACTION_REQUEST.to_owned(),
+        tool_result_request_body(),
+    ];
+    let streams = vec![
+        stream_events().concat(),
+        CALIBRATION_COMPACTION_STREAM.to_owned(),
+        stream_events().concat(),
+    ];
+    let server_requests = requests.clone();
+    let server_streams = streams.clone();
+    let server = thread::spawn(move || serve_calibration_sse(&upstream, &server_streams));
+
+    let fixture = Fixture::new(directory.path())?;
+    fixture.run(["init"])?;
+    fixture.run(["daemon", "start"])?;
+    let mut command = fixture.command();
+    let _configured = command
+        .env(
+            "TRACEPRESS_UPSTREAM",
+            format!("http://{upstream_address}/v1/responses"),
+        )
+        .env("TRACEPRESS_CONTEXT_ANALYSIS", "shadow")
+        .env("TRACEPRESS_SHADOW_COMPRESSION", "on")
+        .env(
+            "TRACEPRESS_SHADOW_EXPERIMENT_ID",
+            format!("shadow-compaction-calibration-{index}"),
+        );
+    for (request_index, request) in requests.iter().enumerate() {
+        let _configured = command
+            .env(
+                format!("TRACEPRESS_CALIBRATION_REQUEST_{request_index}"),
+                request,
+            )
+            .env(
+                format!("TRACEPRESS_CALIBRATION_STREAM_{request_index}"),
+                &streams[request_index],
+            );
+    }
+    let output = command
+        .args(["run", "python3", "--", "-c", CALIBRATION_AGENT_SCRIPT])
+        .output()?;
+    assert!(
+        output.status.success(),
+        "calibration run failed: {}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let received = server
+        .join()
+        .map_err(|_| "calibration upstream panicked")??;
+    for (body, request) in received.iter().zip(server_requests) {
+        assert!(
+            body.windows(request.len())
+                .any(|window| window == request.as_bytes())
+        );
+    }
+    fixture.run(["daemon", "stop"])?;
+
+    let database = Connection::open(directory.path().join("tracepress.sqlite3"))?;
+    let request_count: i64 =
+        database.query_row("SELECT COUNT(*) FROM provider_requests", [], |row| {
+            row.get(0)
+        })?;
+    assert_eq!(request_count, 3);
+    let compaction_count: i64 = database.query_row(
+        "SELECT COUNT(*) FROM provider_requests WHERE request_kind = 'compaction_v2'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(compaction_count, 1);
+    let snapshot_count: i64 = database.query_row(
+        "SELECT COUNT(*) FROM context_snapshots WHERE status IN ('complete', 'partial')",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(snapshot_count, 3);
+    let candidate_count: i64 =
+        database.query_row("SELECT COUNT(*) FROM compression_candidates", [], |row| {
+            row.get(0)
+        })?;
+    assert!(candidate_count > 0);
+    let turn_candidate_count: i64 = database.query_row(
+        "SELECT COUNT(*) FROM compression_candidates c
+           JOIN context_snapshots s USING(snapshot_id)
+           JOIN provider_requests pr ON pr.request_id = s.provider_request_id
+          WHERE pr.request_kind = 'turn'",
+        [],
+        |row| row.get(0),
+    )?;
+    assert!(turn_candidate_count > 0);
+    let compaction_output_count: i64 = database.query_row(
+        "SELECT COUNT(*) FROM provider_attempts WHERE compaction_output_seen = 1",
+        [],
+        |row| row.get(0),
+    )?;
+    assert_eq!(compaction_output_count, 1);
+    Ok(())
+}
+
+fn serve_calibration_sse(
+    listener: &TcpListener,
+    streams: &[String],
+) -> std::io::Result<Vec<Vec<u8>>> {
+    let mut received = Vec::with_capacity(streams.len());
+    for stream_body in streams {
+        let (mut stream, _peer) = listener.accept()?;
+        received.push(read_request(&mut stream)?);
+        stream.write_all(
+            b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n\r\n",
+        )?;
+        write!(stream, "{:x}\r\n", stream_body.len())?;
+        stream.write_all(stream_body.as_bytes())?;
+        stream.write_all(b"\r\n0\r\n\r\n")?;
+        stream.flush()?;
+    }
+    Ok(received)
+}
 
 fn run_sequential_case() -> SetupResult<TempDir> {
     let directory = TempDir::new()?;
@@ -1321,6 +1544,93 @@ fn streamed_responses_run_records_provider_observability_durably() -> TestResult
     drop(database);
 
     assert_no_canaries_in_storage(root)
+}
+
+#[test]
+fn shadow_compression_post_hardening_smoke_is_bounded_and_byte_exact() -> TestResult {
+    let experiment_id = "shadow-post-hardening-smoke";
+    let request = tool_result_request_body();
+    let recorded =
+        run_streamed_case_with_shadow_compression(stream_events(), request, experiment_id)?;
+    assert_upstream_saw_exact_request(&recorded.received, &recorded.request)?;
+
+    let database = Connection::open(recorded.directory.path().join("tracepress.sqlite3"))?;
+    let quality: (i64, i64, i64, i64, i64, i64) = database.query_row(
+        "SELECT forwarding_mutations, shadow_drops, shadow_queue_full_drops,
+                shadow_byte_budget_drops, shadow_work_budget_drops,
+                shadow_worker_closed_drops + shadow_persistence_drops
+           FROM compression_experiments WHERE experiment_id = ?1",
+        [experiment_id],
+        |row| {
+            Ok((
+                row.get(0)?,
+                row.get(1)?,
+                row.get(2)?,
+                row.get(3)?,
+                row.get(4)?,
+                row.get(5)?,
+            ))
+        },
+    )?;
+    assert_eq!(quality.0, 0, "shadow must not mutate forwarding");
+    assert_eq!(quality.1, quality.2 + quality.3 + quality.4 + quality.5);
+    let candidate_count: i64 = database.query_row(
+        "SELECT COUNT(*) FROM compression_candidates WHERE experiment_id = ?1",
+        [experiment_id],
+        |row| row.get(0),
+    )?;
+    assert!(
+        candidate_count > 0,
+        "tool result should produce shadow candidates"
+    );
+    let recovery_failures: i64 = database.query_row(
+        "SELECT COUNT(*) FROM compression_candidate_metrics m
+           JOIN compression_candidates c USING(candidate_id)
+          WHERE c.experiment_id = ?1 AND m.reversible = 1 AND m.output_bytes IS NOT NULL
+            AND m.recovery_verified = 0",
+        [experiment_id],
+        |row| row.get(0),
+    )?;
+    assert_eq!(recovery_failures, 0);
+    Ok(())
+}
+
+#[test]
+fn shadow_on_off_aa_preserves_provider_observations() -> TestResult {
+    let request = tool_result_request_body();
+    let off = run_streamed_case_with_request(stream_events(), "shadow", request.clone())?;
+    let on = run_streamed_case_with_shadow_compression(
+        stream_events(),
+        request,
+        "shadow-aa-post-hardening",
+    )?;
+    assert_upstream_saw_exact_request(&off.received, &off.request)?;
+    assert_upstream_saw_exact_request(&on.received, &on.request)?;
+    assert_eq!(off.request, on.request);
+    assert_eq!(off.stream, on.stream);
+
+    assert_eq!(
+        provider_observation(off.directory.path())?,
+        provider_observation(on.directory.path())?
+    );
+    let on_database = Connection::open(on.directory.path().join("tracepress.sqlite3"))?;
+    let quality: (i64, i64, i64, i64) = on_database.query_row(
+        "SELECT forwarding_mutations, recovery_failures, determinism_failures,
+                shadow_drops FROM compression_experiments
+          WHERE experiment_id = 'shadow-aa-post-hardening'",
+        [],
+        |row| Ok((row.get(0)?, row.get(1)?, row.get(2)?, row.get(3)?)),
+    )?;
+    assert_eq!(quality, (0, 0, 0, 0));
+    Ok(())
+}
+
+#[test]
+fn compaction_calibration_cohort_preserves_tool_results_and_candidates() -> TestResult {
+    for index in 0..5 {
+        run_compaction_calibration_session(index)?;
+    }
+    Ok(())
 }
 
 #[test]

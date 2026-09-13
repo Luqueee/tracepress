@@ -2,7 +2,7 @@ use rusqlite::{Connection, params};
 
 use crate::FixtureDatabase;
 
-const MIGRATIONS: [&str; 8] = [
+const MIGRATIONS: [&str; 10] = [
     include_str!("../../tracepress-storage/migrations/0001_initial.sql"),
     include_str!("../../tracepress-storage/migrations/0002_provider_observability.sql"),
     include_str!("../../tracepress-storage/migrations/0003_context_analysis.sql"),
@@ -11,6 +11,8 @@ const MIGRATIONS: [&str; 8] = [
     include_str!("../../tracepress-storage/migrations/0006_analysis_content_hash.sql"),
     include_str!("../../tracepress-storage/migrations/0007_compaction_v2_observability.sql"),
     include_str!("../../tracepress-storage/migrations/0008_context_semantic_coverage.sql"),
+    include_str!("../../tracepress-storage/migrations/0009_shadow_compression.sql"),
+    include_str!("../../tracepress-storage/migrations/0010_shadow_drop_reasons.sql"),
 ];
 
 pub(crate) fn create(large: bool) -> Result<FixtureDatabase, rusqlite::Error> {
@@ -108,6 +110,65 @@ pub(crate) fn create(large: bool) -> Result<FixtureDatabase, rusqlite::Error> {
                     "INSERT INTO context_block_occurrences(block_occurrence_id,snapshot_id,ordinal,kind,role,origin,raw_value_start,raw_value_end,locator_occurrence,raw_bytes,exact_fingerprint,semantic_fingerprint,fingerprint_version,estimated_tokens,estimator,estimator_version,estimate_confidence,detected_kind,detector_confidence,detector_version) VALUES (?1,?2,?3,?4,'user',?5,0,512,0,512,?6,?7,1,?8,'fixture-estimator',1,'high',?9,0.98,1)",
                     params![format!("block-{session_index:04}-{request_index:04}-{block_index:04}"), snapshot_id, i64::try_from(block_index).unwrap_or(0), kind, origin, exact, semantic, token_value, detected],
                 )?;
+            }
+        }
+    }
+    if !large {
+        let _experiment = transaction.execute(
+            "INSERT INTO compression_experiments(experiment_id,compressor_set_json,runtime_sha,limits_json,status,started_at,completed_at,forwarding_mutations,shadow_drops,recovery_failures,determinism_failures) VALUES ('shadow-pilot-001','[[\"json.noop\",1],[\"json.minify\",1],[\"json.tabular\",1],[\"json.repeated_subtree\",1]]','93ffe0c9c32a0f9a','{\"max_candidate_input_bytes\":1048576}','completed','2026-09-13T13:00:00Z','2026-09-13T13:05:00Z',0,1,0,0)",
+            [],
+        )?;
+        for session_index in 0..session_count {
+            for request_index in 0..requests_per_session {
+                let snapshot_id = format!("snapshot-{session_index:04}-{request_index:04}");
+                let block_id = format!("block-{session_index:04}-{request_index:04}-0000");
+                for (compressor_index, compressor) in [
+                    "json.noop",
+                    "json.minify",
+                    "json.tabular",
+                    "json.repeated_subtree",
+                ]
+                .iter()
+                .enumerate()
+                {
+                    let applicable = *compressor == "json.minify"
+                        || (*compressor == "json.tabular" && request_index % 2 == 0)
+                        || (*compressor == "json.repeated_subtree" && request_index == 3);
+                    let status = if *compressor == "json.noop" {
+                        "no_improvement"
+                    } else if applicable {
+                        "applicable"
+                    } else {
+                        "not_applicable"
+                    };
+                    let input_bytes = 400_i64;
+                    let output_bytes = if applicable {
+                        Some(220_i64 + i64::try_from(compressor_index).unwrap_or(0) * 12)
+                    } else if *compressor == "json.noop" {
+                        Some(input_bytes)
+                    } else {
+                        None
+                    };
+                    let delta = output_bytes.map(|output| input_bytes.saturating_sub(output));
+                    let candidate_id = format!(
+                        "00000000-0000-7001-8000-{session_index:03}{request_index:03}{compressor_index:03}000"
+                    );
+                    let original = vec![u8::try_from(request_index + 1).unwrap_or(1); 32];
+                    let candidate = output_bytes
+                        .map(|_| vec![u8::try_from(compressor_index + 11).unwrap_or(11); 32]);
+                    let _candidate = transaction.execute(
+                        "INSERT INTO compression_candidates(candidate_id,experiment_id,snapshot_id,block_occurrence_id,compressor_id,compressor_version,status,original_fingerprint,candidate_fingerprint,first_modified_offset,preserved_prefix_bytes,cache_risk) VALUES (?1,'shadow-pilot-001',?2,?3,?4,'1',?5,?6,?7,?8,?8,?9)",
+                        params![candidate_id, snapshot_id, block_id, compressor, status, original, candidate, if applicable { Some(32_i64) } else { None }, if request_index == 0 { "high" } else { "medium" }],
+                    )?;
+                    let _metrics = transaction.execute(
+                        "INSERT INTO compression_candidate_metrics(candidate_id,input_bytes,output_bytes,bytes_delta,input_estimated_tokens,output_estimated_tokens,estimated_token_delta,processing_us,reversible,recovery_verified,deterministic,preserved_prefix_ratio_basis_points) VALUES (?1,?2,?3,?4,100,?5,?6,?7,1,1,1,?8)",
+                        params![candidate_id, input_bytes, output_bytes, delta, output_bytes.map(|value| value / 4), delta.map(|value| value / 4), 35_i64 + i64::try_from(compressor_index).unwrap_or(0) * 20, if applicable { Some(2500_i64) } else { None }],
+                    )?;
+                    let _recovery = transaction.execute(
+                        "INSERT INTO compression_recoveries(candidate_id,verified,recovered_fingerprint,verified_at_us) VALUES (?1,1,?2,1757721600000000)",
+                        params![candidate_id, original],
+                    )?;
+                }
             }
         }
     }

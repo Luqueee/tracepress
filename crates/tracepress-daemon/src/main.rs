@@ -266,6 +266,39 @@ async fn handle_request(
                 ),
             }
         }
+        ControlRequest::RecordShadowExperiment { manifest } => {
+            match daemon.record_shadow_experiment(manifest).await {
+                Ok(()) => (ControlResponse::ok("running"), false),
+                Err(error) => (
+                    ControlResponse::Error {
+                        message: error.to_string(),
+                    },
+                    false,
+                ),
+            }
+        }
+        ControlRequest::RecordShadowCandidates { candidates } => {
+            match daemon.record_shadow_candidates(candidates).await {
+                Ok(()) => (ControlResponse::ok("running"), false),
+                Err(error) => (
+                    ControlResponse::Error {
+                        message: error.to_string(),
+                    },
+                    false,
+                ),
+            }
+        }
+        ControlRequest::RecordShadowCounters { counters } => {
+            match daemon.record_shadow_counters(counters).await {
+                Ok(()) => (ControlResponse::ok("running"), false),
+                Err(error) => (
+                    ControlResponse::Error {
+                        message: error.to_string(),
+                    },
+                    false,
+                ),
+            }
+        }
         ControlRequest::RecordCorrelationDegradation {
             session_id,
             reason,

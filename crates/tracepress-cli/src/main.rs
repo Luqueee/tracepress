@@ -31,20 +31,29 @@ use clap::{Parser, Subcommand};
 use tokio::net::TcpListener;
 use tokio::process::Command;
 use tokio_util::sync::CancellationToken;
+use tracepress_compression::{
+    BlockKind as CompressionBlockKind, BlockMetadata, BlockOrigin as CompressionBlockOrigin,
+    CacheRisk as CompressionCacheRisk, CandidateMetrics, CandidateStatus, CompressionLimits,
+    DetectedKind as CompressionDetectedKind, JsonMinify, JsonNoop, JsonRepeatedSubtree,
+    JsonTabular, ShadowCompressor, TextNoop, TextRepeatedLine, TextRepeatedRun,
+    evaluate_with_estimator,
+};
 use tracepress_context::{
     ContextAnalysisLimits, ContextAnalysisResult, ContextAnalysisStatus, ContextBlockKind,
-    ContextBlockSummary, ContextDeltaRequest, ContextOrigin, ContextRole, MeasurementApplicability,
-    TokenEstimateAggregate, TokenReconciliation, compute_context_delta,
+    ContextBlockSummary, ContextDeltaRequest, ContextOrigin, ContextRole, DetectedContentKind,
+    EstimationRequest, MeasurementApplicability, StructuralHeuristicEstimator,
+    TokenEstimateAggregate, TokenEstimator, TokenReconciliation, compute_context_delta,
 };
 use tracepress_core::{
-    AttemptId, ContextSnapshotId, HttpStatusCode, MaxIpcFrameBytes, MaxRequestBodyBytes,
-    MaxResponseBodyBytes, OperationId, RequestId, ResourceLimits, ResourceLimitsConfig, SessionId,
-    UuidV7Generator,
+    AttemptId, CompressionCandidateId, ContextSnapshotId, HttpStatusCode, MaxIpcFrameBytes,
+    MaxRequestBodyBytes, MaxResponseBodyBytes, OperationId, RequestId, ResourceLimits,
+    ResourceLimitsConfig, SessionId, UuidV7Generator,
 };
 use tracepress_daemon::{
     ContextAnalysisFinalize, ContextAnalysisMetrics, ContextAppendReceipt,
     ContextCorrelationStatusWire, ControlRequest, ControlResponse, CorrelationDegradation,
     CorrelationStatus, ProviderObservation as ObservationRecord, ProviderObservationOutcome,
+    ShadowExperimentCounters, ShadowExperimentManifest,
 };
 use tracepress_ipc::{
     Credential, Endpoint, IpcClient, IpcLimits, IpcRequest, ResponseOutcome, UnixEndpoint,
@@ -57,13 +66,14 @@ use tracepress_proxy::{
     BackgroundTaskSpawner, CompactionObservation, ContextAnalysisDropReason, ContextAnalysisMode,
     ContextAnalysisObservation, ContextAnalysisOutcome, DeferredAnalysisMetrics, ForwardId,
     ForwardMetadata, InboundRoute, MetadataSink, MetadataSinkError, ObservationSinkError,
-    ProviderObservationSink, ProxyConfig, RequestContextObservation, TransparentProxy,
-    TransportFailure,
+    ProviderObservationSink, ProxyConfig, RequestContextObservation, ShadowAnalysisBody,
+    TransparentProxy, TransportFailure,
 };
 use tracepress_storage::{
     ContextInspection, ContextInspectionBlock, ContextInspectionNamedEstimate,
     ContextSnapshotStatus,
 };
+use tracepress_storage::{ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus};
 
 const FRAME_BYTES: u64 = 65_536;
 
@@ -163,6 +173,7 @@ enum RunEvent {
     ContextAnalysis(
         ForwardId,
         ContextAnalysisOutcome,
+        Option<ShadowAnalysisBody>,
         Option<AnalysisOutputPermit>,
     ),
     /// The interpreted response of one forward, with its correlation status.
@@ -363,7 +374,7 @@ fn account_durable_event_drop(counters: &ContextCounters, analysis_enabled: bool
                 dropped_context_reason(observation.context.as_ref()),
             );
         }
-        RunEvent::ContextAnalysis(forward, outcome, analysis_permit) => {
+        RunEvent::ContextAnalysis(forward, outcome, _shadow_body, analysis_permit) => {
             drop(analysis_permit);
             counters.ensure_seen(forward);
             counters.dropped(forward, dropped_context_reason(Some(&outcome)));
@@ -387,6 +398,7 @@ struct ContextIngestionJob {
     attempt_id: AttemptId,
     inference_operation_id: OperationId,
     analysis: ContextAnalysisResult,
+    shadow_body: Option<ShadowAnalysisBody>,
     analysis_permit: Option<AnalysisOutputPermit>,
     provider_input_tokens: Option<u64>,
     provider_usage_comparable: bool,
@@ -479,6 +491,7 @@ struct ContextCoverage {
 struct ContextAnalysisInput {
     forward: ForwardId,
     outcome: ContextAnalysisOutcome,
+    shadow_body: Option<ShadowAnalysisBody>,
     analysis_permit: Option<AnalysisOutputPermit>,
 }
 struct ContextFailureInput<'context> {
@@ -490,6 +503,7 @@ struct ContextFailureInput<'context> {
 struct EnqueueContextInput<'receipt> {
     receipt: &'receipt ContextReceipt,
     outcome: ContextAnalysisOutcome,
+    shadow_body: Option<ShadowAnalysisBody>,
     analysis_permit: Option<AnalysisOutputPermit>,
 }
 
@@ -1337,6 +1351,7 @@ impl ProviderObservationSink for RecorderSink {
         match self.offer_durable(RunEvent::ContextAnalysis(
             observation.forward,
             observation.outcome,
+            observation.shadow_body,
             permit,
         )) {
             Ok(()) => Ok(()),
@@ -1393,6 +1408,7 @@ struct ForwardState {
     request: Option<PendingObservation>,
     response: Option<ResponseObservation>,
     context: Option<ContextAnalysisOutcome>,
+    shadow_body: Option<ShadowAnalysisBody>,
     context_analysis_permit: Option<AnalysisOutputPermit>,
     status_code: Option<u16>,
     transport_failure: Option<TransportFailure>,
@@ -1432,6 +1448,7 @@ impl ForwardState {
         let status_code = self.status_code;
         let response = self.response.take();
         let context = self.context.take();
+        let shadow_body = self.shadow_body.take();
         let context_analysis_permit = self.context_analysis_permit.take();
         let transport_failure = self.transport_failure.take();
         let orphaned_semantic =
@@ -1442,6 +1459,7 @@ impl ForwardState {
                 pending,
                 response,
                 context,
+                shadow_body,
                 analysis_permit: context_analysis_permit,
                 status_code,
                 transport_failure,
@@ -1468,6 +1486,7 @@ struct SemanticRecord {
     pending: PendingObservation,
     response: Option<ResponseObservation>,
     context: Option<ContextAnalysisOutcome>,
+    shadow_body: Option<ShadowAnalysisBody>,
     analysis_permit: Option<AnalysisOutputPermit>,
     status_code: Option<u16>,
     transport_failure: Option<TransportFailure>,
@@ -1525,10 +1544,11 @@ impl RunRecorder {
                 RunEvent::RequestContext(observation) => {
                     self.request_context(*observation).await;
                 }
-                RunEvent::ContextAnalysis(forward, outcome, analysis_permit) => {
+                RunEvent::ContextAnalysis(forward, outcome, shadow_body, analysis_permit) => {
                     self.context_analysis(ContextAnalysisInput {
                         forward,
                         outcome,
+                        shadow_body,
                         analysis_permit,
                     })
                     .await;
@@ -1757,6 +1777,7 @@ impl RunRecorder {
         let ContextAnalysisInput {
             forward,
             outcome,
+            shadow_body,
             analysis_permit,
         } = input;
         if self.analysis_enabled {
@@ -1770,6 +1791,7 @@ impl RunRecorder {
             self.enqueue_context(EnqueueContextInput {
                 receipt: &receipt,
                 outcome,
+                shadow_body,
                 analysis_permit,
             });
             return;
@@ -1798,6 +1820,7 @@ impl RunRecorder {
             return;
         }
         state.context = Some(outcome);
+        state.shadow_body = shadow_body;
         state.context_analysis_permit = analysis_permit;
         if !state.is_ready_to_settle() {
             return;
@@ -2093,6 +2116,7 @@ impl RunRecorder {
         let Some((
             observation,
             context,
+            shadow_body,
             analysis_permit,
             provider_input,
             provider_usage_comparable,
@@ -2144,6 +2168,7 @@ impl RunRecorder {
             Some(outcome) => self.enqueue_context(EnqueueContextInput {
                 receipt: &receipt,
                 outcome,
+                shadow_body,
                 analysis_permit,
             }),
             None if self.analysis_enabled => {
@@ -2194,6 +2219,7 @@ impl RunRecorder {
         let EnqueueContextInput {
             receipt,
             outcome,
+            shadow_body,
             analysis_permit,
         } = input;
         match outcome {
@@ -2204,6 +2230,7 @@ impl RunRecorder {
                     attempt_id: receipt.attempt_id,
                     inference_operation_id: receipt.inference_operation_id,
                     analysis,
+                    shadow_body,
                     analysis_permit,
                     provider_input_tokens: receipt.provider_input_tokens,
                     provider_usage_comparable: receipt.provider_usage_comparable,
@@ -2266,6 +2293,407 @@ struct PreviousContextSnapshot {
     status: ContextAnalysisStatus,
 }
 
+const SHADOW_QUEUE_ITEMS: usize = 8;
+const SHADOW_QUEUE_BYTES: u64 = 16 * 1024 * 1024;
+
+#[derive(Debug)]
+struct ShadowByteBudget {
+    used: AtomicU64,
+    maximum: u64,
+}
+
+impl ShadowByteBudget {
+    const fn new(maximum: u64) -> Self {
+        Self {
+            used: AtomicU64::new(0),
+            maximum,
+        }
+    }
+
+    fn try_acquire(self: &Arc<Self>, bytes: u64) -> Option<ShadowBytePermit> {
+        let mut observed = self.used.load(Ordering::Relaxed);
+        loop {
+            let next = observed.checked_add(bytes)?;
+            if next > self.maximum {
+                return None;
+            }
+            match self.used.compare_exchange_weak(
+                observed,
+                next,
+                Ordering::AcqRel,
+                Ordering::Relaxed,
+            ) {
+                Ok(_) => {
+                    return Some(ShadowBytePermit {
+                        budget: Arc::clone(self),
+                        bytes,
+                    });
+                }
+                Err(actual) => observed = actual,
+            }
+        }
+    }
+}
+
+#[derive(Debug)]
+struct ShadowBytePermit {
+    budget: Arc<ShadowByteBudget>,
+    bytes: u64,
+}
+
+impl Drop for ShadowBytePermit {
+    fn drop(&mut self) {
+        let previous = self.budget.used.fetch_sub(self.bytes, Ordering::AcqRel);
+        debug_assert!(previous >= self.bytes, "shadow byte accounting underflow");
+    }
+}
+
+#[derive(Debug, Default)]
+struct ShadowCounters {
+    drops: AtomicU64,
+    queue_full_drops: AtomicU64,
+    byte_budget_drops: AtomicU64,
+    work_budget_drops: AtomicU64,
+    worker_closed_drops: AtomicU64,
+    persistence_drops: AtomicU64,
+    recovery_failures: AtomicU64,
+    determinism_failures: AtomicU64,
+}
+
+#[derive(Clone, Copy, Debug)]
+enum ShadowDropReason {
+    QueueFull,
+    ByteBudget,
+    WorkBudget,
+    WorkerClosed,
+    Persistence,
+}
+
+impl ShadowCounters {
+    fn record_drop(&self, reason: ShadowDropReason) {
+        let _total = self.drops.fetch_add(1, Ordering::Relaxed);
+        let counter = match reason {
+            ShadowDropReason::QueueFull => &self.queue_full_drops,
+            ShadowDropReason::ByteBudget => &self.byte_budget_drops,
+            ShadowDropReason::WorkBudget => &self.work_budget_drops,
+            ShadowDropReason::WorkerClosed => &self.worker_closed_drops,
+            ShadowDropReason::Persistence => &self.persistence_drops,
+        };
+        let _reason_count = counter.fetch_add(1, Ordering::Relaxed);
+    }
+}
+
+#[derive(Debug)]
+struct ShadowJob {
+    snapshot_id: ContextSnapshotId,
+    analysis: ContextAnalysisResult,
+    accepted_block_count: u64,
+    body: ShadowAnalysisBody,
+    _byte_permit: ShadowBytePermit,
+}
+
+struct ShadowCompressionWorker {
+    config: Config,
+    experiment_id: String,
+    limits: CompressionLimits,
+    context_limits: ContextAnalysisLimits,
+    counters: Arc<ShadowCounters>,
+}
+
+impl ShadowCompressionWorker {
+    async fn run(self, mut jobs: tokio::sync::mpsc::Receiver<ShadowJob>) -> Result<(), String> {
+        self.record_manifest("running", None).await?;
+        while let Some(job) = jobs.recv().await {
+            self.record_job(job).await;
+        }
+        self.flush_counters().await;
+        self.record_manifest("completed", current_timestamp().ok())
+            .await
+    }
+
+    async fn record_manifest(
+        &self,
+        status: &str,
+        completed_at: Option<String>,
+    ) -> Result<(), String> {
+        let compressor_set_json = serde_json::to_string(&[
+            ("json.noop", 1_u32),
+            ("json.minify", 1),
+            ("json.tabular", 1),
+            ("json.repeated_subtree", 1),
+            ("text.noop", 1),
+            ("text.repeated_line", 1),
+            ("text.repeated_run", 1),
+        ])
+        .map_err(|error| error.to_string())?;
+        let limits_json = serde_json::to_string(&self.limits).map_err(|error| error.to_string())?;
+        let response = control(
+            &self.config,
+            ControlRequest::RecordShadowExperiment {
+                manifest: ShadowExperimentManifest::new(
+                    self.experiment_id.clone(),
+                    compressor_set_json,
+                    option_env!("TRACEPRESS_BUILD_SHA").map(str::to_owned),
+                    limits_json,
+                    status.to_owned(),
+                    current_timestamp()?,
+                    completed_at,
+                ),
+            },
+        )
+        .await?;
+        match response {
+            ControlResponse::Ok { .. } => Ok(()),
+            _ => Err("daemon rejected shadow experiment manifest".to_owned()),
+        }
+    }
+
+    async fn record_job(&self, job: ShadowJob) {
+        let candidates = evaluate_shadow_job(
+            &job,
+            &self.experiment_id,
+            self.limits,
+            self.context_limits,
+            &self.counters,
+        );
+        if candidates.is_empty() {
+            return;
+        }
+        for chunk in candidates.chunks(16) {
+            if control(
+                &self.config,
+                ControlRequest::RecordShadowCandidates {
+                    candidates: chunk.to_vec(),
+                },
+            )
+            .await
+            .is_err()
+            {
+                self.counters.record_drop(ShadowDropReason::Persistence);
+            }
+        }
+    }
+
+    async fn flush_counters(&self) {
+        let _ = control(
+            &self.config,
+            ControlRequest::RecordShadowCounters {
+                counters: ShadowExperimentCounters::new(
+                    self.experiment_id.clone(),
+                    0,
+                    self.counters.drops.swap(0, Ordering::AcqRel),
+                    self.counters.queue_full_drops.swap(0, Ordering::AcqRel),
+                    self.counters.byte_budget_drops.swap(0, Ordering::AcqRel),
+                    self.counters.work_budget_drops.swap(0, Ordering::AcqRel),
+                    self.counters.worker_closed_drops.swap(0, Ordering::AcqRel),
+                    self.counters.persistence_drops.swap(0, Ordering::AcqRel),
+                    self.counters.recovery_failures.swap(0, Ordering::AcqRel),
+                    self.counters.determinism_failures.swap(0, Ordering::AcqRel),
+                ),
+            },
+        )
+        .await;
+    }
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "shadow inputs keep independent bounds and accounting explicit"
+)]
+fn evaluate_shadow_job(
+    job: &ShadowJob,
+    experiment_id: &str,
+    limits: CompressionLimits,
+    context_limits: ContextAnalysisLimits,
+    counters: &ShadowCounters,
+) -> Vec<ShadowCandidateRecord> {
+    let accepted = usize::try_from(job.accepted_block_count)
+        .unwrap_or(job.analysis.blocks.len())
+        .min(job.analysis.blocks.len());
+    let generator = UuidV7Generator::new();
+    let estimator = StructuralHeuristicEstimator::new();
+    let json_compressors: [&dyn ShadowCompressor; 4] =
+        [&JsonNoop, &JsonMinify, &JsonTabular, &JsonRepeatedSubtree];
+    let text_compressors: [&dyn ShadowCompressor; 3] =
+        [&TextNoop, &TextRepeatedLine, &TextRepeatedRun];
+    let mut records = Vec::new();
+    let mut remaining_work = limits.max_shadow_work_units;
+    'blocks: for block in &job.analysis.blocks[..accepted] {
+        let metadata = shadow_block_metadata(block, job.body.len());
+        let compressors: &[&dyn ShadowCompressor] = match metadata.detected_kind {
+            CompressionDetectedKind::Json if metadata.is_tool_result_json() => &json_compressors,
+            CompressionDetectedKind::PlainText if metadata.is_tool_result_plain_text() => {
+                &text_compressors
+            }
+            _ => continue,
+        };
+        let Some(content) = shadow_block_content(job.body.as_ref(), block) else {
+            continue;
+        };
+        for compressor in compressors
+            .iter()
+            .take(usize::try_from(limits.max_candidates_per_block).unwrap_or(usize::MAX))
+        {
+            let work = u64::try_from(content.len()).unwrap_or(u64::MAX).max(1);
+            let Some(remaining) = remaining_work.checked_sub(work) else {
+                counters.record_drop(ShadowDropReason::WorkBudget);
+                break 'blocks;
+            };
+            remaining_work = remaining;
+            let candidate =
+                evaluate_with_estimator(*compressor, metadata, &content, &limits, |bytes| {
+                    estimator
+                        .estimate(&EstimationRequest {
+                            model: None,
+                            content: bytes,
+                            limits: context_limits,
+                        })
+                        .tokens()
+                });
+            let metrics = candidate.metrics();
+            if matches!(metrics.status, CandidateStatus::RecoveryFailed) {
+                let _counted = counters.recovery_failures.fetch_add(1, Ordering::Relaxed);
+            }
+            if !metrics.deterministic && metrics.candidate_fingerprint.is_some() {
+                let _counted = counters
+                    .determinism_failures
+                    .fetch_add(1, Ordering::Relaxed);
+            }
+            records.push(shadow_candidate_record(
+                &generator,
+                experiment_id,
+                job.snapshot_id,
+                u64::from(block.ordinal),
+                metrics,
+            ));
+        }
+    }
+    records
+}
+
+fn shadow_block_content(
+    body: &[u8],
+    block: &tracepress_context::ContextBlockDraft,
+) -> Option<Vec<u8>> {
+    let [raw_start, raw_end] = block
+        .content_span
+        .unwrap_or([block.locator.raw_value_start, block.locator.raw_value_end]);
+    let start = usize::try_from(raw_start).ok()?;
+    let end = usize::try_from(raw_end).ok()?;
+    let raw = body.get(start..end)?;
+    if raw.first() == Some(&b'"') {
+        serde_json::from_slice::<String>(raw)
+            .ok()
+            .map(String::into_bytes)
+    } else {
+        Some(raw.to_vec())
+    }
+}
+
+fn shadow_block_metadata(
+    block: &tracepress_context::ContextBlockDraft,
+    request_analysis_bytes: usize,
+) -> BlockMetadata {
+    let origin = match block.origin {
+        ContextOrigin::ToolGenerated => CompressionBlockOrigin::ToolGenerated,
+        ContextOrigin::HumanAuthored => CompressionBlockOrigin::HumanAuthored,
+        ContextOrigin::AgentGenerated => CompressionBlockOrigin::AgentGenerated,
+        ContextOrigin::ToolSchema => CompressionBlockOrigin::ToolSchema,
+        ContextOrigin::ProviderManaged => CompressionBlockOrigin::ProviderManaged,
+        _ => CompressionBlockOrigin::Other,
+    };
+    let kind = if block.kind == ContextBlockKind::ToolResult {
+        CompressionBlockKind::ToolResult
+    } else {
+        CompressionBlockKind::Other
+    };
+    let detected_kind = match block.detection_result.as_ref().map(|value| value.kind) {
+        Some(DetectedContentKind::Json) => CompressionDetectedKind::Json,
+        Some(DetectedContentKind::PlainText) => CompressionDetectedKind::PlainText,
+        Some(DetectedContentKind::Unknown) | None => CompressionDetectedKind::Unknown,
+        _ => CompressionDetectedKind::Other,
+    };
+    BlockMetadata::new(
+        origin,
+        kind,
+        detected_kind,
+        block.token_estimate.as_ref().map(|value| value.tokens),
+        block.locator.raw_value_start,
+        u64::try_from(request_analysis_bytes).unwrap_or(u64::MAX),
+        None,
+        None,
+    )
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "candidate association metadata remains explicit"
+)]
+fn shadow_candidate_record(
+    generator: &UuidV7Generator,
+    experiment_id: &str,
+    snapshot_id: ContextSnapshotId,
+    block_ordinal: u64,
+    metrics: &CandidateMetrics,
+) -> ShadowCandidateRecord {
+    ShadowCandidateRecord {
+        candidate_id: CompressionCandidateId::generate(generator),
+        experiment_id: experiment_id.to_owned(),
+        snapshot_id,
+        block_ordinal,
+        compressor_id: metrics.compressor_id.clone(),
+        compressor_version: metrics.compressor_version.to_string(),
+        status: storage_shadow_status(metrics.status),
+        input_bytes: metrics.input_bytes,
+        output_bytes: metrics.output_bytes,
+        bytes_delta: metrics
+            .bytes_delta
+            .and_then(|value| u64::try_from(value).ok()),
+        input_estimated_tokens: metrics.input_estimated_tokens,
+        output_estimated_tokens: metrics.output_estimated_tokens,
+        estimated_token_delta: metrics
+            .estimated_token_delta
+            .and_then(|value| u64::try_from(value).ok()),
+        processing_us: metrics.processing_us,
+        reversible: metrics.reversible,
+        recovery_verified: metrics.recovery_verified,
+        deterministic: metrics.deterministic,
+        original_fingerprint: metrics.original_fingerprint.to_vec().into_boxed_slice(),
+        candidate_fingerprint: metrics
+            .candidate_fingerprint
+            .map(|value| value.to_vec().into_boxed_slice()),
+        recovered_fingerprint: metrics
+            .recovery_verified
+            .then(|| metrics.original_fingerprint.to_vec().into_boxed_slice()),
+        first_modified_offset: metrics.first_modified_offset,
+        preserved_prefix_bytes: metrics.preserved_prefix_bytes,
+        preserved_prefix_ratio_basis_points: metrics.preserved_prefix_ratio_basis_points,
+        cache_risk: storage_cache_risk(metrics.cache_risk),
+        verified_at_us: current_timestamp_us().ok(),
+    }
+}
+
+const fn storage_shadow_status(status: CandidateStatus) -> ShadowCandidateStatus {
+    match status {
+        CandidateStatus::Applicable => ShadowCandidateStatus::Applicable,
+        CandidateStatus::NotApplicable => ShadowCandidateStatus::NotApplicable,
+        CandidateStatus::NoImprovement => ShadowCandidateStatus::NoImprovement,
+        CandidateStatus::ResourceLimit => ShadowCandidateStatus::ResourceLimit,
+        CandidateStatus::InvalidInput => ShadowCandidateStatus::InvalidInput,
+        CandidateStatus::RecoveryFailed => ShadowCandidateStatus::RecoveryFailed,
+        _ => ShadowCandidateStatus::InternalError,
+    }
+}
+
+const fn storage_cache_risk(risk: CompressionCacheRisk) -> ShadowCacheRisk {
+    match risk {
+        CompressionCacheRisk::Low => ShadowCacheRisk::Low,
+        CompressionCacheRisk::Medium => ShadowCacheRisk::Medium,
+        CompressionCacheRisk::High => ShadowCacheRisk::High,
+        _ => ShadowCacheRisk::Unknown,
+    }
+}
+
 /// Owns every potentially slow context IPC operation.
 ///
 /// The provider recorder never waits on this worker: it only admits a compact job with the
@@ -2277,6 +2705,9 @@ struct ContextIngestionWorker {
     context_analysis_limits: ContextAnalysisLimits,
     previous_context: Option<PreviousContextSnapshot>,
     counters: Arc<ContextCounters>,
+    shadow_sender: Option<tokio::sync::mpsc::Sender<ShadowJob>>,
+    shadow_budget: Arc<ShadowByteBudget>,
+    shadow_counters: Arc<ShadowCounters>,
 }
 
 impl ContextIngestionWorker {
@@ -2468,6 +2899,7 @@ impl ContextIngestionWorker {
             attempt_id,
             inference_operation_id,
             analysis,
+            shadow_body,
             analysis_permit,
             provider_input_tokens,
             provider_usage_comparable,
@@ -2505,19 +2937,61 @@ impl ContextIngestionWorker {
                 return;
             }
         };
-        self.finalize_context(ContextFinalizationInput {
-            forward,
+        let finalized = self
+            .finalize_context(ContextFinalizationInput {
+                forward,
+                snapshot_id,
+                started_at_us,
+                attempt_id,
+                analysis: &analysis,
+                provider_input_tokens,
+                provider_usage_comparable,
+                correlation,
+                status,
+                accepted_block_count,
+            })
+            .await;
+        if finalized {
+            self.enqueue_shadow(snapshot_id, analysis, accepted_block_count, shadow_body);
+        }
+    }
+
+    #[allow(
+        clippy::too_many_arguments,
+        reason = "the handoff retains explicit snapshot association"
+    )]
+    fn enqueue_shadow(
+        &self,
+        snapshot_id: ContextSnapshotId,
+        analysis: ContextAnalysisResult,
+        accepted_block_count: u64,
+        body: Option<ShadowAnalysisBody>,
+    ) {
+        let (Some(sender), Some(body)) = (&self.shadow_sender, body) else {
+            return;
+        };
+        let bytes = u64::try_from(body.len()).unwrap_or(u64::MAX);
+        let Some(byte_permit) = self.shadow_budget.try_acquire(bytes) else {
+            self.shadow_counters
+                .record_drop(ShadowDropReason::ByteBudget);
+            return;
+        };
+        let job = ShadowJob {
             snapshot_id,
-            started_at_us,
-            attempt_id,
-            analysis: &analysis,
-            provider_input_tokens,
-            provider_usage_comparable,
-            correlation,
-            status,
+            analysis,
             accepted_block_count,
-        })
-        .await;
+            body,
+            _byte_permit: byte_permit,
+        };
+        match sender.try_send(job) {
+            Ok(()) => {}
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_job)) => self
+                .shadow_counters
+                .record_drop(ShadowDropReason::QueueFull),
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_job)) => self
+                .shadow_counters
+                .record_drop(ShadowDropReason::WorkerClosed),
+        }
     }
 
     #[allow(
@@ -2647,7 +3121,7 @@ impl ContextIngestionWorker {
         .ok()?;
         Some((current_blocks, finalize, coverage))
     }
-    async fn finalize_context(&mut self, input: ContextFinalizationInput<'_>) {
+    async fn finalize_context(&mut self, input: ContextFinalizationInput<'_>) -> bool {
         let forward = input.forward;
         let snapshot_id = input.snapshot_id;
         let status = input.status;
@@ -2656,7 +3130,7 @@ impl ContextIngestionWorker {
                 .await;
             self.counters
                 .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
-            return;
+            return false;
         };
         let finalized = control(
             &self.config,
@@ -2702,6 +3176,7 @@ impl ContextIngestionWorker {
                     blocks: current_blocks,
                     status,
                 });
+                true
             }
             Ok(
                 ControlResponse::Error { .. }
@@ -2713,6 +3188,7 @@ impl ContextIngestionWorker {
                     .await;
                 self.counters
                     .dropped(forward, ContextAnalysisDropReason::CorrelationDegraded);
+                false
             }
         }
     }
@@ -2751,6 +3227,7 @@ async fn flush_context_drops(config: &Config, session_id: SessionId, counters: &
 type ObservationRecordParts = (
     ObservationRecord,
     Option<ContextAnalysisOutcome>,
+    Option<ShadowAnalysisBody>,
     Option<AnalysisOutputPermit>,
     Option<u64>,
     bool,
@@ -2765,6 +3242,7 @@ fn observation_record(
         pending,
         response,
         context,
+        shadow_body,
         status_code,
         transport_failure,
         analysis_permit,
@@ -2821,6 +3299,7 @@ fn observation_record(
     Some((
         record,
         context,
+        shadow_body,
         analysis_permit,
         provider_input_tokens,
         provider_usage_comparable,
@@ -3114,6 +3593,8 @@ struct RunRecording {
     context_queue_items: usize,
     context_analysis_limits: ContextAnalysisLimits,
     analysis_enabled: bool,
+    shadow_enabled: bool,
+    shadow_experiment_id: String,
     previous_context: Option<PreviousContextSnapshot>,
 }
 /// The recorder of one run: its proxy, its workers, and the counters it publishes.
@@ -3122,6 +3603,7 @@ struct SpawnedRecorder {
     recorder_task: tokio::task::JoinHandle<Result<(), String>>,
     transport_task: tokio::task::JoinHandle<()>,
     context_task: tokio::task::JoinHandle<Result<(), String>>,
+    shadow_task: Option<tokio::task::JoinHandle<Result<(), String>>>,
     /// Correlation accounting the run reports, readable whether or not the workers finished.
     counters: Arc<CorrelationCounters>,
     /// Context analyses rejected by the bounded context queue.
@@ -3129,6 +3611,10 @@ struct SpawnedRecorder {
 }
 
 /// Installs both auxiliary sinks and starts the provider and context workers.
+#[allow(
+    clippy::too_many_lines,
+    reason = "worker ownership and channel closure ordering stay together"
+)]
 fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRecorder {
     let RunRecording {
         config,
@@ -3137,6 +3623,8 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
         context_queue_items,
         context_analysis_limits,
         analysis_enabled,
+        shadow_enabled,
+        shadow_experiment_id,
         previous_context,
     } = recording;
     let (sender, receiver) = tokio::sync::mpsc::channel(RECORDER_QUEUE_ITEMS);
@@ -3144,9 +3632,30 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
         tokio::sync::mpsc::channel(TRANSPORT_DISPATCH_QUEUE_ITEMS);
     let context_queue_items = context_ingestion_queue_capacity(context_queue_items);
     let (context_sender, context_receiver) = tokio::sync::mpsc::channel(context_queue_items);
+    let (shadow_sender, shadow_receiver) = tokio::sync::mpsc::channel(SHADOW_QUEUE_ITEMS);
     let counters = Arc::new(CorrelationCounters::default());
     let context_counters = Arc::new(ContextCounters::default());
+    let shadow_counters = Arc::new(ShadowCounters::default());
+    let shadow_budget = Arc::new(ShadowByteBudget::new(SHADOW_QUEUE_BYTES));
     let analysis_slots = AnalysisOutputSlots::new(context_queue_items);
+    let shadow_task = shadow_enabled.then(|| {
+        tokio::spawn(
+            ShadowCompressionWorker {
+                config: config.clone(),
+                experiment_id: shadow_experiment_id,
+                limits: CompressionLimits::default(),
+                context_limits: context_analysis_limits,
+                counters: Arc::clone(&shadow_counters),
+            }
+            .run(shadow_receiver),
+        )
+    });
+    let shadow_sender = if shadow_enabled {
+        Some(shadow_sender)
+    } else {
+        drop(shadow_sender);
+        None
+    };
     let context_task = tokio::spawn(
         ContextIngestionWorker {
             config: config.clone(),
@@ -3154,6 +3663,9 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
             context_analysis_limits,
             previous_context,
             counters: Arc::clone(&context_counters),
+            shadow_sender,
+            shadow_budget,
+            shadow_counters,
         }
         .run(context_receiver),
     );
@@ -3202,6 +3714,7 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
         recorder_task,
         transport_task,
         context_task,
+        shadow_task,
         counters,
         context_counters,
     }
@@ -3530,6 +4043,34 @@ fn context_analysis_mode() -> Result<ContextAnalysisMode, String> {
     }
 }
 
+fn shadow_compression_enabled() -> Result<bool, String> {
+    let value = std::env::var("TRACEPRESS_SHADOW_COMPRESSION")
+        .unwrap_or_else(|_| "off".to_owned())
+        .to_ascii_lowercase();
+    match value.as_str() {
+        "off" => Ok(false),
+        "on" => Ok(true),
+        _ => Err(format!(
+            "TRACEPRESS_SHADOW_COMPRESSION must be `off` or `on`, got `{value}`"
+        )),
+    }
+}
+
+fn shadow_experiment_id() -> Result<String, String> {
+    let value = std::env::var("TRACEPRESS_SHADOW_EXPERIMENT_ID")
+        .unwrap_or_else(|_| "shadow-pilot-001".to_owned());
+    let valid = !value.is_empty()
+        && value.len() <= 128
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'_' | b'.'));
+    if valid {
+        Ok(value)
+    } else {
+        Err("TRACEPRESS_SHADOW_EXPERIMENT_ID must be 1-128 ASCII identifier characters".to_owned())
+    }
+}
+
 fn is_codex_agent(agent: &str) -> bool {
     std::path::Path::new(agent)
         .file_name()
@@ -3652,6 +4193,11 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
     let endpoint = provider_endpoint(transport)?;
     let resource_limits = proxy_resource_limits(8 * 1024 * 1024, 32 * 1024 * 1024)?;
     let analysis_mode = context_analysis_mode()?;
+    let shadow_enabled = shadow_compression_enabled()?;
+    if shadow_enabled && !matches!(analysis_mode, ContextAnalysisMode::Shadow) {
+        return Err("shadow compression requires TRACEPRESS_CONTEXT_ANALYSIS=shadow".to_owned());
+    }
+    let shadow_experiment_id = shadow_experiment_id()?;
     let context_queue_items = usize::try_from(resource_limits.max_ipc_queue_items.get())
         .map_err(|error| format!("context queue capacity does not fit usize: {error}"))?;
     let context_analysis_limits = ContextAnalysisLimits::from_resource_limits(&resource_limits)
@@ -3701,6 +4247,7 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         mut recorder_task,
         mut transport_task,
         mut context_task,
+        mut shadow_task,
         counters,
         context_counters,
     } = spawn_recorder(
@@ -3711,6 +4258,8 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
             context_queue_items,
             context_analysis_limits,
             analysis_enabled: matches!(analysis_mode, ContextAnalysisMode::Shadow),
+            shadow_enabled,
+            shadow_experiment_id,
             previous_context: None,
         },
         proxy,
@@ -3760,7 +4309,13 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         // cannot observe end-of-run and wait for more events forever.
         drop(background_proxy);
         let drain_result =
-            drain_recorders(&mut recorder_task, &mut transport_task, &mut context_task).await;
+            drain_recorders(
+                &mut recorder_task,
+                &mut transport_task,
+                &mut context_task,
+                &mut shadow_task,
+            )
+            .await;
         // Emit the machine-readable scheduler snapshot only after recorder/context drain. The
         // collector publishes it only after the child exits, binding it to this run identity.
         println!("{}", scheduler_metrics_line(&deferred_metrics));
@@ -3777,9 +4332,15 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
             transport_task.abort();
             recorder_task.abort();
             context_task.abort();
+            if let Some(task) = shadow_task.as_mut() {
+                task.abort();
+            }
             let _ = (&mut transport_task).await;
             let _ = (&mut recorder_task).await;
             let _ = (&mut context_task).await;
+            if let Some(task) = shadow_task.as_mut() {
+                let _ = task.await;
+            }
             (
                 Err(format!(
                     "provider observer/recorder drain exceeded {}s",
@@ -3831,10 +4392,15 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "each independently owned worker is drained explicitly"
+)]
 async fn drain_recorders(
     recorder_task: &mut tokio::task::JoinHandle<Result<(), String>>,
     transport_task: &mut tokio::task::JoinHandle<()>,
     context_task: &mut tokio::task::JoinHandle<Result<(), String>>,
+    shadow_task: &mut Option<tokio::task::JoinHandle<Result<(), String>>>,
 ) -> Result<(), String> {
     let recorder_result = (&mut *recorder_task)
         .await
@@ -3847,7 +4413,14 @@ async fn drain_recorders(
         .await
         .map_err(|error| format!("context worker failed: {error}"))
         .and_then(|result| result);
-    recorder_result.and(context_result)
+    let shadow_result = if let Some(task) = shadow_task.as_mut() {
+        task.await
+            .map_err(|error| format!("shadow worker failed: {error}"))
+            .and_then(|result| result)
+    } else {
+        Ok(())
+    };
+    recorder_result.and(context_result).and(shadow_result)
 }
 
 fn current_timestamp() -> Result<String, String> {
@@ -4627,6 +5200,7 @@ mod tests {
             .context_analysis(ContextAnalysisInput {
                 forward,
                 outcome: ContextAnalysisOutcome::Dropped(ContextAnalysisDropReason::Malformed),
+                shadow_body: None,
                 analysis_permit: None,
             })
             .await;

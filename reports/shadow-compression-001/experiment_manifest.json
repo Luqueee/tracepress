@@ -1,0 +1,57 @@
+{
+  "report_id": "TRACEPRESS_SHADOW_PILOT_001_N10",
+  "measurement_context": {
+    "cohort_kind": "naturalistic",
+    "cohort_label": "n10",
+    "codex_version": "0.154.0",
+    "model": "gpt-5.6-luna",
+    "reasoning_effort": "xhigh",
+    "transport": "chatgpt_codex_subscription",
+    "phase_4_0_base": "93ffe0c9c32a0f9a78027c6159e70236b2e6a598"
+  },
+  "quality_gates": {
+    "shadow_pilot_n10": "completed_degraded",
+    "compaction_calibration": "completed_controlled_cohort",
+    "aa_infrastructure": "completed_smoke",
+    "host_rss_cpu_comparison": "completed_observational",
+    "naturalistic_workload_distributions": "completed",
+    "reason_specific_shadow_drop_accounting": "completed",
+    "post_hardening_confirmation_smoke": "completed"
+  },
+  "included_session_ids": [
+    "01a09b73-d557-7860-8d43-26634ddfbf8e",
+    "01a09b7a-fe83-7ed2-9920-f4f75521edaf",
+    "01a09b7d-b060-7f01-9e18-e27ebad497fd",
+    "01a09b7f-83c7-78e0-a50e-d0a509c68e33",
+    "01a09b81-5fd5-70e1-bf99-33b0340989bc",
+    "01a09b83-4894-7f20-aadf-81d9f969eeee",
+    "01a09b84-255e-7893-8b39-69ef090700f7",
+    "01a09b8a-1148-70f2-80a8-a4540805ed99",
+    "01a09b8d-dc58-7642-aa05-12045f1c6d9a",
+    "01a09b8f-b2ac-7b00-bdd4-efa5782ecdea"
+  ],
+  "excluded_session_ids": [
+    "01a09b86-c8cf-7953-a2d8-722a63d9da22",
+    "01a09b89-ed11-7a02-a732-e22cf8f3ddc7"
+  ],
+  "session_workloads": {
+    "01a09b73-d557-7860-8d43-26634ddfbf8e": "repo_exploration",
+    "01a09b7a-fe83-7ed2-9920-f4f75521edaf": "large_search",
+    "01a09b7d-b060-7f01-9e18-e27ebad497fd": "bug_diagnosis",
+    "01a09b7f-83c7-78e0-a50e-d0a509c68e33": "refactor",
+    "01a09b81-5fd5-70e1-bf99-33b0340989bc": "bug_fix",
+    "01a09b83-4894-7f20-aadf-81d9f969eeee": "test_debugging",
+    "01a09b84-255e-7893-8b39-69ef090700f7": "feature_implementation",
+    "01a09b8a-1148-70f2-80a8-a4540805ed99": "code_review",
+    "01a09b8d-dc58-7642-aa05-12045f1c6d9a": "dependency_investigation",
+    "01a09b8f-b2ac-7b00-bdd4-efa5782ecdea": "compaction_investigation"
+  },
+  "attempt_notes": [
+    "The first valid session saturated the bounded shadow path and the experiment recorded 15 aggregate shadow drops.",
+    "One code-review attempt was interrupted after its nested review workflow stalled and is excluded from N10.",
+    "One CLI argument-error attempt created no provider requests and is excluded from N10.",
+    "Aggregate experiment counters include excluded attempts because Phase 4.1 does not persist per-session shadow-drop attribution."
+  ],
+  "recommended_active_candidate": null,
+  "recommendation_rationale": null
+}

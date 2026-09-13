@@ -78,9 +78,15 @@ tbody tr:hover td { background: var(--surface-hover); color: var(--text-primary)
 th.numeric, td.numeric { text-align: right; font-variant-numeric: tabular-nums; }
 .quality-banner { display: flex; align-items: flex-start; gap: 10px; margin-bottom: 12px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--success) 45%, var(--border)); background: color-mix(in srgb, var(--success) 6%, var(--surface-1)); }
 .quality-banner.degraded { border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); background: color-mix(in srgb, var(--warning) 7%, var(--surface-1)); }
+.metric-inline { display: flex; flex-wrap: wrap; gap: 8px 18px; }
+.compact-notice { padding: 10px 12px; border: 1px dashed var(--border-strong); color: var(--text-secondary); }
 .bar-list { display: grid; gap: 10px; }
 .bar-row { display: grid; grid-template-columns: 110px minmax(80px, 1fr) 64px; align-items: center; gap: 10px; }
 .bar-track { height: 7px; background: var(--surface-2); border: 1px solid var(--border); }
+.bar-track[value] { width: 100%; appearance: none; overflow: hidden; }
+.bar-track[value]::-webkit-progress-bar { background: var(--surface-2); }
+.bar-track[value]::-webkit-progress-value { background: var(--accent); }
+.bar-track[value]::-moz-progress-bar { background: var(--accent); }
 .bar-track.unavailable { border-style: dashed; }
 .bar-gauge { display: block; width: 100%; height: 100%; }
 .bar-fill { fill: var(--accent); }

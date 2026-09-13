@@ -44,7 +44,7 @@ cd crates/tracepress-dashboard
 dx serve --platform web
 ```
 
-`Dioxus.toml` proxies `/api/` to `http://127.0.0.1:4319/api/`. Dioxus 0.7 discovers `tailwind.css`, compiles it into `assets/tailwind.css`, and watches the Rust/CSS sources. The application also keeps its small token-based base stylesheet local, so it loads no CDN, remote font, script, or telemetry.
+`Dioxus.toml` proxies `/api/` to `http://127.0.0.1:4319/api/`. Dioxus 0.7 discovers `tailwind.css`, compiles it into `assets/tailwind.css`, and watches the Rust/CSS sources. The application also keeps its small token-based base stylesheet local, so it loads no CDN, remote font, script, or telemetry. The WASM tracing logger reports without console color styles, so Dioxus diagnostics do not trigger inline-style CSP violations.
 
 ## Architecture
 
@@ -96,12 +96,36 @@ GET /api/v1/workloads
 GET /api/v1/baselines
 GET /api/v1/baselines/:id
 GET /api/v1/opportunities
-GET /api/v1/compression/candidates
+GET /api/v1/compression/experiments
+GET /api/v1/compression/experiments/:id
+GET /api/v1/compression/experiments/:id/candidates?limit=50&cursor=...
 ```
 
 Sessions accept `limit`, opaque `cursor`, `model`, `transport`, `status`, `has_compaction`, `from`, `to`, `sort`, and `direction`. Page size is restricted to 1–100. `workload` and `measurement_id` are accepted contract fields, but return no operational matches until a certified operational mapping exists; Observatory does not borrow labels from unrelated reports. Supported sorts are `created_at`, `request_count`, `input_tokens`, `cache_ratio`, `estimated_context_tokens`, and `repetition`.
 
 The baseline/workload/opportunity endpoints read reproducible JSON report artifacts. They do not replace or modify those artifacts, and official convergence status is projected rather than recalculated.
+
+Compression Lab reads migration 0009 metadata from operational SQLite. It shows experiment quality,
+compressor applicability, local byte/token-estimate reduction, recovery, determinism, latency,
+prefix evidence, cache risk, and paginated block metadata. It never returns original or candidate
+content. Workload distributions remain explicitly unavailable until operational sessions carry a
+certified workload mapping.
+
+Generate the reproducible metadata-only experiment report with:
+
+```bash
+python3 scripts/analyze_shadow_compression.py \
+  --db "$TRACEPRESS_DB" \
+  --experiment-id shadow-pilot-001 \
+  --manifest reports/shadow-compression-001/experiment_manifest.json \
+  --output-json reports/shadow-compression-001/shadow_pilot_n10.json \
+  --output-md reports/shadow-compression-001/shadow_pilot_n10.md
+```
+
+The analyzer opens SQLite with URI `mode=ro` plus `PRAGMA query_only`, emits no fingerprints or
+content, and leaves missing estimates as JSON `null`. The manifest is the auditable source for
+workload labels, empirical gate decisions, and the single candidate decision. Passing gates alone
+never causes the analyzer to select a candidate automatically.
 
 Errors have a browser-safe shape:
 
@@ -131,6 +155,6 @@ Release deployment consists of the `tracepress` binary and the Dioxus `public` d
 
 ## Security headers and refresh model
 
-The Axum router applies Content Security Policy, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`. CSP permits only same-origin styles/connections and local data images; dashboard components avoid inline style attributes so `style-src` does not require `unsafe-inline`. Its script policy includes `unsafe-eval` because the verified Dioxus 0.7 WASM bootstrap uses dynamic function construction; the server remains loopback-only and loads no remote scripts. Phase 4.0 uses manual browser refresh; it has no WebSocket, account system, authentication, remote access, analytics, or external telemetry.
+The Axum router applies Content Security Policy, `X-Content-Type-Options: nosniff`, and `Referrer-Policy: no-referrer`. CSP keeps stylesheets on the same origin with `style-src 'self'` and grants `style-src-attr 'unsafe-inline'` narrowly because Dioxus updates runtime style attributes used by SVG chart geometry. This avoids weakening `style-src` for inline style elements. Its script policy includes `unsafe-eval` because the verified Dioxus 0.7 WASM bootstrap uses dynamic function construction; the server remains loopback-only and loads no remote scripts. Phase 4.0 uses manual browser refresh; it has no WebSocket, account system, authentication, remote access, analytics, or external telemetry.
 
 The detailed visual rules and measurement language live in [the Observatory design system](design/observatory-design-system.md).

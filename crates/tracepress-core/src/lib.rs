@@ -28,9 +28,10 @@ pub use content::{ContentKind, ContentObject, ContentObjectError, RawContent};
 pub use content_id::{ContentId, ContentIdParseError};
 pub use finalization::{CommitState, FinalizationError, finalize_inference};
 pub use ids::{
-    AttemptId, BindingId, ContextBlockOccurrenceId, ContextSnapshotId, DecisionId, EvaluationId,
-    EventId, IdParseError, OccurrenceId, OperationId, PolicyAssignmentId, RecoveryId, RequestId,
-    SessionId, ToolCallId, UuidV7Generator, UuidV7Timestamp, UuidV7TimestampError,
+    AttemptId, BindingId, CompressionCandidateId, ContextBlockOccurrenceId, ContextSnapshotId,
+    DecisionId, EvaluationId, EventId, IdParseError, OccurrenceId, OperationId, PolicyAssignmentId,
+    RecoveryId, RequestId, SessionId, ToolCallId, UuidV7Generator, UuidV7Timestamp,
+    UuidV7TimestampError,
 };
 pub use lifecycle::{InferenceStatus, OperationKind, OperationStatus, SessionState, UsageStatus};
 pub use limits::{

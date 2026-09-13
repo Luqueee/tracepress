@@ -46,8 +46,9 @@ use tower_http::{
 };
 use tracepress_dashboard_types::{
     ApiError, ApiErrorResponse, BaselineDetail, BaselineSummary, CompressionCandidateSummary,
-    ContextExplorer, OpportunitySummary, Overview, Page, ProviderRequestSummary, SessionContext,
-    SessionDetail, SessionSummary, UnknownSummary, WorkloadSummary,
+    CompressionExperimentDetail, CompressionExperimentSummary, ContextExplorer, OpportunitySummary,
+    Overview, Page, ProviderRequestSummary, SessionContext, SessionDetail, SessionSummary,
+    UnknownSummary, WorkloadSummary,
 };
 
 /// Default local-only Observatory port.
@@ -205,7 +206,12 @@ pub fn router(database_path: PathBuf, reports_path: PathBuf) -> Router {
         .route("/baselines", get(baselines))
         .route("/baselines/{id}", get(baseline_detail))
         .route("/opportunities", get(opportunities))
-        .route("/compression/candidates", get(compression_candidates))
+        .route("/compression/experiments", get(compression_experiments))
+        .route("/compression/experiments/{id}", get(compression_experiment))
+        .route(
+            "/compression/experiments/{id}/candidates",
+            get(compression_candidates),
+        )
         .route("/health", get(health));
     Router::new()
         .nest("/api/v1", api)
@@ -438,8 +444,46 @@ async fn opportunities(
         .map_err(|_error| ApiFailure::Internal)
 }
 
-async fn compression_candidates() -> Json<Vec<CompressionCandidateSummary>> {
-    Json(Vec::new())
+async fn compression_experiments(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<CompressionExperimentSummary>>, ApiFailure> {
+    db::run(state.database_path, db::compression_experiments)
+        .await
+        .map(Json)
+}
+
+async fn compression_experiment(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+) -> Result<Json<CompressionExperimentDetail>, ApiFailure> {
+    if !is_safe_experiment_id(&id) {
+        return Err(ApiFailure::Invalid("experiment id is invalid"));
+    }
+    db::run(state.database_path, move |connection| {
+        db::compression_experiment(connection, &id)
+    })
+    .await?
+    .map(Json)
+    .ok_or(ApiFailure::NotFound(
+        "compression_experiment_not_found",
+        "Compression experiment was not found",
+    ))
+}
+
+async fn compression_candidates(
+    State(state): State<AppState>,
+    AxumPath(id): AxumPath<String>,
+    Query(query): Query<PageQuery>,
+) -> Result<Json<Page<CompressionCandidateSummary>>, ApiFailure> {
+    if !is_safe_experiment_id(&id) {
+        return Err(ApiFailure::Invalid("experiment id is invalid"));
+    }
+    let (limit, offset) = query.bounds()?;
+    db::run(state.database_path, move |connection| {
+        db::compression_candidates(connection, &id, limit, offset)
+    })
+    .await
+    .map(Json)
 }
 
 async fn health(State(state): State<AppState>) -> Result<Json<serde_json::Value>, ApiFailure> {
@@ -453,6 +497,14 @@ fn is_safe_baseline_id(id: &str) -> bool {
         && id
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || character == '-')
+}
+
+fn is_safe_experiment_id(id: &str) -> bool {
+    id.len() <= 128
+        && !id.is_empty()
+        && id.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '-' | '_' | '.')
+        })
 }
 
 impl FromStr for SessionsSort {
@@ -489,9 +541,12 @@ mod tests {
     };
     use http_body_util::BodyExt as _;
     use tower::ServiceExt as _;
-    use tracepress_dashboard_types::{Overview, Page, SessionSummary};
+    use tracepress_dashboard_types::{
+        CompressionCandidateSummary, CompressionExperimentDetail, CompressionExperimentSummary,
+        Overview, Page, SessionSummary,
+    };
 
-    use super::{fixture_database, router};
+    use super::{db, fixture_database, router};
 
     async fn response(path: &str, large: bool) -> (StatusCode, Vec<u8>) {
         let fixture = fixture_database(large).expect("create synthetic fixture");
@@ -584,12 +639,106 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn compression_experiment_and_candidate_pages_are_real_and_bounded() {
+        let (status, body) = response("/api/v1/compression/experiments", false).await;
+        assert_eq!(status, StatusCode::OK);
+        let experiments: Vec<CompressionExperimentSummary> =
+            serde_json::from_slice(&body).expect("compression experiments JSON");
+        assert_eq!(experiments.len(), 1);
+        assert_eq!(
+            experiments
+                .first()
+                .expect("one experiment")
+                .quality
+                .forwarding_mutations,
+            0
+        );
+        assert_eq!(
+            experiments.first().expect("one experiment").candidate_count,
+            64
+        );
+        assert_eq!(experiments.first().expect("one experiment").block_count, 16);
+        assert_eq!(
+            experiments.first().expect("one experiment").session_count,
+            4
+        );
+
+        let (status, body) =
+            response("/api/v1/compression/experiments/shadow-pilot-001", false).await;
+        assert_eq!(status, StatusCode::OK);
+        let detail: CompressionExperimentDetail =
+            serde_json::from_slice(&body).expect("compression detail JSON");
+        assert_eq!(detail.compressors.len(), 4);
+        assert!(!detail.workload_distribution_available);
+        let minify = detail
+            .compressors
+            .iter()
+            .find(|summary| summary.compressor == "json.minify")
+            .expect("json.minify summary");
+        assert!(minify.candidate_effective_byte_reduction.is_some());
+        assert!(minify.unique_candidate_byte_reduction.is_some());
+        assert!(minify.unique_candidate_byte_reduction < minify.candidate_effective_byte_reduction);
+        assert_eq!(minify.recovery_basis_points, Some(10_000));
+        assert_eq!(minify.deterministic_basis_points, Some(10_000));
+        let tabular = detail
+            .compressors
+            .iter()
+            .find(|summary| summary.compressor == "json.tabular")
+            .expect("json.tabular summary");
+        assert_eq!(tabular.recovery_basis_points, Some(10_000));
+        assert_eq!(tabular.deterministic_basis_points, Some(10_000));
+        let (status, body) = response(
+            "/api/v1/compression/experiments/shadow-pilot-001/candidates?limit=2",
+            false,
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+        let page: Page<CompressionCandidateSummary> =
+            serde_json::from_slice(&body).expect("compression candidates JSON");
+        assert_eq!(page.items.len(), 2);
+        assert_eq!(page.next_cursor.as_deref(), Some("2"));
+    }
+
+    #[test]
+    fn compression_detail_keeps_unattempted_recovery_and_determinism_unavailable() {
+        let fixture = fixture_database(false).expect("fixture");
+        let connection = rusqlite::Connection::open(fixture.path()).expect("fixture writer");
+        let _updated = connection
+            .execute(
+                "UPDATE compression_candidate_metrics
+                    SET output_bytes = NULL, bytes_delta = NULL,
+                        output_estimated_tokens = NULL, estimated_token_delta = NULL
+                  WHERE candidate_id IN (
+                        SELECT candidate_id FROM compression_candidates
+                         WHERE compressor_id = 'json.repeated_subtree'
+                  )",
+                [],
+            )
+            .expect("make every repeated-subtree candidate unattempted");
+
+        let detail = db::compression_experiment(&connection, "shadow-pilot-001")
+            .expect("compression detail query")
+            .expect("experiment");
+        let repeated_subtree = detail
+            .compressors
+            .iter()
+            .find(|summary| summary.compressor == "json.repeated_subtree")
+            .expect("json.repeated_subtree summary");
+        assert_eq!(repeated_subtree.recovery_basis_points, None);
+        assert_eq!(repeated_subtree.deterministic_basis_points, None);
+    }
+
+    #[tokio::test]
     async fn empty_database_returns_zero_counts_and_unavailable_metrics() {
         let fixture = fixture_database(false).expect("fixture");
         let connection = rusqlite::Connection::open(fixture.path()).expect("fixture writer");
         connection
             .execute_batch(
-                "DELETE FROM context_deltas;
+                "DELETE FROM compression_recoveries;
+                 DELETE FROM compression_candidate_metrics;
+                 DELETE FROM compression_candidates;
+                 DELETE FROM compression_experiments;
+                 DELETE FROM context_deltas;
                  DELETE FROM context_analysis_metrics;
                  DELETE FROM context_block_occurrences;
                  DELETE FROM context_snapshots;

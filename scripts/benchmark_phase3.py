@@ -14,7 +14,8 @@ intentionally absent because it does not exercise the production recorder/analys
 
 The command prints a concise comparison table followed by JSON. ``--json-output`` writes the
 same JSON document separately for machine use. No request or response content is included in
-reports; durable lifecycle counters are included as bounded observability evidence. The
+reports; durable lifecycle counters and lifecycle-inclusive child CPU accounting are included as
+bounded observability evidence. The
 ``--self-test`` mode exercises the lifecycle gate without building or starting any process.
 """
 
@@ -26,6 +27,7 @@ import math
 import os
 from pathlib import Path
 import re
+import resource
 import signal
 import socket
 import subprocess
@@ -329,6 +331,23 @@ def workloads(burst_widths: Iterable[int]) -> tuple[dict[str, dict[str, Any]], d
         },
         separators=(",", ":"),
     ).encode()
+    tool_result_body = json.dumps(
+        {
+            "model": "bench",
+            "stream": False,
+            "input": [
+                {
+                    "type": "function_call_output",
+                    "call_id": "bench-call",
+                    "output": json.dumps(
+                        {"name": "artifact", "status": "ok", "size": 10},
+                        separators=(",", ":"),
+                    ),
+                }
+            ],
+        },
+        separators=(",", ":"),
+    ).encode()
     context_text = "context-block-" * 9_000
     context_body = json.dumps(
         {
@@ -364,6 +383,7 @@ def workloads(burst_widths: Iterable[int]) -> tuple[dict[str, dict[str, Any]], d
     bodies = {
         "small_json": small_body,
         "streamed_responses": streamed_body,
+        "tool_result_json": tool_result_body,
         "context_1m": context_body,
         "analysis_over_budget": over_budget_body,
     }
@@ -383,6 +403,13 @@ def workloads(burst_widths: Iterable[int]) -> tuple[dict[str, dict[str, Any]], d
             "semantic_chunk": 1,
             "initial_delay_s": 0.003,
             "chunk_delay_s": 0.003,
+        },
+        "tool_result_json": {
+            "content_type": "application/json",
+            "response_chunks": [b'{"id":"bench","status":"completed","output":[]}'],
+            "semantic_chunk": -1,
+            "initial_delay_s": 0.003,
+            "chunk_delay_s": 0.0,
         },
         "context_1m": {
             "content_type": "application/json",
@@ -551,6 +578,7 @@ def run_agent(
     root: Path,
     body_file: Path,
     sample_gap_ms: float,
+    shadow_compression: bool,
 ) -> dict[str, Any]:
     burst_width = int(specs[workload].get("burst_width", 1))
     # Unix-domain socket paths have a small platform-defined limit. Keep the
@@ -569,6 +597,13 @@ def run_agent(
                 "TRACEPRESS_CONTEXT_ANALYSIS": analysis_mode,
             }
         )
+        if shadow_compression and analysis_mode == "shadow":
+            attempt_env.update(
+                {
+                    "TRACEPRESS_SHADOW_COMPRESSION": "on",
+                    "TRACEPRESS_SHADOW_EXPERIMENT_ID": f"shadow-bench-{time.time_ns()}",
+                }
+            )
         return attempt_env
 
     def terminate_daemon_process(process: subprocess.Popen[str] | None) -> None:
@@ -663,6 +698,7 @@ def run_agent(
     stdout = ""
     stderr = ""
     rss_values: list[int] = []
+    children_cpu_before = resource.getrusage(resource.RUSAGE_CHILDREN)
     process: subprocess.Popen[str] | None = None
     monitor_stop = threading.Event()
     monitor_thread: threading.Thread | None = None
@@ -769,6 +805,15 @@ def run_agent(
         return [row[name] for row in metric_rows if name in row]
 
     raw = {name: values(name) for name in ("dispatch_us", "proxy_ttfb_us", "proxy_ttft_us", "duration_us")}
+    children_cpu_after = resource.getrusage(resource.RUSAGE_CHILDREN)
+    children_user_cpu_us = max(
+        0.0,
+        (children_cpu_after.ru_utime - children_cpu_before.ru_utime) * 1_000_000.0,
+    )
+    children_system_cpu_us = max(
+        0.0,
+        (children_cpu_after.ru_stime - children_cpu_before.ru_stime) * 1_000_000.0,
+    )
     database = home / "tracepress.sqlite3"
     durable = durable_queue_metrics(database)
     rss = summarize([int(value) for value in rss_values])
@@ -789,6 +834,9 @@ def run_agent(
         "idle_rss_kib": idle_rss,
         "peak_rss_kib": peak_rss,
         "peak_rss_delta_kib": peak_rss_delta,
+        "children_user_cpu_us": round(children_user_cpu_us, 3),
+        "children_system_cpu_us": round(children_system_cpu_us, 3),
+        "children_total_cpu_us": round(children_user_cpu_us + children_system_cpu_us, 3),
         "rss_kib": rss,
         "_raw": raw,
         "queue_observability": {
@@ -1318,6 +1366,12 @@ def render_table(report: dict[str, Any]) -> str:
             f"{workload:23}  {'idle RSS KiB':11}  {str(idle[0]):18}  {str(idle[1]):16}  "
             f"{str(idle[2]):16}  {'' if delta is None else f'{delta:+d}'}"
         )
+        cpu = [phases[name].get("children_total_cpu_us") for name in ("baseline", "off", "on")]
+        cpu_delta = None if cpu[1] is None or cpu[2] is None else cpu[2] - cpu[1]
+        lines.append(
+            f"{workload:23}  {'child CPU us':11}  {str(cpu[0]):18}  {str(cpu[1]):16}  "
+            f"{str(cpu[2]):16}  {'' if cpu_delta is None else f'{cpu_delta:+.0f}'}"
+        )
     lines.append("")
     comparison = report["comparison"]
     lines.append(f"OFF versus baseline: {comparison['off_vs_baseline']['decision']}")
@@ -1372,6 +1426,11 @@ def parse_args() -> argparse.Namespace:
         help="comma-separated workload names to run (default: all workloads)",
     )
     parser.add_argument("--json-output", type=Path)
+    parser.add_argument(
+        "--shadow-compression",
+        action="store_true",
+        help="enable Phase 4.1 shadow compression in the context-analysis ON arm",
+    )
     parser.add_argument(
         "--self-test",
         action="store_true",
@@ -1435,11 +1494,17 @@ def main() -> int:
             "warmup_per_workload": args.warmup,
             "burst_widths": args.burst_widths,
             "workloads": args.workloads,
+            "shadow_compression": args.shadow_compression,
             "upstream": "deterministic local HTTP/1.1 socket server",
             "phase_arms": {
                 "baseline_a": "selected baseline tag; context-analysis env ignored; first A/A arm",
                 "off_a": "current checkout with TRACEPRESS_CONTEXT_ANALYSIS=off; first A/A arm",
-                "on": "current checkout with TRACEPRESS_CONTEXT_ANALYSIS=shadow",
+                "on": (
+                    "current checkout with TRACEPRESS_CONTEXT_ANALYSIS=shadow and "
+                    "TRACEPRESS_SHADOW_COMPRESSION=on"
+                    if args.shadow_compression
+                    else "current checkout with TRACEPRESS_CONTEXT_ANALYSIS=shadow"
+                ),
                 "off_b": "current checkout with TRACEPRESS_CONTEXT_ANALYSIS=off; second A/A arm",
                 "baseline_b": "selected baseline tag; context-analysis env ignored; second A/A arm",
             },
@@ -1507,6 +1572,7 @@ def main() -> int:
                             root=temporary_root,
                             body_file=body_file,
                             sample_gap_ms=args.sample_gap_ms,
+                            shadow_compression=args.shadow_compression,
                         )
                         if measured["errors"] != 0:
                             raise BenchmarkError(

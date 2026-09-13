@@ -22,9 +22,11 @@ use dioxus::prelude::*;
 use gloo_net::http::Request;
 use serde::de::DeserializeOwned;
 use tracepress_dashboard_types::{
-    BaselineDetail, BaselineSummary, ContextCategoryStats, ContextExplorer, ContextGrowthPoint,
-    MeasurementQuality, Metric as WireMetric, MetricSource, OpportunitySummary, Overview, Page,
-    SessionContext, SessionDetail, SessionSummary, UnknownSummary, WorkloadSummary,
+    BaselineDetail, BaselineSummary, CompressionCandidateSummary, CompressionExperimentDetail,
+    CompressionExperimentSummary, CompressionHistogramBucket, ContextCategoryStats,
+    ContextExplorer, ContextGrowthPoint, MeasurementQuality, Metric as WireMetric, MetricSource,
+    OpportunitySummary, Overview, Page, SessionContext, SessionDetail, SessionSummary,
+    UnknownSummary, WorkloadSummary,
 };
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
@@ -35,7 +37,20 @@ const TRANSPORT_UNAVAILABLE: &str = "Transport unavailable";
 const RUNNING: &str = "RUNNING";
 
 fn main() {
+    #[cfg(target_arch = "wasm32")]
+    install_csp_safe_logger();
     dioxus::launch(app);
+}
+
+#[cfg(target_arch = "wasm32")]
+fn install_csp_safe_logger() {
+    use tracing_subscriber::{layer::SubscriberExt as _, util::SubscriberInitExt as _};
+
+    let mut config = tracing_wasm::WASMLayerConfigBuilder::new();
+    let _configured =
+        config.set_console_config(tracing_wasm::ConsoleConfig::ReportWithoutConsoleColor);
+    let layer = tracing_wasm::WASMLayer::new(config.build());
+    let _ = tracing_subscriber::registry().with(layer).try_init();
 }
 
 fn app() -> Element {
@@ -60,6 +75,7 @@ enum Route {
         #[route("/baselines/:id")] BaselineDetailPage { id: String },
         #[route("/opportunities")] OpportunitiesPage {},
         #[route("/compression")] CompressionPage {},
+        #[route("/compression/:id")] CompressionDetailPage { id: String },
     #[end_layout]
     #[route("/:..route")] NotFoundPage { route: Vec<String> },
 }
@@ -82,7 +98,7 @@ fn Sidebar() -> Element {
             div { class: "nav-label", "Research" }
             Link { class: "nav-link", to: Route::BaselinesPage {}, "Baselines" }
             Link { class: "nav-link", to: Route::OpportunitiesPage {}, "Opportunities" }
-            Link { class: "nav-link", to: Route::CompressionPage {}, "Compression" span { class: "badge", "Soon" } }
+            Link { class: "nav-link", to: Route::CompressionPage {}, "Compression" span { class: "badge success", "Shadow" } }
         }
     } }
 }
@@ -142,11 +158,18 @@ fn DataTable(children: Element) -> Element {
 
 #[component]
 fn Pagination(next: Option<String>, cursor: Signal<Option<String>>) -> Element {
-    let has_previous = cursor.read().is_some();
+    let current_offset = cursor
+        .read()
+        .as_deref()
+        .and_then(|value| value.parse::<u64>().ok())
+        .unwrap_or(0);
+    let has_previous = current_offset > 0;
+    let previous = current_offset.saturating_sub(50);
+    let page_number = current_offset / 50 + 1;
     let next_value = next.clone();
     rsx! { div { class: "pagination",
-        button { class: "button", disabled: !has_previous, onclick: move |_| { let mut cursor = cursor; cursor.set(None); }, "Previous" }
-        span { if has_previous { "Page 2+" } else { "Page 1" } }
+        button { class: "button", disabled: !has_previous, onclick: move |_| { let mut cursor = cursor; cursor.set(if previous == 0 { None } else { Some(previous.to_string()) }); }, "Previous" }
+        span { "Page {page_number}" }
         button { class: "button", disabled: next.is_none(), onclick: move |_| { let mut cursor = cursor; cursor.set(next_value.clone()); }, "Next" }
     } }
 }
@@ -728,7 +751,157 @@ fn render_opportunities(state: &Option<Result<Vec<OpportunitySummary>, String>>)
 
 #[component]
 fn CompressionPage() -> Element {
-    rsx! { PageHeader { title: "Compression Lab", subtitle: "Reserved for Phase 4.1 Shadow Compression observations." } div { class: "page", Card { title: "Shadow Compression", EmptyState { title: "No experiments recorded yet.", message: "Future candidates will report applicability, estimated and byte reduction, recovery, latency, prefix preservation, cache risk, and workload breakdown." } } } }
+    let resource = use_resource(|| {
+        fetch::<Vec<CompressionExperimentSummary>>("/api/v1/compression/experiments")
+    });
+    rsx! { PageHeader { title: "Compression Lab", subtitle: "Shadow candidate evidence only. No provider request is modified." }
+        div { class: "page", {render_compression_experiments(&resource.read())} }
+    }
+}
+
+fn render_compression_experiments(
+    state: &Option<Result<Vec<CompressionExperimentSummary>, String>>,
+) -> Element {
+    match state {
+        None => rsx! { Skeleton {} },
+        Some(Err(error)) => rsx! { ErrorState { message: error.clone() } },
+        Some(Ok(rows)) if rows.is_empty() => {
+            rsx! { Card { title: "Shadow Compression Experiments", EmptyState { title: "No experiments recorded yet.", message: "Enable TRACEPRESS_SHADOW_COMPRESSION=on for a bounded shadow run." } } }
+        }
+        Some(Ok(rows)) => rsx! {
+            Card { title: "Shadow Compression Experiments", DataTable {
+                thead { tr { th { "Experiment" } th { class: "numeric", "Candidates" } th { class: "numeric", "Sessions" } th { class: "numeric", "Blocks" } th { "Status" } th { "Integrity" } th { "Runtime SHA" } th { "Started" } } }
+                tbody { for row in rows {
+                    tr {
+                        td { Link { class: "mono", to: Route::CompressionDetailPage { id: row.id.clone() }, "{row.id}" } }
+                        td { class: "numeric mono", "{compact_u64(row.candidate_count)}" }
+                        td { class: "numeric mono", "{compact_u64(row.session_count)}" }
+                        td { class: "numeric mono", "{compact_u64(row.block_count)}" }
+                        td { Badge { text: row.status.clone(), tone: compression_status_tone(&row.status) } }
+                        td { Badge { text: if compression_quality_healthy(&row.quality) { "healthy" } else { "degraded" }, tone: if compression_quality_healthy(&row.quality) { "success" } else { "danger" } } }
+                        td { class: "mono", "{short_identifier(row.runtime_sha.as_deref())}" }
+                        td { class: "mono", "{row.started_at}" }
+                    }
+                } }
+            } }
+        },
+    }
+}
+
+#[component]
+fn ShadowQualityBanner(quality: tracepress_dashboard_types::CompressionQuality) -> Element {
+    let healthy = compression_quality_healthy(&quality);
+    rsx! { div { class: if healthy { "quality-banner" } else { "quality-banner degraded" }, role: "status",
+        Badge { text: if healthy { "SHADOW INTEGRITY" } else { "SHADOW DEGRADED" }, tone: if healthy { "success" } else { "danger" } }
+        div { class: "metric-inline", span { strong { "Forwarding mutations: " } "{quality.forwarding_mutations}" }
+            span { strong { "Shadow drops: " } "{quality.shadow_drops}" }
+            span { class: "muted", title: "Queue, byte-budget, work-budget, worker-closed and persistence drop counters.", "queue " "{quality.shadow_queue_full_drops}" " · bytes " "{quality.shadow_byte_budget_drops}" " · work " "{quality.shadow_work_budget_drops}" " · closed " "{quality.shadow_worker_closed_drops}" " · persistence " "{quality.shadow_persistence_drops}" }
+            span { strong { "Recovery failures: " } "{quality.recovery_failures}" }
+            span { strong { "Determinism failures: " } "{quality.determinism_failures}" }
+        }
+    } }
+}
+
+#[component]
+fn CompressionDetailPage(id: String) -> Element {
+    let detail_id = id.clone();
+    let detail = use_resource(move || {
+        let url = format!("/api/v1/compression/experiments/{detail_id}");
+        async move { fetch::<CompressionExperimentDetail>(&url).await }
+    });
+    rsx! { PageHeader { title: id, subtitle: "Candidate reduction is local representation evidence, not provider token savings." }
+        div { class: "page", {render_compression_detail(&detail.read())} }
+    }
+}
+
+fn render_compression_detail(
+    detail: &Option<Result<CompressionExperimentDetail, String>>,
+) -> Element {
+    match detail {
+        None => rsx! { Skeleton {} },
+        Some(Err(error)) => rsx! { ErrorState { message: error.clone() } },
+        Some(Ok(detail)) => rsx! {
+            ShadowQualityBanner { quality: detail.summary.quality.clone() }
+            div { class: "spacer-top", Card { title: "Candidate comparison", DataTable {
+                thead { tr { th { "Candidate" } th { class: "numeric", "Applicable" } th { class: "numeric", "Byte ↓" } th { class: "numeric", "Effective byte ↓" } th { class: "numeric", "Unique byte ↓" } th { class: "numeric", "Est. token ↓" } th { class: "numeric", "Recovery" } th { class: "numeric", "Deterministic" } th { class: "numeric", "P95" } } }
+                tbody { for compressor in &detail.compressors { tr {
+                    td { class: "mono", "{compressor.compressor}" span { class: "muted", " v{compressor.version}" } }
+                    td { class: "numeric", "{format_basis_points(compressor.applicability_basis_points)}" }
+                    td { class: "numeric", "{format_basis_points(compressor.byte_reduction_basis_points)}" }
+                    td { class: "numeric mono", "{format_optional_u64(compressor.candidate_effective_byte_reduction)}" }
+                    td { class: "numeric mono", "{format_optional_u64(compressor.unique_candidate_byte_reduction)}" }
+                    td { class: "numeric", "{format_basis_points(compressor.estimated_reduction_basis_points)}" }
+                    td { class: "numeric", "{format_basis_points(compressor.recovery_basis_points)}" }
+                    td { class: "numeric", "{format_basis_points(compressor.deterministic_basis_points)}" }
+                    td { class: "numeric mono", "{format_optional_u64(compressor.processing_p95_us)} µs" }
+                } } }
+            } } }
+            div { class: "grid two spacer-top", CompressionHistogram { title: "Reduction distribution", rows: detail.reduction_histogram.clone(), scope: "Applicable candidates only" }
+                CompressionHistogram { title: "Latency distribution", rows: detail.latency_histogram.clone(), scope: "All measured candidates" }
+            }
+            if !detail.workload_distribution_available { div { class: "spacer-top", Card { title: "Workload distributions", div { class: "compact-notice", strong { "Unavailable. " } "Operational sessions do not yet carry a certified workload mapping; no report label is inferred." } } } }
+            CandidateTable { experiment_id: detail.summary.id.clone() }
+        },
+    }
+}
+
+#[component]
+fn CompressionHistogram(
+    title: String,
+    rows: Vec<CompressionHistogramBucket>,
+    scope: String,
+) -> Element {
+    let maximum = rows.iter().map(|row| row.count).max().unwrap_or(1).max(1);
+    let observations: u64 = rows.iter().map(|row| row.count).sum();
+    rsx! { ChartContainer { title, meta: format!("{scope} · n={observations} · bounded metadata-only distribution"),
+        div { class: "bar-list", for row in rows { div { class: "bar-row", span { class: "bar-label mono", "{row.label}" }
+            progress { class: "bar-track", max: "{maximum}", value: "{row.count}", aria_label: "{row.label}: {row.count}" }
+            span { class: "bar-value mono", "{row.count}" }
+        } } }
+    } }
+}
+
+#[component]
+fn CandidateTable(experiment_id: String) -> Element {
+    let cursor = use_signal(|| None::<String>);
+    let resource = use_resource(move || {
+        let cursor_value = cursor.read().clone();
+        let experiment_id = experiment_id.clone();
+        async move {
+            let mut url =
+                format!("/api/v1/compression/experiments/{experiment_id}/candidates?limit=50");
+            if let Some(value) = cursor_value {
+                url.push_str(&format!("&cursor={value}"));
+            }
+            fetch::<Page<CompressionCandidateSummary>>(&url).await
+        }
+    });
+    rsx! { div { class: "spacer-top", {render_candidate_rows(&resource.read(), cursor)} } }
+}
+
+fn render_candidate_rows(
+    state: &Option<Result<Page<CompressionCandidateSummary>, String>>,
+    cursor: Signal<Option<String>>,
+) -> Element {
+    match state {
+        None => rsx! { Skeleton {} },
+        Some(Err(error)) => rsx! { ErrorState { message: error.clone() } },
+        Some(Ok(page)) => rsx! { Card { title: "Block-level candidate metadata", DataTable {
+            thead { tr { th { "Candidate" } th { "Block" } th { "Type" } th { "Status" } th { class: "numeric", "Input" } th { class: "numeric", "Output" } th { class: "numeric", "Est. input" } th { class: "numeric", "Est. output" } th { "Recovery" } th { "Cache risk" } } }
+            tbody { for row in &page.items { tr {
+                td { class: "mono", title: row.id.clone(), "{short_candidate_id(&row.id)}" }
+                td { class: "mono", "#{row.block_ordinal} {row.block_kind}" div { class: "muted", "{row.origin}" } }
+                td { "{optional_text(&row.detected_kind)}" }
+                td { Badge { text: row.status.clone(), tone: compression_status_tone(&row.status) } }
+                td { class: "numeric mono", "{compact_u64(row.input_bytes)}" }
+                td { class: "numeric mono", "{format_optional_u64(row.output_bytes)}" }
+                td { class: "numeric mono", "{format_optional_u64(row.input_estimated_tokens)}" }
+                td { class: "numeric mono", "{format_optional_u64(row.output_estimated_tokens)}" }
+                td { Badge { text: if row.recovery_verified { "verified" } else { "failed/unavailable" }, tone: if row.recovery_verified { "success" } else { "danger" } } }
+                td { Badge { text: row.cache_risk.clone(), tone: if row.cache_risk == "high" { "warning" } else { "neutral" } } }
+            } } }
+        } Pagination { next: page.next_cursor.clone(), cursor } } },
+    }
 }
 
 #[component]
@@ -768,6 +941,29 @@ fn compact_u64(value: u64) -> String {
     } else {
         value.to_string()
     }
+}
+
+fn compression_quality_healthy(quality: &tracepress_dashboard_types::CompressionQuality) -> bool {
+    quality.forwarding_mutations == 0
+        && quality.shadow_drops == 0
+        && quality.recovery_failures == 0
+        && quality.determinism_failures == 0
+}
+
+fn short_candidate_id(value: &str) -> String {
+    if value.chars().count() <= 18 {
+        return value.to_owned();
+    }
+    let prefix: String = value.chars().take(9).collect();
+    let suffix: String = value
+        .chars()
+        .rev()
+        .take(6)
+        .collect::<Vec<_>>()
+        .into_iter()
+        .rev()
+        .collect();
+    format!("{prefix}…{suffix}")
 }
 
 fn format_optional_u64(value: Option<u64>) -> String {
@@ -855,6 +1051,15 @@ fn short_id(value: &str) -> String {
         value.to_owned()
     }
 }
+fn short_identifier(value: Option<&str>) -> String {
+    value.map_or_else(|| "—".to_owned(), short_id)
+}
+fn format_basis_points(value: Option<u16>) -> String {
+    value.map_or_else(
+        || "—".to_owned(),
+        |basis_points| format!("{:.2}%", f64::from(basis_points) / 100.0),
+    )
+}
 fn humanize(value: &str) -> String {
     value
         .replace('_', " ")
@@ -873,6 +1078,15 @@ fn status_tone(status: &str) -> String {
         "complete" | "completed" | "healthy" => "success",
         "running" | "partial" => "warning",
         "failed" | "dropped" | "malformed" => "danger",
+        _ => "neutral",
+    }
+    .to_owned()
+}
+fn compression_status_tone(status: &str) -> String {
+    match status {
+        "applicable" | "completed" => "success",
+        "running" | "resource_limit" => "warning",
+        "recovery_failed" | "internal_error" | "failed" => "danger",
         _ => "neutral",
     }
     .to_owned()

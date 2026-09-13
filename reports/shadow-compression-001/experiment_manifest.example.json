@@ -1,0 +1,13 @@
+{
+  "report_id": "TRACEPRESS_SHADOW_COMPRESSION_001",
+  "quality_gates": {
+    "shadow_pilot_n10": "pending",
+    "compaction_calibration": "pending",
+    "aa_infrastructure": "pending",
+    "host_rss_cpu_comparison": "pending",
+    "naturalistic_workload_distributions": "pending"
+  },
+  "session_workloads": {},
+  "recommended_active_candidate": null,
+  "recommendation_rationale": null
+}

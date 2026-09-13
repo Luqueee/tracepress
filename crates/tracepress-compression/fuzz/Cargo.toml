@@ -1,0 +1,49 @@
+[package]
+name = "tracepress-compression-fuzz"
+version = "0.1.0"
+edition = "2024"
+publish = false
+
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+tracepress-compression = { path = ".." }
+
+[[bin]]
+name = "json_minify"
+path = "fuzz_targets/json_minify.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json_tabular"
+path = "fuzz_targets/json_tabular.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "json_repeated_subtree"
+path = "fuzz_targets/json_repeated_subtree.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "text_repeated_line"
+path = "fuzz_targets/text_repeated_line.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "text_repeated_run"
+path = "fuzz_targets/text_repeated_run.rs"
+test = false
+doc = false
+bench = false

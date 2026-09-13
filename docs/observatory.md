@@ -148,9 +148,10 @@ JSON whitespace, verifies deterministic output and exact recovery, and removes a
 resource-limited request fails open to the original bytes. `json.tabular` remains shadow-only: its
 `TPJ2` representation is not a provider-compatible Responses payload and is not sent upstream.
 Active metrics are metadata-only (`original`/`rewritten` sizes and fingerprints) and are offered to
-the observation sink without blocking forwarding. This adapter does not establish provider-token,
-cache, cost, or quality impact; those require the Phase 4.2 A/B experiment and provider-side
-validation.
+the observation sink without blocking it. The explicitly enabled active arm performs bounded
+analysis and rewriting before its upstream `send`; the default path remains byte-exact and does
+not pay that cost. This adapter does not establish provider-token, cache, cost, or quality impact;
+those require the Phase 4.2 A/B experiment and provider-side validation.
 
 The reproducible local infrastructure smoke is driven by
 `scripts/run_active_compression_pilot.py` and recorded in

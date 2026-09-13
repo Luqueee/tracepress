@@ -572,6 +572,29 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn csp_allows_only_runtime_style_attributes() {
+        let fixture = fixture_database(false).expect("create synthetic fixture");
+        let reports = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../reports");
+        let response = router(fixture.path().to_path_buf(), reports)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/health")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        let policy = response
+            .headers()
+            .get("content-security-policy")
+            .and_then(|value| value.to_str().ok())
+            .expect("CSP header");
+        assert!(policy.contains("style-src 'self'"));
+        assert!(policy.contains("style-src-attr 'unsafe-inline'"));
+        assert!(!policy.contains("style-src 'unsafe-inline'"));
+    }
+
+    #[tokio::test]
     async fn overview_projects_usage_and_degraded_quality() {
         let (status, body) = response("/api/v1/overview", false).await;
         assert_eq!(status, StatusCode::OK);

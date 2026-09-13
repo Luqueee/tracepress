@@ -42,8 +42,7 @@ def parse_args() -> argparse.Namespace:
     return args
 
 
-def run() -> dict[str, Any]:
-    args = parse_args()
+def run(args: argparse.Namespace) -> dict[str, Any]:
     repo = args.repo_root.resolve()
     current_commit = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
@@ -177,12 +176,12 @@ def markdown(report: dict[str, Any]) -> str:
 
 
 def main() -> int:
+    args = parse_args()
     try:
-        report = run()
+        report = run(args)
     except (BenchmarkError, subprocess.CalledProcessError) as error:
         print(f"active pilot failed: {error}", file=sys.stderr)
         return 1
-    args = parse_args()
     args.output_json.parent.mkdir(parents=True, exist_ok=True)
     args.output_md.parent.mkdir(parents=True, exist_ok=True)
     args.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")

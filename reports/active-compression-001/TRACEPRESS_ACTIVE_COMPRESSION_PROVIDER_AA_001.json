@@ -1,0 +1,62 @@
+{
+  "experiment_id": "active-compression-provider-aa-001",
+  "phase": "4.2_infrastructure_gate",
+  "runtime_commit": "5c0221046d1d8bed3bc6d1e0e804b5f192612985",
+  "provider": "authenticated ChatGPT Codex subscription",
+  "model": "gpt-5.6-luna",
+  "workload": "directed large heterogeneous JSON ToolResult",
+  "active": {
+    "configuration": "TRACEPRESS_ACTIVE_COMPRESSION=json.minify",
+    "codex_invocations": 2,
+    "provider_requests": 4,
+    "provider_attempts": 4,
+    "content_encoding": ["zstd"],
+    "analysis_snapshots": 4,
+    "analysis_complete": 4,
+    "wire_bytes": 132319,
+    "decoded_bytes": 353027,
+    "usage": {
+      "input_total": 76908,
+      "input_uncached": 13420,
+      "cache_read": 63488,
+      "output_total": 639,
+      "reasoning": 331
+    },
+    "active_attempts": 4,
+    "active_rewrites": 0,
+    "no_improvement": 2,
+    "not_applicable": 2,
+    "recovery_failures": 0,
+    "determinism_failures": 0,
+    "request_errors": 0,
+    "elapsed_ms": [16612.7, 10674.2]
+  },
+  "control_reference": {
+    "artifact": "TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_SMOKE_003",
+    "configuration": "TRACEPRESS_ACTIVE_COMPRESSION=off",
+    "codex_invocations": 1,
+    "provider_requests": 2,
+    "content_encoding": ["zstd"],
+    "analysis_complete": 2,
+    "active_attempts": 0,
+    "active_rewrites": 0
+  },
+  "gates": {
+    "forwarding_reachable": true,
+    "analysis_complete": true,
+    "recovery_failures": 0,
+    "determinism_failures": 0,
+    "active_rewrites": 0,
+    "paired_comparison_validated": false,
+    "provider_impact_validated": false,
+    "quality_validated": false,
+    "cache_impact_validated": false
+  },
+  "limitations": [
+    "The active arm has two Codex invocations and four provider requests, while its control reference has one invocation and two requests; the pair is not cardinality-matched.",
+    "This is an infrastructure gate, not provider efficacy evidence.",
+    "The cohort accepted no active rewrite, so no provider-side causal result is inferred.",
+    "No provider-token, cache, cost, quality, or savings claim is made.",
+    "The Codex client may emit a non-fatal /v1/models 404 through the local proxy."
+  ]
+}

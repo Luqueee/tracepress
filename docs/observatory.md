@@ -162,6 +162,12 @@ an active arm through isolated daemons against a deterministic local upstream; i
 forwarded-byte reduction is local representation evidence only. The earlier `001` artifact is
 retained as the historical run from the pre-zstd-metric runtime.
 
+The authenticated provider follow-up is recorded separately in
+`reports/active-compression-001/TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_AA_001.{json,md}`. It
+confirms reachability and zero recovery/determinism failures, but remains a blocked infrastructure
+gate because active and control request cardinality was not matched; it is not provider-impact
+evidence.
+
 Errors have a browser-safe shape:
 
 ```json

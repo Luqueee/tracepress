@@ -81,3 +81,9 @@ measured samples per arm after one warm-up against an isolated local upstream, w
 recovery, or determinism failures. Its forwarded-byte reduction and process-lifecycle resource
 measurements are representation/infrastructure evidence only; they are not provider-token, cache,
 cost, or quality evidence.
+
+An authenticated provider follow-up is recorded in
+`reports/active-compression-001/TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_AA_001.{json,md}`. It
+confirmed forwarding reachability, complete analysis, and zero recovery/determinism failures, but
+is explicitly not a paired A/A result because the active and control references have different
+request cardinality. A cardinality-matched provider cohort remains the next gate.

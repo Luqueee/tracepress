@@ -55,6 +55,9 @@ use tracepress_dashboard_types::{
 pub const DEFAULT_PORT: u16 = 4319;
 const MAX_PAGE_SIZE: u32 = 100;
 const DEFAULT_PAGE_SIZE: u32 = 50;
+// Keep every request bounded while allowing the documented large-dataset smoke
+// (1,000 sessions / 10,000 requests) to complete under workspace contention.
+const REQUEST_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Dashboard server configuration.
 #[derive(Clone, Debug)]
@@ -232,7 +235,7 @@ pub fn router(database_path: PathBuf, reports_path: PathBuf) -> Router {
         ))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::REQUEST_TIMEOUT,
-            Duration::from_secs(3),
+            REQUEST_TIMEOUT,
         ))
         .layer(CatchPanicLayer::new())
 }

@@ -63,7 +63,8 @@ use tracepress_provider::{
     RequestObservation, ResponseObservation,
 };
 use tracepress_proxy::{
-    BackgroundTaskSpawner, CompactionObservation, ContextAnalysisDropReason, ContextAnalysisMode,
+    ActiveCompressionMode, ActiveCompressionObservation, BackgroundTaskSpawner,
+    CompactionObservation, ContextAnalysisDropReason, ContextAnalysisMode,
     ContextAnalysisObservation, ContextAnalysisOutcome, DeferredAnalysisMetrics, ForwardId,
     ForwardMetadata, InboundRoute, MetadataSink, MetadataSinkError, ObservationSinkError,
     ProviderObservationSink, ProxyConfig, RequestContextObservation, ShadowAnalysisBody,
@@ -1237,6 +1238,7 @@ struct RecorderSink {
     /// Bounds analyzed outcomes retained between the recorder channel and the context worker.
     analysis_slots: Arc<AnalysisOutputSlots>,
     analysis_enabled: bool,
+    active_counters: Arc<ActiveCompressionCounters>,
 }
 
 impl RecorderSink {
@@ -1363,6 +1365,14 @@ impl ProviderObservationSink for RecorderSink {
                 Err(ObservationSinkError::rejected())
             }
         }
+    }
+
+    fn try_record_active_compression(
+        &self,
+        observation: tracepress_proxy::ActiveCompressionObservation,
+    ) -> Result<(), ObservationSinkError> {
+        self.active_counters.record(&observation);
+        Ok(())
     }
 
     fn try_record_response(
@@ -2358,6 +2368,86 @@ struct ShadowCounters {
     persistence_drops: AtomicU64,
     recovery_failures: AtomicU64,
     determinism_failures: AtomicU64,
+}
+
+#[derive(Debug, Default)]
+struct ActiveCompressionCounters {
+    attempts: AtomicU64,
+    rewrites: AtomicU64,
+    input_bytes: AtomicU64,
+    output_bytes: AtomicU64,
+    no_improvement: AtomicU64,
+    not_applicable: AtomicU64,
+    resource_limits: AtomicU64,
+    invalid_inputs: AtomicU64,
+    recovery_failures: AtomicU64,
+    determinism_failures: AtomicU64,
+    internal_errors: AtomicU64,
+}
+
+impl ActiveCompressionCounters {
+    fn record(&self, observation: &ActiveCompressionObservation) {
+        let _attempt = self.attempts.fetch_add(1, Ordering::Relaxed);
+        let metrics = &observation.metrics;
+        if matches!(
+            metrics.status,
+            tracepress_compression::ActiveRewriteStatus::InternalError
+                | tracepress_compression::ActiveRewriteStatus::RecoveryFailed
+        ) && !metrics.deterministic
+        {
+            let _count = self.determinism_failures.fetch_add(1, Ordering::Relaxed);
+        }
+        match metrics.status {
+            tracepress_compression::ActiveRewriteStatus::Rewritten => {
+                let _rewrite = self.rewrites.fetch_add(1, Ordering::Relaxed);
+                let _input = self
+                    .input_bytes
+                    .fetch_add(metrics.input_bytes, Ordering::Relaxed);
+                let _output = self
+                    .output_bytes
+                    .fetch_add(metrics.output_bytes.unwrap_or_default(), Ordering::Relaxed);
+            }
+            tracepress_compression::ActiveRewriteStatus::NoImprovement => {
+                let _count = self.no_improvement.fetch_add(1, Ordering::Relaxed);
+            }
+            tracepress_compression::ActiveRewriteStatus::NotApplicable => {
+                let _count = self.not_applicable.fetch_add(1, Ordering::Relaxed);
+            }
+            tracepress_compression::ActiveRewriteStatus::ResourceLimit => {
+                let _count = self.resource_limits.fetch_add(1, Ordering::Relaxed);
+            }
+            tracepress_compression::ActiveRewriteStatus::InvalidInput => {
+                let _count = self.invalid_inputs.fetch_add(1, Ordering::Relaxed);
+            }
+            tracepress_compression::ActiveRewriteStatus::RecoveryFailed => {
+                let _count = self.recovery_failures.fetch_add(1, Ordering::Relaxed);
+            }
+            _ => {
+                let _count = self.internal_errors.fetch_add(1, Ordering::Relaxed);
+            }
+        }
+    }
+
+    fn report(&self) -> String {
+        let input = self.input_bytes.load(Ordering::Relaxed);
+        let output = self.output_bytes.load(Ordering::Relaxed);
+        let reduction = input.saturating_sub(output);
+        format!(
+            "active_compression_attempts={} active_compression_rewrites={} active_compression_input_bytes={} active_compression_output_bytes={} active_compression_reduction_bytes={} active_compression_no_improvement={} active_compression_not_applicable={} active_compression_resource_limits={} active_compression_invalid_inputs={} active_compression_recovery_failures={} active_compression_determinism_failures={} active_compression_internal_errors={}",
+            self.attempts.load(Ordering::Relaxed),
+            self.rewrites.load(Ordering::Relaxed),
+            input,
+            output,
+            reduction,
+            self.no_improvement.load(Ordering::Relaxed),
+            self.not_applicable.load(Ordering::Relaxed),
+            self.resource_limits.load(Ordering::Relaxed),
+            self.invalid_inputs.load(Ordering::Relaxed),
+            self.recovery_failures.load(Ordering::Relaxed),
+            self.determinism_failures.load(Ordering::Relaxed),
+            self.internal_errors.load(Ordering::Relaxed),
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug)]
@@ -3608,6 +3698,7 @@ struct SpawnedRecorder {
     counters: Arc<CorrelationCounters>,
     /// Context analyses rejected by the bounded context queue.
     context_counters: Arc<ContextCounters>,
+    active_counters: Arc<ActiveCompressionCounters>,
 }
 
 /// Installs both auxiliary sinks and starts the provider and context workers.
@@ -3635,6 +3726,7 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
     let (shadow_sender, shadow_receiver) = tokio::sync::mpsc::channel(SHADOW_QUEUE_ITEMS);
     let counters = Arc::new(CorrelationCounters::default());
     let context_counters = Arc::new(ContextCounters::default());
+    let active_counters = Arc::new(ActiveCompressionCounters::default());
     let shadow_counters = Arc::new(ShadowCounters::default());
     let shadow_budget = Arc::new(ShadowByteBudget::new(SHADOW_QUEUE_BYTES));
     let analysis_slots = AnalysisOutputSlots::new(context_queue_items);
@@ -3700,6 +3792,7 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
             context_counters: Arc::clone(&context_counters),
             analysis_slots: Arc::clone(&analysis_slots),
             analysis_enabled,
+            active_counters: Arc::clone(&active_counters),
         }))
         .with_observation_sink(Arc::new(RecorderSink {
             durable: Arc::clone(&durable),
@@ -3708,6 +3801,7 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
             context_counters: Arc::clone(&context_counters),
             analysis_slots,
             analysis_enabled,
+            active_counters: Arc::clone(&active_counters),
         }));
     SpawnedRecorder {
         proxy,
@@ -3717,6 +3811,7 @@ fn spawn_recorder(recording: RunRecording, proxy: TransparentProxy) -> SpawnedRe
         shadow_task,
         counters,
         context_counters,
+        active_counters,
     }
 }
 
@@ -4056,6 +4151,19 @@ fn shadow_compression_enabled() -> Result<bool, String> {
     }
 }
 
+fn active_compression_mode() -> Result<ActiveCompressionMode, String> {
+    let value = std::env::var("TRACEPRESS_ACTIVE_COMPRESSION")
+        .unwrap_or_else(|_| "off".to_owned())
+        .to_ascii_lowercase();
+    match value.as_str() {
+        "off" => Ok(ActiveCompressionMode::Off),
+        "json.minify" | "json_minify" => Ok(ActiveCompressionMode::JsonMinify),
+        _ => Err(format!(
+            "TRACEPRESS_ACTIVE_COMPRESSION must be `off` or `json.minify`, got `{value}`"
+        )),
+    }
+}
+
 fn shadow_experiment_id() -> Result<String, String> {
     let value = std::env::var("TRACEPRESS_SHADOW_EXPERIMENT_ID")
         .unwrap_or_else(|_| "shadow-pilot-001".to_owned());
@@ -4194,8 +4302,14 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
     let resource_limits = proxy_resource_limits(8 * 1024 * 1024, 32 * 1024 * 1024)?;
     let analysis_mode = context_analysis_mode()?;
     let shadow_enabled = shadow_compression_enabled()?;
+    let active_mode = active_compression_mode()?;
     if shadow_enabled && !matches!(analysis_mode, ContextAnalysisMode::Shadow) {
         return Err("shadow compression requires TRACEPRESS_CONTEXT_ANALYSIS=shadow".to_owned());
+    }
+    if !matches!(active_mode, ActiveCompressionMode::Off)
+        && !matches!(analysis_mode, ContextAnalysisMode::Shadow)
+    {
+        return Err("active compression requires TRACEPRESS_CONTEXT_ANALYSIS=shadow".to_owned());
     }
     let shadow_experiment_id = shadow_experiment_id()?;
     let context_queue_items = usize::try_from(resource_limits.max_ipc_queue_items.get())
@@ -4204,6 +4318,7 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         .map_err(|error| error.to_string())?;
     let proxy = TransparentProxy::new(
         ProxyConfig::new(endpoint, resource_limits, analysis_mode)
+            .map(|config| config.with_active_compression_mode(active_mode))
             .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;
@@ -4250,6 +4365,7 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         mut shadow_task,
         counters,
         context_counters,
+        active_counters,
     } = spawn_recorder(
         RunRecording {
             config: config.clone(),
@@ -4372,6 +4488,7 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
     }
     println!("{}", counters.report());
     println!("{}", context_counters.report());
+    println!("{}", active_counters.report());
     let status = status_result.map_err(|error| format!("cannot launch agent {agent}: {error}"))?;
     recorded.map_err(|error| format!("forward recording failed: {error}"))?;
     match finalization? {
@@ -4440,8 +4557,15 @@ async fn proxy() -> Result<(), String> {
     let endpoint = provider_endpoint(transport)?;
     let resource_limits = proxy_resource_limits(8 * 1024 * 1024, 32 * 1024 * 1024)?;
     let analysis_mode = context_analysis_mode()?;
+    let active_mode = active_compression_mode()?;
+    if !matches!(active_mode, ActiveCompressionMode::Off)
+        && !matches!(analysis_mode, ContextAnalysisMode::Shadow)
+    {
+        return Err("active compression requires TRACEPRESS_CONTEXT_ANALYSIS=shadow".to_owned());
+    }
     let proxy = TransparentProxy::new(
         ProxyConfig::new(endpoint, resource_limits, analysis_mode)
+            .map(|config| config.with_active_compression_mode(active_mode))
             .map_err(|error| error.to_string())?,
     )
     .map_err(|error| error.to_string())?;

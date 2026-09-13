@@ -16,10 +16,12 @@ sha2 = "0.10"
 tracepress-core = { path = "../tracepress-core" }
 tracepress-provider = { path = "../tracepress-provider" }
 tracepress-context = { path = "../tracepress-context" }
+tracepress-compression = { path = "../tracepress-compression" }
 zstd = "0.14"
 
 [dev-dependencies]
 tokio = { version = "1", features = ["io-util", "macros", "net", "rt-multi-thread", "sync", "time"] }
+serde_json = "1"
 
 [lints]
 workspace = true

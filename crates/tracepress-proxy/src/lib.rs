@@ -32,10 +32,14 @@ use futures_util::{StreamExt as _, stream};
 use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use tokio::sync::{Notify, Semaphore};
+use tracepress_compression::{
+    ActiveJsonSpan, ActiveRewriteMetrics, ActiveRewriteStatus, CompressionLimits,
+    rewrite_json_minify,
+};
 pub use tracepress_context::ContextAnalysisDropReason;
 use tracepress_context::{
-    ContextAnalysisLimits, ContextAnalysisLimitsError, ContextAnalysisResult, ContextDigest,
-    analyze_responses,
+    ContextAnalysisLimits, ContextAnalysisLimitsError, ContextAnalysisResult, ContextBlockKind,
+    ContextDigest, ContextOrigin, DetectedContentKind, analyze_responses,
 };
 use tracepress_core::{MaxRequestBodyBytes, MaxResponseBodyBytes, ResourceLimits};
 pub use tracepress_provider::ContentEncoding;
@@ -348,6 +352,21 @@ pub enum ContextAnalysisMode {
     Shadow,
 }
 
+/// Selects an explicitly enabled Phase 4.2 request-rewrite arm.
+///
+/// `Off` is the default and preserves the Phase 4.0 byte-exact forwarding contract.
+/// `JsonMinify` is an experiment-only adapter: it rewrites only eligible `ToolResult` JSON spans
+/// after a bounded local analysis and publishes metadata to the observation sink. It is never
+/// enabled implicitly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub enum ActiveCompressionMode {
+    /// Keep forwarding byte-exact and do not construct an active candidate.
+    Off,
+    /// Apply the lossless `json.minify` candidate to eligible `ToolResult` JSON spans.
+    JsonMinify,
+}
+
 /// Inbound route one request was accepted on.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
@@ -570,6 +589,18 @@ pub struct ContextAnalysisObservation {
     pub shadow_body: Option<ShadowAnalysisBody>,
 }
 
+/// Metadata-only evidence emitted by an explicitly enabled active compression arm.
+///
+/// The rewritten body is transient inside the forwarding call and never crosses this boundary.
+#[derive(Clone, Debug)]
+#[non_exhaustive]
+pub struct ActiveCompressionObservation {
+    /// Correlation identity shared with the provider request.
+    pub forward: ForwardId,
+    /// Active candidate measurements, including original and rewritten fingerprints.
+    pub metrics: ActiveRewriteMetrics,
+}
+
 /// A parsed request observation and its detached context-analysis outcome for one forward.
 ///
 /// Phase 2 request metadata may be handed to the sink before upstream headers are available.
@@ -609,6 +640,20 @@ pub trait ProviderObservationSink: Send + Sync + 'static {
         &self,
         observation: ContextAnalysisObservation,
     ) -> Result<(), ObservationSinkError>;
+
+    /// Attempts to accept metadata-only evidence from an explicitly enabled active rewrite arm.
+    ///
+    /// The default keeps existing sinks source-compatible; active experiments may opt in without
+    /// making forwarding depend on persistence.
+    ///
+    /// # Errors
+    /// Returns a sink-local rejection when the observer cannot accept the metadata.
+    fn try_record_active_compression(
+        &self,
+        _observation: ActiveCompressionObservation,
+    ) -> Result<(), ObservationSinkError> {
+        Ok(())
+    }
     /// Attempts to accept a parsed response observation of one forward.
     ///
     /// # Errors
@@ -711,6 +756,8 @@ pub struct ProxyConfig {
     pub resource_limits: ResourceLimits,
     /// Explicit Phase 3 context-analysis behavior.
     pub context_analysis_mode: ContextAnalysisMode,
+    /// Explicit Phase 4.2 active rewrite mode. Defaults to [`ActiveCompressionMode::Off`].
+    pub active_compression_mode: ActiveCompressionMode,
     /// Maximum accepted request body size.
     pub max_request_body_bytes: MaxRequestBodyBytes,
     /// Maximum streamed response body size.
@@ -743,9 +790,17 @@ impl ProxyConfig {
             max_response_body_bytes: resource_limits.max_response_body_bytes,
             resource_limits,
             context_analysis_mode,
+            active_compression_mode: ActiveCompressionMode::Off,
             context_analysis_limits,
             context_analysis_concurrency,
         })
+    }
+
+    /// Enables one explicit active compression experiment arm.
+    #[must_use]
+    pub const fn with_active_compression_mode(mut self, mode: ActiveCompressionMode) -> Self {
+        self.active_compression_mode = mode;
+        self
     }
 }
 
@@ -1207,12 +1262,11 @@ async fn forward_inner(
     let bytes = to_bytes(body, maximum)
         .await
         .map_err(|_error| ForwardError::RequestTooLarge)?;
-    let request_bytes =
+    let original_request_bytes =
         u64::try_from(bytes.len()).map_err(|_error| ForwardError::RequestLimitUnrepresentable)?;
-    let wire_body = WireBody::new(bytes);
+    let original_wire_body = WireBody::new(bytes);
     let content_encoding =
         parse_content_encoding_header(parts.headers.get(axum::http::header::CONTENT_ENCODING));
-    let headers = forwarded_headers(&parts.headers);
     let target = match upstream_uri(&proxy.config.upstream, route) {
         Ok(target) => target,
         Err(error) => {
@@ -1220,8 +1274,8 @@ async fn forward_inner(
                 queue_compaction_failure(
                     proxy,
                     forward,
-                    request_bytes,
-                    &wire_body,
+                    original_request_bytes,
+                    &original_wire_body,
                     content_encoding,
                     TransportFailure::Endpoint,
                 );
@@ -1231,6 +1285,17 @@ async fn forward_inner(
             return Err(error);
         }
     };
+    let (wire_body, active_metrics) =
+        active_forward_body(proxy, route, content_encoding, &original_wire_body);
+    if let Some(metrics) = active_metrics {
+        let _accepted = proxy
+            .observations
+            .try_record_active_compression(ActiveCompressionObservation { forward, metrics });
+    }
+    let body_changed = active_metrics_was_rewritten(&wire_body, &original_wire_body);
+    let headers = forwarded_headers_for_body(&parts.headers, body_changed);
+    let request_bytes = u64::try_from(wire_body.len())
+        .map_err(|_error| ForwardError::RequestLimitUnrepresentable)?;
     // Phase 2 request parsing may begin as soon as the body is available. Admission only
     // reserves bounded storage for the raw wire body; execution is deferred until the response
     // settles and never competes with forwarding for this reservation.
@@ -1357,6 +1422,72 @@ async fn forward_inner(
     *response.status_mut() = status;
     *response.headers_mut() = response_headers;
     Ok(response)
+}
+
+/// Builds the body for an explicitly enabled active experiment arm.
+///
+/// The normal path returns the original [`WireBody`] without entering this function's rewrite
+/// branch. Active mode is deliberately restricted to identity-encoded Responses requests and to
+/// a complete Phase 3 analysis; compressed, malformed, or partial requests fail open to the
+/// original bytes and publish no mutation.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the active rewrite boundary keeps route, encoding, and original bytes explicit"
+)]
+fn active_forward_body(
+    proxy: &TransparentProxy,
+    route: InboundRoute,
+    content_encoding: ContentEncoding,
+    original: &WireBody,
+) -> (WireBody, Option<ActiveRewriteMetrics>) {
+    if !matches!(
+        proxy.config.active_compression_mode,
+        ActiveCompressionMode::JsonMinify
+    ) || !matches!(route, InboundRoute::Responses)
+        || !matches!(content_encoding, ContentEncoding::Identity)
+    {
+        return (original.clone(), None);
+    }
+    let analysis = analyze_responses(original.as_ref(), proxy.config.context_analysis_limits);
+    if !matches!(
+        analysis.status,
+        tracepress_context::ContextAnalysisStatus::Complete
+    ) {
+        return (original.clone(), None);
+    }
+    let spans = analysis
+        .blocks
+        .iter()
+        .filter(|block| {
+            block.origin == ContextOrigin::ToolGenerated
+                && block.kind == ContextBlockKind::ToolResult
+                && block
+                    .detection_result
+                    .as_ref()
+                    .is_some_and(|result| result.kind == DetectedContentKind::Json)
+        })
+        .filter_map(|block| {
+            let [start, end] = block
+                .content_span
+                .unwrap_or([block.locator.raw_value_start, block.locator.raw_value_end]);
+            let start_index = usize::try_from(start).ok()?;
+            let encoded_string = original.as_ref().get(start_index).copied() == Some(b'"');
+            ActiveJsonSpan::new(start, end, encoded_string)
+        })
+        .collect::<Vec<_>>();
+    let result = rewrite_json_minify(original.as_ref(), &spans, &CompressionLimits::default());
+    let metrics = result.metrics().clone();
+    if !matches!(metrics.status, ActiveRewriteStatus::Rewritten) {
+        return (original.clone(), Some(metrics));
+    }
+    let Some(body) = result.into_body() else {
+        return (original.clone(), Some(metrics));
+    };
+    (WireBody::new(Bytes::from(body)), Some(metrics))
+}
+
+fn active_metrics_was_rewritten(forwarded: &WireBody, original: &WireBody) -> bool {
+    forwarded.as_ref() != original.as_ref()
 }
 
 /// Forwards response bytes verbatim while enforcing the configured response bound.
@@ -2314,6 +2445,16 @@ fn forwarded_headers(source: &HeaderMap) -> HeaderMap {
         if !is_hop_by_hop(name) && *name != axum::http::header::HOST {
             let _replaced = headers.append(name, value.clone());
         }
+    }
+    headers
+}
+
+fn forwarded_headers_for_body(source: &HeaderMap, body_changed: bool) -> HeaderMap {
+    let mut headers = forwarded_headers(source);
+    if body_changed {
+        // reqwest computes a fresh content length for the rewritten body. Forwarding the
+        // caller's original value would make an upstream wait for bytes that no longer exist.
+        let _removed = headers.remove(axum::http::header::CONTENT_LENGTH);
     }
     headers
 }

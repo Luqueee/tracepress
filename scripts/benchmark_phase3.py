@@ -22,6 +22,7 @@ bounded observability evidence. The
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import math
 import os
@@ -171,6 +172,8 @@ class Upstream:
                     "response_first_ns": response_first_ns,
                     "response_semantic_ns": response_semantic_ns,
                     "scenario": scenario,
+                    "request_bytes": len(_body),
+                    "request_sha256": hashlib.sha256(_body).hexdigest(),
                 }
         except (BenchmarkError, OSError, socket.timeout):
             # The client-side result records an error without retaining the body or URL.
@@ -579,6 +582,7 @@ def run_agent(
     body_file: Path,
     sample_gap_ms: float,
     shadow_compression: bool,
+    active_compression: bool = False,
 ) -> dict[str, Any]:
     burst_width = int(specs[workload].get("burst_width", 1))
     # Unix-domain socket paths have a small platform-defined limit. Keep the
@@ -604,6 +608,10 @@ def run_agent(
                     "TRACEPRESS_SHADOW_EXPERIMENT_ID": f"shadow-bench-{time.time_ns()}",
                 }
             )
+        if active_compression and analysis_mode == "shadow":
+            attempt_env["TRACEPRESS_ACTIVE_COMPRESSION"] = "json.minify"
+        else:
+            attempt_env["TRACEPRESS_ACTIVE_COMPRESSION"] = "off"
         return attempt_env
 
     def terminate_daemon_process(process: subprocess.Popen[str] | None) -> None:
@@ -768,6 +776,7 @@ def run_agent(
     successful_ids = [str(record.get("id")) for record in measured if not record.get("error")]
     upstream.wait_for(successful_ids, timeout_s=30.0)
     metric_rows: list[dict[str, float]] = []
+    forwarded_request_bytes: list[int] = []
     errors = 0
     missing = 0
     for record in measured:
@@ -778,6 +787,9 @@ def run_agent(
             if upstream_metric is None:
                 missing += 1
             continue
+        request_bytes = upstream_metric.get("request_bytes")
+        if isinstance(request_bytes, int):
+            forwarded_request_bytes.append(request_bytes)
         request_first = upstream_metric.get("request_first_ns")
         response_first = upstream_metric.get("response_first_ns")
         response_semantic = upstream_metric.get("response_semantic_ns")
@@ -831,6 +843,7 @@ def run_agent(
         "proxy_ttfb_us": summarize(raw["proxy_ttfb_us"]),
         "proxy_ttft_us": summarize(raw["proxy_ttft_us"]),
         "duration_us": summarize(raw["duration_us"]),
+        "forwarded_request_bytes": summarize(forwarded_request_bytes),
         "idle_rss_kib": idle_rss,
         "peak_rss_kib": peak_rss,
         "peak_rss_delta_kib": peak_rss_delta,

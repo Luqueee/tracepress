@@ -133,6 +133,31 @@ The directed follow-up `Shadow Pilot 002` is recorded under
 evidence. Phase 4.2 must keep request rewriting disabled until its A/B control is explicitly
 implemented and validated.
 
+The first explicit Phase 4.2 adapter is now available for an infrastructure-only A/B smoke. It is
+disabled by default and can be enabled only alongside complete context analysis:
+
+```bash
+TRACEPRESS_CONTEXT_ANALYSIS=shadow \
+TRACEPRESS_ACTIVE_COMPRESSION=json.minify \
+tracepress run <agent> ...
+```
+
+The adapter rewrites only complete `ToolGenerated + ToolResult + Json` spans, removes structural
+JSON whitespace, verifies deterministic output and exact recovery, and removes a stale
+`Content-Length` before forwarding the shorter body. Any malformed, compressed, partial, or
+resource-limited request fails open to the original bytes. `json.tabular` remains shadow-only: its
+`TPJ2` representation is not a provider-compatible Responses payload and is not sent upstream.
+Active metrics are metadata-only (`original`/`rewritten` sizes and fingerprints) and are offered to
+the observation sink without blocking forwarding. This adapter does not establish provider-token,
+cache, cost, or quality impact; those require the Phase 4.2 A/B experiment and provider-side
+validation.
+
+The reproducible local infrastructure smoke is driven by
+`scripts/run_active_compression_pilot.py` and recorded in
+`reports/active-compression-001/TRACEPRESS_ACTIVE_COMPRESSION_001.{json,md}`. It runs a control and
+an active arm through isolated daemons against a deterministic local upstream; its 20.1% median
+forwarded-byte reduction is local representation evidence only.
+
 Errors have a browser-safe shape:
 
 ```json

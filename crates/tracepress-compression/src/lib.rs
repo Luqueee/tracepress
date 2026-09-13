@@ -12,6 +12,7 @@
     reason = "the compressor contract is an explicit measurement DTO and stateless compressors are intentionally constructible unit types"
 )]
 
+mod active;
 mod json;
 mod text;
 
@@ -20,6 +21,9 @@ use std::{fmt, num::NonZeroU64, time::Instant};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
+pub use active::{
+    ActiveJsonSpan, ActiveRewrite, ActiveRewriteMetrics, ActiveRewriteStatus, rewrite_json_minify,
+};
 pub use json::{JsonMinify, JsonNoop, JsonRepeatedSubtree, JsonTabular};
 pub use text::{TextNoop, TextRepeatedLine, TextRepeatedRun};
 
@@ -288,6 +292,14 @@ impl Transform {
             candidate: candidate.into_boxed_slice(),
             recovery: recovery.into_boxed_slice(),
         }
+    }
+
+    pub(crate) fn candidate_bytes(&self) -> &[u8] {
+        &self.candidate
+    }
+
+    pub(crate) fn recovery_bytes(&self) -> &[u8] {
+        &self.recovery
     }
 }
 

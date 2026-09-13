@@ -23,52 +23,73 @@
     "active": {
       "_raw": {
         "dispatch_us": [
-          634.89,
-          706.051,
-          677.511
+          1012.67,
+          637.321,
+          744.261,
+          573.819,
+          724.041,
+          609.721,
+          614.15,
+          588.78,
+          634.531,
+          642.49
         ],
         "duration_us": [
-          4029.233,
-          4148.264,
-          4035.274
+          4420.623,
+          4307.203,
+          4053.534,
+          3989.082,
+          4147.184,
+          4194.224,
+          4146.933,
+          3965.833,
+          4010.313,
+          4073.183
         ],
         "proxy_ttfb_us": [
-          222.74,
-          220.83,
-          181.839
+          163.569,
+          335.33,
+          173.581,
+          272.75,
+          187.92,
+          377.49,
+          292.36,
+          196.91,
+          176.601,
+          270.081
         ],
         "proxy_ttft_us": []
       },
       "analysis_mode": "shadow",
       "burst_width": 1,
-      "children_system_cpu_us": 11912.0,
-      "children_total_cpu_us": 83827.0,
-      "children_user_cpu_us": 71915.0,
+      "children_system_cpu_us": 19156.0,
+      "children_total_cpu_us": 121536.0,
+      "children_user_cpu_us": 102380.0,
       "dispatch_us": {
-        "median": 677.511,
-        "p95": 706.051,
-        "sample_count": 3
+        "median": 635.926,
+        "p95": 1012.67,
+        "sample_count": 10
       },
       "duration_us": {
-        "median": 4035.274,
-        "p95": 4148.264,
-        "sample_count": 3
+        "median": 4110.058,
+        "p95": 4420.623,
+        "sample_count": 10
       },
       "errors": 0,
       "forwarded_request_bytes": {
         "median": 238.0,
         "p95": 238.0,
-        "sample_count": 3
+        "sample_count": 10
       },
-      "idle_rss_kib": 464,
+      "idle_rss_kib": 344,
       "missing_upstream_metrics": 0,
-      "peak_rss_delta_kib": 7264,
-      "peak_rss_kib": 7728,
+      "peak_rss_delta_kib": 7820,
+      "peak_rss_kib": 8164,
       "phase": "active-pilot-001-active",
       "proxy_ttfb_us": {
-        "median": 220.83,
-        "p95": 222.74,
-        "sample_count": 3
+        "median": 233.495,
+        "p95": 377.49,
+        "sample_count": 10
       },
       "proxy_ttft_us": {
         "median": null,
@@ -79,31 +100,31 @@
         "context_observer_backpressure_total": 0,
         "durable": {
           "context_analysis_dropped_events": 0,
-          "context_analysis_event_count": 8,
-          "context_snapshot_request_ids": 4,
-          "context_snapshots": 4,
+          "context_analysis_event_count": 22,
+          "context_snapshot_request_ids": 11,
+          "context_snapshots": 11,
           "context_snapshots_without_provider_request": 0,
           "observer_backpressure_snapshots": 0,
-          "phase2_provider_requests": 4,
-          "terminal_context_request_ids": 4,
-          "terminal_context_snapshots": 4
+          "phase2_provider_requests": 11,
+          "terminal_context_request_ids": 11,
+          "terminal_context_snapshots": 11
         },
         "stdout_counters": {
-          "active_compression_attempts": 4,
+          "active_compression_attempts": 11,
           "active_compression_determinism_failures": 0,
-          "active_compression_input_bytes": 1192,
+          "active_compression_input_bytes": 3278,
           "active_compression_internal_errors": 0,
           "active_compression_invalid_inputs": 0,
           "active_compression_no_improvement": 0,
           "active_compression_not_applicable": 0,
-          "active_compression_output_bytes": 952,
+          "active_compression_output_bytes": 2618,
           "active_compression_recovery_failures": 0,
-          "active_compression_reduction_bytes": 240,
+          "active_compression_reduction_bytes": 660,
           "active_compression_resource_limits": 0,
-          "active_compression_rewrites": 4,
-          "analysis_admitted_total": 4,
-          "analysis_coverage": 4,
-          "analysis_coverage_complete": 4,
+          "active_compression_rewrites": 11,
+          "analysis_admitted_total": 11,
+          "analysis_coverage": 11,
+          "analysis_coverage_complete": 11,
           "analysis_coverage_dropped": 0,
           "analysis_coverage_partial": 0,
           "analysis_deferred_total": 0,
@@ -114,11 +135,11 @@
           "analysis_drop_malformed": 0,
           "analysis_drop_resource_limit": 0,
           "analysis_drop_unsupported": 0,
-          "analysis_requests_complete": 4,
+          "analysis_requests_complete": 11,
           "analysis_requests_dropped": 0,
           "analysis_requests_partial": 0,
-          "analysis_requests_seen": 4,
-          "analysis_wait_us": 20,
+          "analysis_requests_seen": 11,
+          "analysis_wait_us": 43,
           "backlog_capacity_drops": 0,
           "compaction_observation_dropped_total": 0,
           "context_cancelled_total": 0,
@@ -128,78 +149,99 @@
           "context_observer_backpressure_total": 0,
           "context_resource_limit_total": 0,
           "context_unsupported_total": 0,
-          "correlation_correlated": 4,
-          "correlation_coverage": 4,
+          "correlation_correlated": 11,
+          "correlation_coverage": 11,
           "correlation_degraded_inflight_limit": 0,
           "correlation_degraded_retired_limit": 0,
           "correlation_degraded_total": 0,
-          "correlation_eligible": 4,
+          "correlation_eligible": 11,
           "correlation_missing_total": 0,
           "deferred_high_water_bytes": 238,
           "deferred_high_water_items": 1,
           "deferred_queue_bytes": 0,
           "deferred_queue_items": 0,
-          "processed_deferred_total": 4,
-          "semantic_detection_coverage": 4,
-          "token_estimation_coverage": 4
+          "processed_deferred_total": 11,
+          "semantic_detection_coverage": 11,
+          "token_estimation_coverage": 11
         }
       },
-      "requested_samples": 3,
+      "requested_samples": 10,
       "rss_kib": {
-        "median": 6324.0,
-        "p95": 7728.0,
-        "sample_count": 186
+        "median": 7348.0,
+        "p95": 8164.0,
+        "sample_count": 328
       }
     },
     "control": {
       "_raw": {
         "dispatch_us": [
-          547.241,
-          568.16,
-          528.041
+          1065.032,
+          683.191,
+          680.5,
+          527.351,
+          500.121,
+          633.491,
+          749.311,
+          758.08,
+          912.891,
+          862.11
         ],
         "duration_us": [
-          3980.794,
-          4029.763,
-          3852.734
+          4489.483,
+          4228.874,
+          4322.563,
+          3946.994,
+          3834.473,
+          3975.534,
+          4278.553,
+          4101.963,
+          4549.904,
+          4243.363
         ],
         "proxy_ttfb_us": [
-          264.651,
-          235.09,
-          167.86
+          201.291,
+          281.519,
+          362.95,
+          195.55,
+          167.01,
+          180.491,
+          246.51,
+          161.36,
+          352.479,
+          168.46
         ],
         "proxy_ttft_us": []
       },
       "analysis_mode": "shadow",
       "burst_width": 1,
-      "children_system_cpu_us": 17571.0,
-      "children_total_cpu_us": 87928.0,
-      "children_user_cpu_us": 70357.0,
+      "children_system_cpu_us": 21328.0,
+      "children_total_cpu_us": 110428.0,
+      "children_user_cpu_us": 89100.0,
       "dispatch_us": {
-        "median": 547.241,
-        "p95": 568.16,
-        "sample_count": 3
+        "median": 716.251,
+        "p95": 1065.032,
+        "sample_count": 10
       },
       "duration_us": {
-        "median": 3980.794,
-        "p95": 4029.763,
-        "sample_count": 3
+        "median": 4236.119,
+        "p95": 4549.904,
+        "sample_count": 10
       },
       "errors": 0,
       "forwarded_request_bytes": {
         "median": 298.0,
         "p95": 298.0,
-        "sample_count": 3
+        "sample_count": 10
       },
-      "idle_rss_kib": 500,
+      "idle_rss_kib": 440,
       "missing_upstream_metrics": 0,
-      "peak_rss_delta_kib": 6916,
-      "peak_rss_kib": 7416,
+      "peak_rss_delta_kib": 7364,
+      "peak_rss_kib": 7804,
       "phase": "active-pilot-001-control",
       "proxy_ttfb_us": {
-        "median": 235.09,
-        "p95": 264.651,
-        "sample_count": 3
+        "median": 198.421,
+        "p95": 362.95,
+        "sample_count": 10
       },
       "proxy_ttft_us": {
         "median": null,
@@ -210,14 +252,14 @@
         "context_observer_backpressure_total": 0,
         "durable": {
           "context_analysis_dropped_events": 0,
-          "context_analysis_event_count": 8,
-          "context_snapshot_request_ids": 4,
-          "context_snapshots": 4,
+          "context_analysis_event_count": 22,
+          "context_snapshot_request_ids": 11,
+          "context_snapshots": 11,
           "context_snapshots_without_provider_request": 0,
           "observer_backpressure_snapshots": 0,
-          "phase2_provider_requests": 4,
-          "terminal_context_request_ids": 4,
-          "terminal_context_snapshots": 4
+          "phase2_provider_requests": 11,
+          "terminal_context_request_ids": 11,
+          "terminal_context_snapshots": 11
         },
         "stdout_counters": {
           "active_compression_attempts": 0,
@@ -232,9 +274,9 @@
           "active_compression_reduction_bytes": 0,
           "active_compression_resource_limits": 0,
           "active_compression_rewrites": 0,
-          "analysis_admitted_total": 4,
-          "analysis_coverage": 4,
-          "analysis_coverage_complete": 4,
+          "analysis_admitted_total": 11,
+          "analysis_coverage": 11,
+          "analysis_coverage_complete": 11,
           "analysis_coverage_dropped": 0,
           "analysis_coverage_partial": 0,
           "analysis_deferred_total": 0,
@@ -245,11 +287,11 @@
           "analysis_drop_malformed": 0,
           "analysis_drop_resource_limit": 0,
           "analysis_drop_unsupported": 0,
-          "analysis_requests_complete": 4,
+          "analysis_requests_complete": 11,
           "analysis_requests_dropped": 0,
           "analysis_requests_partial": 0,
-          "analysis_requests_seen": 4,
-          "analysis_wait_us": 17,
+          "analysis_requests_seen": 11,
+          "analysis_wait_us": 40,
           "backlog_capacity_drops": 0,
           "compaction_observation_dropped_total": 0,
           "context_cancelled_total": 0,
@@ -259,32 +301,32 @@
           "context_observer_backpressure_total": 0,
           "context_resource_limit_total": 0,
           "context_unsupported_total": 0,
-          "correlation_correlated": 4,
-          "correlation_coverage": 4,
+          "correlation_correlated": 11,
+          "correlation_coverage": 11,
           "correlation_degraded_inflight_limit": 0,
           "correlation_degraded_retired_limit": 0,
           "correlation_degraded_total": 0,
-          "correlation_eligible": 4,
+          "correlation_eligible": 11,
           "correlation_missing_total": 0,
           "deferred_high_water_bytes": 298,
           "deferred_high_water_items": 1,
           "deferred_queue_bytes": 0,
           "deferred_queue_items": 0,
-          "processed_deferred_total": 4,
-          "semantic_detection_coverage": 4,
-          "token_estimation_coverage": 4
+          "processed_deferred_total": 11,
+          "semantic_detection_coverage": 11,
+          "token_estimation_coverage": 11
         }
       },
-      "requested_samples": 3,
+      "requested_samples": 10,
       "rss_kib": {
-        "median": 6584.0,
-        "p95": 7416.0,
-        "sample_count": 190
+        "median": 7336.0,
+        "p95": 7804.0,
+        "sample_count": 328
       }
     }
   },
-  "runtime_commit": "27dfb806033ee5726addd22e79f194045d1882e8",
-  "samples": 3,
+  "runtime_commit": "a225cbcf277d4c1ba3324bc3847a5cf0f4e16b27",
+  "samples": 10,
   "upstream": "deterministic local HTTP/1.1 socket server",
   "warmup": 1,
   "workload": "tool_result_json"

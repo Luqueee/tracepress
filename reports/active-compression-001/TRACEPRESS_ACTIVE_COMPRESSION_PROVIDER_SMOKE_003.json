@@ -1,0 +1,52 @@
+{
+  "experiment_id": "active-compression-provider-smoke-003",
+  "phase": "4.2_infrastructure_gate",
+  "runtime_commit": "17608d27235e31ef4b5d7a5ea01023a97c55437a",
+  "provider": "authenticated ChatGPT Codex subscription",
+  "model": "gpt-5.6-luna",
+  "sandbox": "read-only",
+  "workload": "directed large heterogeneous JSON ToolResult",
+  "arms": {
+    "control": {
+      "configuration": "TRACEPRESS_ACTIVE_COMPRESSION=off",
+      "provider_requests": 2,
+      "content_encoding": "zstd",
+      "analysis_complete": 2,
+      "analysis_total": 2,
+      "active_attempts": 0,
+      "active_rewrites": 0
+    },
+    "active": {
+      "configuration": "TRACEPRESS_ACTIVE_COMPRESSION=json.minify",
+      "provider_requests": 2,
+      "content_encoding": "zstd",
+      "analysis_complete": 2,
+      "analysis_total": 2,
+      "active_attempts": 2,
+      "active_rewrites": 0,
+      "no_improvement": 1,
+      "not_applicable": 1,
+      "resource_limits": 0,
+      "invalid_inputs": 0,
+      "recovery_failures": 0,
+      "determinism_failures": 0,
+      "internal_errors": 0
+    }
+  },
+  "gates": {
+    "zstd_decode_edit_reencode_entered": true,
+    "decoded_never_worse_guard_separate_from_wire_metrics": true,
+    "forwarding_reachable": true,
+    "accepted_forwarding_mutations": 0,
+    "analysis_drops": 0,
+    "provider_impact_validated": false,
+    "quality_validated": false,
+    "cache_impact_validated": false
+  },
+  "limitations": [
+    "The cohort is an infrastructure smoke, not provider efficacy evidence.",
+    "This run accepted no candidate rewrite, so no wire expansion was exercised.",
+    "No provider-token, cache, cost, quality, or causal savings claim is made.",
+    "The Codex client emits a non-fatal /v1/models 404 that remains outside this change."
+  ]
+}

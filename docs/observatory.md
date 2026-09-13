@@ -130,8 +130,8 @@ never causes the analyzer to select a candidate automatically.
 The directed follow-up `Shadow Pilot 002` is recorded under
 `reports/shadow-compression-002/`. It selected `json.tabular` as the single candidate for Phase
 4.2 evaluation design; this is local representation evidence only, not provider-token or quality
-evidence. Phase 4.2 must keep request rewriting disabled until its A/B control is explicitly
-implemented and validated.
+evidence. Real-provider request rewriting remains disabled until its decode/edit/re-encode A/B
+control is explicitly implemented and validated.
 
 The first explicit Phase 4.2 adapter is now available for an infrastructure-only A/B smoke. It is
 disabled by default and can be enabled only alongside complete context analysis:

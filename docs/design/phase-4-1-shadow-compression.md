@@ -104,6 +104,8 @@ resource A/A comparison are recorded in `reports/shadow-compression-001/`. The r
 is observational only: it found no timing regression outside the measured A/A envelope, while
 Shadow ON used 384 KiB more peak RSS and 13.95 ms more child CPU than OFF on the synthetic
 ToolResult JSON workload. A larger naturalistic follow-up remains necessary before treating those
-resource values as stable. Phase 4.1 is not closed and no active candidate is selected while the
-pilot has no material workload-wide reduction.
-Phase 4.2 remains blocked until those empirical gates are complete.
+resource values as stable. Directed Pilot 002 subsequently characterized a material synthetic
+signal and selected `json.tabular` for Phase 4.2 evaluation design; it remains shadow-only because
+its TPJ2 bytes have no provider decoding contract. The provider-compatible `json.minify` adapter
+has a separate local infrastructure smoke, but real provider traffic remains disabled pending an
+explicit decode/edit/re-encode A/B gate.

@@ -1,0 +1,550 @@
+{
+  "current_sessions": 40,
+  "distribution_relative_tolerance": 0.1,
+  "manifest": {
+    "mismatched_report_indexes": [],
+    "pass": true,
+    "reports_with_manifest": 4,
+    "total_reports": 4
+  },
+  "maximum_sessions": 100,
+  "minimum_sessions": 40,
+  "missingness": [
+    {
+      "flagged_strata": [],
+      "pass": true
+    },
+    {
+      "flagged_strata": [],
+      "pass": true
+    },
+    {
+      "flagged_strata": [],
+      "pass": true
+    },
+    {
+      "flagged_strata": [],
+      "pass": true
+    }
+  ],
+  "quality": [
+    {
+      "checks": {
+        "analysis_coverage": {
+          "pass": true,
+          "target": 0.95,
+          "value": 1.0
+        },
+        "analysis_loss_rate": {
+          "pass": true,
+          "target": 0.01,
+          "value": 0.0
+        },
+        "backlog_capacity_drops": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "context_malformed": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "correlation_coverage": {
+          "pass": true,
+          "target": 0.99,
+          "value": 1.0
+        },
+        "forwarding_errors": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "measurement_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        },
+        "scheduler_counter_consistency": {
+          "pass": true,
+          "target": 0,
+          "value": 0
+        },
+        "scheduler_session_coverage": {
+          "pass": true,
+          "target": 10.0,
+          "value": 10.0
+        },
+        "scheduler_sidecar_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        }
+      },
+      "pass": true
+    },
+    {
+      "checks": {
+        "analysis_coverage": {
+          "pass": true,
+          "target": 0.95,
+          "value": 1.0
+        },
+        "analysis_loss_rate": {
+          "pass": true,
+          "target": 0.01,
+          "value": 0.0
+        },
+        "backlog_capacity_drops": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "context_malformed": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "correlation_coverage": {
+          "pass": true,
+          "target": 0.99,
+          "value": 1.0
+        },
+        "forwarding_errors": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "measurement_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        },
+        "scheduler_counter_consistency": {
+          "pass": true,
+          "target": 0,
+          "value": 0
+        },
+        "scheduler_session_coverage": {
+          "pass": true,
+          "target": 20.0,
+          "value": 20.0
+        },
+        "scheduler_sidecar_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        }
+      },
+      "pass": true
+    },
+    {
+      "checks": {
+        "analysis_coverage": {
+          "pass": true,
+          "target": 0.95,
+          "value": 1.0
+        },
+        "analysis_loss_rate": {
+          "pass": true,
+          "target": 0.01,
+          "value": 0.0
+        },
+        "backlog_capacity_drops": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "context_malformed": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "correlation_coverage": {
+          "pass": true,
+          "target": 0.99,
+          "value": 1.0
+        },
+        "forwarding_errors": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "measurement_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        },
+        "scheduler_counter_consistency": {
+          "pass": true,
+          "target": 0,
+          "value": 0
+        },
+        "scheduler_session_coverage": {
+          "pass": true,
+          "target": 30.0,
+          "value": 30.0
+        },
+        "scheduler_sidecar_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        }
+      },
+      "pass": true
+    },
+    {
+      "checks": {
+        "analysis_coverage": {
+          "pass": true,
+          "target": 0.95,
+          "value": 1.0
+        },
+        "analysis_loss_rate": {
+          "pass": true,
+          "target": 0.01,
+          "value": 0.0
+        },
+        "backlog_capacity_drops": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "context_malformed": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "correlation_coverage": {
+          "pass": true,
+          "target": 0.99,
+          "value": 1.0
+        },
+        "forwarding_errors": {
+          "pass": true,
+          "target": 0,
+          "value": 0.0
+        },
+        "measurement_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        },
+        "scheduler_counter_consistency": {
+          "pass": true,
+          "target": 0,
+          "value": 0
+        },
+        "scheduler_session_coverage": {
+          "pass": true,
+          "target": 40.0,
+          "value": 40.0
+        },
+        "scheduler_sidecar_integrity": {
+          "pass": true,
+          "target": "passed",
+          "value": "passed"
+        }
+      },
+      "pass": true
+    }
+  ],
+  "reasons": [
+    "all convergence gates passed"
+  ],
+  "share_tolerance": 0.02,
+  "status": "CONVERGED",
+  "transitions": [
+    {
+      "checks": {
+        "cached_input_ratio": {
+          "current": 0.7765132096107181,
+          "delta": -0.005054541992572825,
+          "previous": 0.781567751603291,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "candidate_ranking_top3": {
+          "current": [
+            "plain_text",
+            "json",
+            "unknown"
+          ],
+          "previous": [
+            "plain_text",
+            "json",
+            "unknown"
+          ],
+          "stable": true
+        },
+        "estimated_block_size_p50": {
+          "current": 210.0,
+          "previous": 210.0,
+          "relative_delta": 0.0,
+          "stable": true,
+          "tolerance": 0.1
+        },
+        "estimated_block_size_p90": {
+          "current": 5599.0,
+          "previous": 5648.0,
+          "relative_delta": -0.008675637393767706,
+          "stable": true,
+          "tolerance": 0.1
+        },
+        "exact_repetition_token_share": {
+          "current": 0.7309868393293466,
+          "delta": -0.008081864411804474,
+          "previous": 0.7390687037411511,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "json_token_share": {
+          "current": 0.5222555937858142,
+          "delta": -0.03976504788404345,
+          "previous": 0.5620206416698577,
+          "stable": false,
+          "tolerance": 0.02
+        },
+        "plain_text_token_share": {
+          "current": 0.31031739638726186,
+          "delta": 0.026735178403186455,
+          "previous": 0.2835822179840754,
+          "stable": false,
+          "tolerance": 0.02
+        },
+        "semantic_repetition_token_share": {
+          "current": 0.39119932626094855,
+          "delta": 0.03214949861384625,
+          "previous": 0.3590498276471023,
+          "stable": false,
+          "tolerance": 0.02
+        },
+        "stable_prefix_share": {
+          "current": 0.0,
+          "delta": 0.0,
+          "previous": 0.0,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "tool_definition_token_share": {
+          "current": 0.0,
+          "delta": 0.0,
+          "previous": 0.0,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "tool_result_token_share": {
+          "current": 0.5222555937858142,
+          "delta": -0.03976504788404345,
+          "previous": 0.5620206416698577,
+          "stable": false,
+          "tolerance": 0.02
+        },
+        "unknown_token_share": {
+          "current": 0.16259303442129744,
+          "delta": 0.012753379526048797,
+          "previous": 0.14983965489524864,
+          "stable": true,
+          "tolerance": 0.02
+        }
+      },
+      "current_sessions": 20,
+      "previous_sessions": 10,
+      "stable": false
+    },
+    {
+      "checks": {
+        "cached_input_ratio": {
+          "current": 0.7822900335190602,
+          "delta": 0.00577682390834211,
+          "previous": 0.7765132096107181,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "candidate_ranking_top3": {
+          "current": [
+            "plain_text",
+            "json",
+            "unknown"
+          ],
+          "previous": [
+            "plain_text",
+            "json",
+            "unknown"
+          ],
+          "stable": true
+        },
+        "estimated_block_size_p50": {
+          "current": 210.0,
+          "previous": 210.0,
+          "relative_delta": 0.0,
+          "stable": true,
+          "tolerance": 0.1
+        },
+        "estimated_block_size_p90": {
+          "current": 5599.0,
+          "previous": 5599.0,
+          "relative_delta": 0.0,
+          "stable": true,
+          "tolerance": 0.1
+        },
+        "exact_repetition_token_share": {
+          "current": 0.7327424209668568,
+          "delta": 0.0017555816375102173,
+          "previous": 0.7309868393293466,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "json_token_share": {
+          "current": 0.5158817446186377,
+          "delta": -0.006373849167176537,
+          "previous": 0.5222555937858142,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "plain_text_token_share": {
+          "current": 0.3150977198283917,
+          "delta": 0.00478032344112983,
+          "previous": 0.31031739638726186,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "semantic_repetition_token_share": {
+          "current": 0.39781492832131715,
+          "delta": 0.006615602060368597,
+          "previous": 0.39119932626094855,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "stable_prefix_share": {
+          "current": 0.0,
+          "delta": 0.0,
+          "previous": 0.0,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "tool_definition_token_share": {
+          "current": 0.0,
+          "delta": 0.0,
+          "previous": 0.0,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "tool_result_token_share": {
+          "current": 0.5158817446186377,
+          "delta": -0.006373849167176537,
+          "previous": 0.5222555937858142,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "unknown_token_share": {
+          "current": 0.16433177642666102,
+          "delta": 0.001738742005363586,
+          "previous": 0.16259303442129744,
+          "stable": true,
+          "tolerance": 0.02
+        }
+      },
+      "current_sessions": 30,
+      "previous_sessions": 20,
+      "stable": true
+    },
+    {
+      "checks": {
+        "cached_input_ratio": {
+          "current": 0.79214992752667,
+          "delta": 0.009859894007609782,
+          "previous": 0.7822900335190602,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "candidate_ranking_top3": {
+          "current": [
+            "plain_text",
+            "json",
+            "unknown"
+          ],
+          "previous": [
+            "plain_text",
+            "json",
+            "unknown"
+          ],
+          "stable": true
+        },
+        "estimated_block_size_p50": {
+          "current": 210.0,
+          "previous": 210.0,
+          "relative_delta": 0.0,
+          "stable": true,
+          "tolerance": 0.1
+        },
+        "estimated_block_size_p90": {
+          "current": 5599.0,
+          "previous": 5599.0,
+          "relative_delta": 0.0,
+          "stable": true,
+          "tolerance": 0.1
+        },
+        "exact_repetition_token_share": {
+          "current": 0.7341752897865099,
+          "delta": 0.0014328688196530992,
+          "previous": 0.7327424209668568,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "json_token_share": {
+          "current": 0.4983489362073851,
+          "delta": -0.0175328084112526,
+          "previous": 0.5158817446186377,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "plain_text_token_share": {
+          "current": 0.3266072907561502,
+          "delta": 0.011509570927758506,
+          "previous": 0.3150977198283917,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "semantic_repetition_token_share": {
+          "current": 0.4122424734126917,
+          "delta": 0.01442754509137456,
+          "previous": 0.39781492832131715,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "stable_prefix_share": {
+          "current": 0.0,
+          "delta": 0.0,
+          "previous": 0.0,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "tool_definition_token_share": {
+          "current": 0.0,
+          "delta": 0.0,
+          "previous": 0.0,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "tool_result_token_share": {
+          "current": 0.4983489362073851,
+          "delta": -0.0175328084112526,
+          "previous": 0.5158817446186377,
+          "stable": true,
+          "tolerance": 0.02
+        },
+        "unknown_token_share": {
+          "current": 0.17005831491144116,
+          "delta": 0.005726538484780136,
+          "previous": 0.16433177642666102,
+          "stable": true,
+          "tolerance": 0.02
+        }
+      },
+      "current_sessions": 40,
+      "previous_sessions": 30,
+      "stable": true
+    }
+  ]
+}

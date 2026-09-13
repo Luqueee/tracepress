@@ -46,14 +46,23 @@ fn resource_limits() -> Result<ResourceLimits, Box<dyn std::error::Error>> {
 #[derive(Clone, Default)]
 struct StateCapture {
     body: Arc<Mutex<Option<Bytes>>>,
+    content_encoding: Arc<Mutex<Option<String>>>,
 }
 
 async fn upstream(State(state): State<StateCapture>, request: Request) -> Response {
-    let body = to_bytes(request.into_body(), 65_536)
+    let (parts, body) = request.into_parts();
+    let body = to_bytes(body, 65_536)
         .await
         .unwrap_or_else(|_| Bytes::new());
     if let Ok(mut captured) = state.body.lock() {
         *captured = Some(body);
+    }
+    if let Ok(mut captured) = state.content_encoding.lock() {
+        *captured = parts
+            .headers
+            .get("content-encoding")
+            .and_then(|value| value.to_str().ok())
+            .map(str::to_owned);
     }
     Response::builder()
         .status(StatusCode::OK)
@@ -206,5 +215,98 @@ async fn active_mode_is_not_enabled_by_default() -> TestResult {
     let endpoint = ProviderEndpoint::new("http://127.0.0.1:1/v1/responses")?;
     let config = ProxyConfig::new(endpoint, limits, ContextAnalysisMode::Shadow)?;
     assert_eq!(config.active_compression_mode, ActiveCompressionMode::Off);
+    Ok(())
+}
+
+#[tokio::test]
+async fn explicit_active_mode_rewrites_zstd_wire_and_preserves_encoding() -> TestResult {
+    let capture = StateCapture::default();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let upstream_task = tokio::spawn({
+        let state = capture.clone();
+        async move {
+            let _ = axum::serve(
+                listener,
+                Router::new()
+                    .route("/v1/responses", post(upstream))
+                    .with_state(state),
+            )
+            .await;
+        }
+    });
+
+    let sink = Arc::new(ObservationCapture::default());
+    let proxy = TransparentProxy::new(
+        ProxyConfig::new(
+            ProviderEndpoint::new(&format!("http://{address}/v1/responses"))?,
+            resource_limits()?,
+            ContextAnalysisMode::Shadow,
+        )?
+        .with_active_compression_mode(ActiveCompressionMode::JsonMinify),
+    )?
+    .with_metadata_sink(Arc::clone(&sink) as Arc<dyn MetadataSink>)
+    .with_observation_sink(Arc::clone(&sink) as Arc<dyn ProviderObservationSink>);
+    let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_address = proxy_listener.local_addr()?;
+    let proxy_task = tokio::spawn(async move {
+        let _ = axum::serve(proxy_listener, proxy.router()).await;
+    });
+
+    let original = br#"{"model":"test","stream":false,"input":[{"type":"function_call_output","call_id":"x","output":"[{ \"name\": \"alpha\", \"status\": \"ok\", \"size\": 10 }, { \"name\": \"bravo\", \"status\": \"ok\", \"size\": 12 }, { \"name\": \"charlie\", \"status\": \"ok\", \"size\": 14 }]"}],"keep":"exact"}"#;
+    let wire = zstd::stream::encode_all(std::io::Cursor::new(original), 1)?;
+    let response = reqwest::Client::new()
+        .post(format!("http://{proxy_address}/v1/responses"))
+        .header("content-type", "application/json")
+        .header("content-encoding", "zstd")
+        .body(wire.clone())
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = response.bytes().await?;
+
+    let forwarded = capture
+        .body
+        .lock()
+        .map_err(|_| "capture poisoned")?
+        .clone()
+        .ok_or("upstream did not receive a request")?;
+    let forwarded_decoded = zstd::stream::decode_all(std::io::Cursor::new(forwarded.as_ref()))?;
+    let forwarded_value: serde_json::Value = serde_json::from_slice(&forwarded_decoded)?;
+    assert_eq!(
+        forwarded_value["keep"],
+        serde_json::Value::String("exact".to_owned())
+    );
+    assert_eq!(
+        forwarded_value["input"][0]["output"],
+        serde_json::Value::String(
+            r#"[{"name":"alpha","status":"ok","size":10},{"name":"bravo","status":"ok","size":12},{"name":"charlie","status":"ok","size":14}]"#
+                .to_owned(),
+        )
+    );
+    assert_eq!(
+        capture
+            .content_encoding
+            .lock()
+            .map_err(|_| "encoding capture poisoned")?
+            .as_deref(),
+        Some("zstd")
+    );
+    assert_ne!(forwarded.as_ref(), wire.as_slice());
+
+    let active = sink.active.lock().map_err(|_| "active capture poisoned")?;
+    assert_eq!(active.len(), 1);
+    let metrics = &active[0].metrics;
+    assert_eq!(
+        metrics.status,
+        tracepress_compression::ActiveRewriteStatus::Rewritten
+    );
+    assert_eq!(metrics.rewrites, 1);
+    assert!(metrics.recovery_verified);
+    assert!(metrics.deterministic);
+    assert!(metrics.output_bytes.unwrap_or_default() < metrics.input_bytes);
+    drop(active);
+    proxy_task.abort();
+    upstream_task.abort();
     Ok(())
 }

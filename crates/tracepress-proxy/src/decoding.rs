@@ -8,7 +8,7 @@
 )]
 
 use std::fmt;
-use std::io::{Cursor, Read as _};
+use std::io::{self, Cursor, Read as _, Write as _};
 use std::time::{Duration, Instant};
 
 use axum::body::Bytes;
@@ -63,6 +63,10 @@ impl AnalysisBody {
 
     pub(crate) fn clone_bytes(&self) -> Bytes {
         self.0.clone()
+    }
+
+    pub(crate) fn into_bytes(self) -> Bytes {
+        self.0
     }
 }
 
@@ -141,6 +145,96 @@ impl AnalysisDecoder for BoundedAnalysisDecoder {
             ContentEncoding::Zstd => decode_zstd(wire, limits, started, finish),
             _ => finish(AnalysisDecodeStatus::UnsupportedEncoding, None, 0),
         }
+    }
+}
+
+/// Failure classes for the active arm's bounded wire re-encoding.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum ActiveEncodeError {
+    ResourceLimit,
+    Internal,
+}
+
+/// Re-encodes one bounded decoded body with zstd for the explicitly enabled active arm.
+///
+/// The output writer rejects expansion beyond the configured byte/memory budget. Input is fed in
+/// small chunks so work and wall-clock checks remain independent from the forwarding path.
+pub(crate) fn encode_zstd_bounded(
+    decoded: &[u8],
+    max_output_bytes: u64,
+    max_memory_bytes: u64,
+    max_work_units: u64,
+    max_wall_time: Duration,
+) -> Result<Bytes, ActiveEncodeError> {
+    let decoded_bytes = u64::try_from(decoded.len()).unwrap_or(u64::MAX);
+    if decoded_bytes > max_memory_bytes || decoded_bytes > max_work_units {
+        return Err(ActiveEncodeError::ResourceLimit);
+    }
+    let remaining_memory = max_memory_bytes.saturating_sub(decoded_bytes);
+    let output_limit = max_output_bytes.min(remaining_memory);
+    let output_limit = usize::try_from(output_limit).unwrap_or(usize::MAX);
+    let started = Instant::now();
+    let mut encoder = zstd::stream::write::Encoder::new(BoundedOutput::new(output_limit), 1)
+        .map_err(|_error| ActiveEncodeError::Internal)?;
+    let mut work = 0_u64;
+    for chunk in decoded.chunks(DECODE_BUFFER_BYTES) {
+        if started.elapsed() > max_wall_time {
+            return Err(ActiveEncodeError::ResourceLimit);
+        }
+        work = work.saturating_add(u64::try_from(chunk.len()).unwrap_or(u64::MAX));
+        if work > max_work_units {
+            return Err(ActiveEncodeError::ResourceLimit);
+        }
+        encoder
+            .write_all(chunk)
+            .map_err(|error| match error.kind() {
+                io::ErrorKind::WriteZero => ActiveEncodeError::ResourceLimit,
+                _ => ActiveEncodeError::Internal,
+            })?;
+    }
+    let output = encoder.finish().map_err(|error| match error.kind() {
+        io::ErrorKind::WriteZero => ActiveEncodeError::ResourceLimit,
+        _ => ActiveEncodeError::Internal,
+    })?;
+    if started.elapsed() > max_wall_time {
+        return Err(ActiveEncodeError::ResourceLimit);
+    }
+    Ok(Bytes::from(output.into_bytes()))
+}
+
+struct BoundedOutput {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+
+impl BoundedOutput {
+    const fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+        }
+    }
+
+    fn into_bytes(self) -> Vec<u8> {
+        self.bytes
+    }
+}
+
+impl io::Write for BoundedOutput {
+    fn write(&mut self, bytes: &[u8]) -> io::Result<usize> {
+        let remaining = self.limit.saturating_sub(self.bytes.len());
+        if bytes.len() > remaining {
+            return Err(io::Error::new(
+                io::ErrorKind::WriteZero,
+                "active zstd output limit exceeded",
+            ));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+
+    fn flush(&mut self) -> io::Result<()> {
+        Ok(())
     }
 }
 
@@ -317,5 +411,23 @@ mod tests {
             parse_content_encoding(Some("")),
             ContentEncoding::Unsupported
         );
+    }
+
+    #[test]
+    fn active_zstd_reencode_roundtrips_with_bounded_output() {
+        let input = br#"{"model":"gpt-5","input":[{"type":"function_call_output","output":"{ \"ok\": true }"}]}"#;
+        let encoded = encode_zstd_bounded(input, 4096, 8192, 1_000_000, Duration::from_secs(1))
+            .expect("bounded encoding");
+        let wire = WireBody::new(encoded);
+        let decoded = BoundedAnalysisDecoder.decode(&wire, ContentEncoding::Zstd, &limits());
+        assert_eq!(decoded.status, AnalysisDecodeStatus::Decoded);
+        assert_eq!(decoded.body.expect("decoded body").as_ref(), input);
+    }
+
+    #[test]
+    fn active_zstd_reencode_rejects_output_budget() {
+        let input = vec![b'x'; 8192];
+        let result = encode_zstd_bounded(&input, 1, 16_384, 1_000_000, Duration::from_secs(1));
+        assert_eq!(result, Err(ActiveEncodeError::ResourceLimit));
     }
 }

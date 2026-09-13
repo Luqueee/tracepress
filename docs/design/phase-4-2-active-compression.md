@@ -10,11 +10,12 @@ TRACEPRESS_CONTEXT_ANALYSIS=shadow
 TRACEPRESS_ACTIVE_COMPRESSION=json.minify
 ```
 
-The adapter currently supports only identity-encoded `/v1/responses` requests and only complete
-`ToolGenerated + ToolResult + Json` spans returned by the bounded Phase 3 analyser. It runs before
-the upstream dispatch, but only after the request has been fully buffered under the existing body
-bound. The original body is retained for fail-open behavior; the rewritten body is transient and
-never persisted as candidate content.
+The adapter currently supports identity-encoded and bounded `zstd` `/v1/responses` requests, and
+only complete `ToolGenerated + ToolResult + Json` spans returned by the bounded Phase 3 analyser.
+For zstd, it decodes, rewrites, and re-encodes under the active experiment's independent resource
+limits before upstream dispatch. It runs only after the request has been fully buffered under the
+existing body bound. The original body is retained for fail-open behavior; the rewritten body is
+transient and never persisted as candidate content.
 
 ```text
 original body
@@ -28,7 +29,7 @@ original body
                                       explicit active upstream request
 ```
 
-Any malformed, compressed, partial, overlapping, non-deterministic, non-recoverable, or
+Any malformed, unsupported-encoding, partial, overlapping, non-deterministic, non-recoverable, or
 resource-limited attempt forwards the original bytes. The active adapter removes an inbound
 `Content-Length` only when bytes actually change so reqwest emits a correct length for the
 replacement body. All other headers and routes keep the existing forwarding behavior.
@@ -67,5 +68,7 @@ reversible candidate can be exercised without changing the default path.
 The first authenticated Codex subscription smoke is recorded in
 `reports/active-compression-001/TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_SMOKE_001.md`. Codex sent
 `Content-Encoding: zstd` on every request, so the identity-only adapter correctly produced zero
-active attempts and forwarded the original bytes. A bounded zstd decode/edit/re-encode design is
-required before this can become a provider A/B result; zstd re-encoding remains outside Phase 4.1.
+active attempts and forwarded the original bytes. That report is historical: the active adapter now
+has a bounded zstd decode/edit/re-encode path. A subsequent smoke must still be treated as an
+infrastructure check, not a provider A/B result; zstd re-encoding does not establish provider-token
+savings, cache preservation, cost impact, or quality preservation.

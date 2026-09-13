@@ -144,8 +144,10 @@ tracepress run <agent> ...
 
 The adapter rewrites only complete `ToolGenerated + ToolResult + Json` spans, removes structural
 JSON whitespace, verifies deterministic output and exact recovery, and removes a stale
-`Content-Length` before forwarding the shorter body. Any malformed, compressed, partial, or
-resource-limited request fails open to the original bytes. `json.tabular` remains shadow-only: its
+`Content-Length` before forwarding the shorter body. Any malformed, unsupported-encoding, partial,
+or resource-limited request fails open to the original bytes. zstd requests use bounded
+decode/edit/re-encode; the `Content-Encoding: zstd` header is retained. `json.tabular` remains
+shadow-only: its
 `TPJ2` representation is not a provider-compatible Responses payload and is not sent upstream.
 Active metrics are metadata-only (`original`/`rewritten` sizes and fingerprints) and are offered to
 the observation sink without blocking it. The explicitly enabled active arm performs bounded

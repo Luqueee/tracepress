@@ -25,8 +25,8 @@ use axum::http::{HeaderMap, HeaderName, StatusCode, Uri};
 use axum::response::Response;
 use axum::routing::post;
 use decoding::{
-    AnalysisDecoder, BoundedAnalysisDecoder, DecodeLimits, DecodeResult, WireBody,
-    parse_content_encoding_header,
+    ActiveEncodeError, AnalysisDecoder, BoundedAnalysisDecoder, DecodeLimits, DecodeResult,
+    WireBody, encode_zstd_bounded, parse_content_encoding_header,
 };
 use futures_util::{StreamExt as _, stream};
 use sha2::{Digest as _, Sha256};
@@ -1427,9 +1427,9 @@ async fn forward_inner(
 /// Builds the body for an explicitly enabled active experiment arm.
 ///
 /// The normal path returns the original [`WireBody`] without entering this function's rewrite
-/// branch. Active mode is deliberately restricted to identity-encoded Responses requests and to
-/// a complete Phase 3 analysis; compressed, malformed, or partial requests fail open to the
-/// original bytes and publish no mutation.
+/// branch. Active mode supports identity and one bounded zstd decode/edit/re-encode path for
+/// Responses requests. Malformed, partial, unsupported, or resource-limited requests fail open
+/// to the original bytes and publish no mutation.
 #[allow(
     clippy::too_many_arguments,
     reason = "the active rewrite boundary keeps route, encoding, and original bytes explicit"
@@ -1444,11 +1444,33 @@ fn active_forward_body(
         proxy.config.active_compression_mode,
         ActiveCompressionMode::JsonMinify
     ) || !matches!(route, InboundRoute::Responses)
-        || !matches!(content_encoding, ContentEncoding::Identity)
+        || matches!(content_encoding, ContentEncoding::Unsupported)
     {
         return (original.clone(), None);
     }
-    let analysis = analyze_responses(original.as_ref(), proxy.config.context_analysis_limits);
+    let decode_limits = DecodeLimits {
+        max_compressed_bytes: proxy.config.max_request_body_bytes.get(),
+        max_decompressed_bytes: proxy.config.resource_limits.max_decompressed_bytes.get(),
+        max_expansion_ratio: None,
+        max_decode_time: Duration::from_millis(
+            proxy.config.resource_limits.max_processing_time_ms.get(),
+        ),
+    };
+    let decoded = match content_encoding {
+        ContentEncoding::Identity => Bytes::copy_from_slice(original.as_ref()),
+        ContentEncoding::Zstd => {
+            let result = BoundedAnalysisDecoder.decode(original, content_encoding, &decode_limits);
+            if !matches!(result.status, AnalysisDecodeStatus::Decoded) {
+                return (original.clone(), None);
+            }
+            let Some(body) = result.body else {
+                return (original.clone(), None);
+            };
+            body.into_bytes()
+        }
+        _ => return (original.clone(), None),
+    };
+    let analysis = analyze_responses(decoded.as_ref(), proxy.config.context_analysis_limits);
     if !matches!(
         analysis.status,
         tracepress_context::ContextAnalysisStatus::Complete
@@ -1471,11 +1493,36 @@ fn active_forward_body(
                 .content_span
                 .unwrap_or([block.locator.raw_value_start, block.locator.raw_value_end]);
             let start_index = usize::try_from(start).ok()?;
-            let encoded_string = original.as_ref().get(start_index).copied() == Some(b'"');
+            let encoded_string = decoded.get(start_index).copied() == Some(b'"');
             ActiveJsonSpan::new(start, end, encoded_string)
         })
         .collect::<Vec<_>>();
-    let result = rewrite_json_minify(original.as_ref(), &spans, &CompressionLimits::default());
+    let compression_limits = CompressionLimits::default();
+    let result = rewrite_json_minify(decoded.as_ref(), &spans, &compression_limits);
+    if !matches!(result.metrics().status, ActiveRewriteStatus::Rewritten) {
+        let metrics = result.metrics().clone();
+        return (original.clone(), Some(metrics));
+    }
+    let Some(decoded_body) = result.body() else {
+        return (original.clone(), Some(result.metrics().clone()));
+    };
+    let wire_body = match content_encoding {
+        ContentEncoding::Identity => Bytes::copy_from_slice(decoded_body),
+        ContentEncoding::Zstd => match encode_zstd_bounded(
+            decoded_body,
+            proxy.config.max_request_body_bytes.get(),
+            compression_limits.max_shadow_memory_bytes,
+            compression_limits.max_shadow_work_units,
+            Duration::from_millis(compression_limits.max_shadow_wall_time_ms.get()),
+        ) {
+            Ok(body) => body,
+            Err(ActiveEncodeError::ResourceLimit | ActiveEncodeError::Internal) => {
+                return (original.clone(), None);
+            }
+        },
+        _ => return (original.clone(), None),
+    };
+    let result = result.reframe(original.as_ref(), wire_body.to_vec().into_boxed_slice());
     let metrics = result.metrics().clone();
     if !matches!(metrics.status, ActiveRewriteStatus::Rewritten) {
         return (original.clone(), Some(metrics));

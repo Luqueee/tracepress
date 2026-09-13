@@ -23,35 +23,35 @@
     "active": {
       "_raw": {
         "dispatch_us": [
-          916.081,
-          729.03,
-          577.151
+          634.89,
+          706.051,
+          677.511
         ],
         "duration_us": [
-          4347.083,
-          4495.033,
-          3942.334
+          4029.233,
+          4148.264,
+          4035.274
         ],
         "proxy_ttfb_us": [
-          186.33,
-          464.62,
-          186.56
+          222.74,
+          220.83,
+          181.839
         ],
         "proxy_ttft_us": []
       },
       "analysis_mode": "shadow",
       "burst_width": 1,
-      "children_system_cpu_us": 20866.0,
-      "children_total_cpu_us": 93099.0,
-      "children_user_cpu_us": 72233.0,
+      "children_system_cpu_us": 11912.0,
+      "children_total_cpu_us": 83827.0,
+      "children_user_cpu_us": 71915.0,
       "dispatch_us": {
-        "median": 729.03,
-        "p95": 916.081,
+        "median": 677.511,
+        "p95": 706.051,
         "sample_count": 3
       },
       "duration_us": {
-        "median": 4347.083,
-        "p95": 4495.033,
+        "median": 4035.274,
+        "p95": 4148.264,
         "sample_count": 3
       },
       "errors": 0,
@@ -60,14 +60,14 @@
         "p95": 238.0,
         "sample_count": 3
       },
-      "idle_rss_kib": 472,
+      "idle_rss_kib": 464,
       "missing_upstream_metrics": 0,
-      "peak_rss_delta_kib": 7076,
-      "peak_rss_kib": 7548,
+      "peak_rss_delta_kib": 7264,
+      "peak_rss_kib": 7728,
       "phase": "active-pilot-001-active",
       "proxy_ttfb_us": {
-        "median": 186.56,
-        "p95": 464.62,
+        "median": 220.83,
+        "p95": 222.74,
         "sample_count": 3
       },
       "proxy_ttft_us": {
@@ -118,7 +118,7 @@
           "analysis_requests_dropped": 0,
           "analysis_requests_partial": 0,
           "analysis_requests_seen": 4,
-          "analysis_wait_us": 16,
+          "analysis_wait_us": 20,
           "backlog_capacity_drops": 0,
           "compaction_observation_dropped_total": 0,
           "context_cancelled_total": 0,
@@ -146,43 +146,43 @@
       },
       "requested_samples": 3,
       "rss_kib": {
-        "median": 6552.0,
-        "p95": 7548.0,
-        "sample_count": 188
+        "median": 6324.0,
+        "p95": 7728.0,
+        "sample_count": 186
       }
     },
     "control": {
       "_raw": {
         "dispatch_us": [
-          610.35,
-          619.031,
-          511.61
+          547.241,
+          568.16,
+          528.041
         ],
         "duration_us": [
-          4151.733,
-          4279.723,
-          3879.802
+          3980.794,
+          4029.763,
+          3852.734
         ],
         "proxy_ttfb_us": [
-          310.089,
-          394.391,
-          180.751
+          264.651,
+          235.09,
+          167.86
         ],
         "proxy_ttft_us": []
       },
       "analysis_mode": "shadow",
       "burst_width": 1,
-      "children_system_cpu_us": 35018.0,
-      "children_total_cpu_us": 81606.0,
-      "children_user_cpu_us": 46588.0,
+      "children_system_cpu_us": 17571.0,
+      "children_total_cpu_us": 87928.0,
+      "children_user_cpu_us": 70357.0,
       "dispatch_us": {
-        "median": 610.35,
-        "p95": 619.031,
+        "median": 547.241,
+        "p95": 568.16,
         "sample_count": 3
       },
       "duration_us": {
-        "median": 4151.733,
-        "p95": 4279.723,
+        "median": 3980.794,
+        "p95": 4029.763,
         "sample_count": 3
       },
       "errors": 0,
@@ -191,14 +191,14 @@
         "p95": 298.0,
         "sample_count": 3
       },
-      "idle_rss_kib": 508,
+      "idle_rss_kib": 500,
       "missing_upstream_metrics": 0,
-      "peak_rss_delta_kib": 6884,
-      "peak_rss_kib": 7392,
+      "peak_rss_delta_kib": 6916,
+      "peak_rss_kib": 7416,
       "phase": "active-pilot-001-control",
       "proxy_ttfb_us": {
-        "median": 310.089,
-        "p95": 394.391,
+        "median": 235.09,
+        "p95": 264.651,
         "sample_count": 3
       },
       "proxy_ttft_us": {
@@ -249,7 +249,7 @@
           "analysis_requests_dropped": 0,
           "analysis_requests_partial": 0,
           "analysis_requests_seen": 4,
-          "analysis_wait_us": 14,
+          "analysis_wait_us": 17,
           "backlog_capacity_drops": 0,
           "compaction_observation_dropped_total": 0,
           "context_cancelled_total": 0,
@@ -277,13 +277,13 @@
       },
       "requested_samples": 3,
       "rss_kib": {
-        "median": 6492.0,
-        "p95": 7392.0,
-        "sample_count": 187
+        "median": 6584.0,
+        "p95": 7416.0,
+        "sample_count": 190
       }
     }
   },
-  "runtime_commit": "76788dc7e241ada781f108b0d9b1d6c1f7a5d421",
+  "runtime_commit": "27dfb806033ee5726addd22e79f194045d1882e8",
   "samples": 3,
   "upstream": "deterministic local HTTP/1.1 socket server",
   "warmup": 1,

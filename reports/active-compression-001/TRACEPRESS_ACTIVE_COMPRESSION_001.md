@@ -2,7 +2,7 @@
 
 Infrastructure-only A/B smoke for the explicitly enabled `json.minify` adapter.
 
-- Runtime commit: `76788dc7e241ada781f108b0d9b1d6c1f7a5d421`
+- Runtime commit: `27dfb806033ee5726addd22e79f194045d1882e8`
 - Workload: `tool_result_json`; N=3
 - Upstream: deterministic local HTTP/1.1 server
 

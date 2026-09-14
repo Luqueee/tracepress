@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Metadata-only characterization for Phase 4.2.1.
+"""Metadata-only characterization for Phase 4.3.
 
-The script deliberately never selects context bytes, fingerprints, tool names, or raw
-payloads. It is safe to point at an operational database opened read-only. Shape
-labels are derived from the bounded fields already produced by Context Analysis.
+The script never exports context bytes, fingerprints, raw tool names, or raw payloads. It is safe
+to point at an operational database opened read-only. Shape labels are derived from the bounded
+fields already produced by Context Analysis.
 """
 
 from __future__ import annotations
@@ -11,6 +11,7 @@ from __future__ import annotations
 import argparse
 import json
 import sqlite3
+from collections import Counter
 from pathlib import Path
 
 
@@ -30,6 +31,22 @@ def bucket(value: int | None) -> str:
     return "1000+"
 
 
+def tool_family(tool_name: str | None) -> str:
+    """Map a tool name to an allowlisted family without exporting the name."""
+    if not tool_name:
+        return "unknown"
+    normalized = tool_name.lower()
+    if any(marker in normalized for marker in ("search", "grep", "rg", "find")):
+        return "search"
+    if any(marker in normalized for marker in ("test", "pytest", "vitest", "jest")):
+        return "tests"
+    if any(marker in normalized for marker in ("build", "compile", "check", "lint")):
+        return "build"
+    if any(marker in normalized for marker in ("shell", "exec", "command", "run")):
+        return "shell"
+    return "unknown"
+
+
 def characterize(database: Path, session_limit: int) -> dict:
     uri = f"file:{database}?mode=ro"
     connection = sqlite3.connect(uri, uri=True)
@@ -42,7 +59,19 @@ def characterize(database: Path, session_limit: int) -> dict:
         )
     ]
     if not session_ids:
-        return {"sessions": 0, "blocks": 0, "json": {}, "plain_text": {}, "context_matrix": [], "candidate_forecast": {}}
+        return {
+            "sessions": 0,
+            "blocks": 0,
+            "json": {},
+            "plain_text": {},
+            "tool_families": {},
+            "key_frequency": {
+                "status": "unavailable_without_raw_content",
+                "privacy": "raw_tool_results_are_not_selected_or_persisted",
+            },
+            "context_matrix": [],
+            "candidate_forecast": {},
+        }
     placeholders = ",".join("?" for _ in session_ids)
     matrix_rows = connection.execute(
         f"""SELECT COALESCE(cbo.origin, 'unknown'), COALESCE(cbo.kind, 'unknown'),
@@ -75,7 +104,7 @@ def characterize(database: Path, session_limit: int) -> dict:
     rows = connection.execute(
         f"""SELECT cbo.detected_kind, cbo.raw_bytes, cbo.estimated_tokens,
                    cbo.line_count, cbo.duplicate_line_ratio, cbo.json_item_count,
-                   cbo.json_depth, cbo.origin, cbo.kind
+                   cbo.json_depth, cbo.origin, cbo.kind, cbo.tool_name
             FROM context_block_occurrences cbo
             JOIN context_snapshots cs ON cs.snapshot_id = cbo.snapshot_id
             WHERE cs.session_id IN ({placeholders})
@@ -85,10 +114,12 @@ def characterize(database: Path, session_limit: int) -> dict:
     ).fetchall()
     json_shapes: dict[str, dict[str, int]] = {}
     text_shapes: dict[str, dict[str, int]] = {}
+    tool_families: Counter[str] = Counter()
     total_json_tokens = 0
     total_text_tokens = 0
-    for detected, raw_bytes, estimated_tokens, line_count, duplicate_ratio, item_count, depth, *_ in rows:
+    for detected, raw_bytes, estimated_tokens, line_count, duplicate_ratio, item_count, depth, _, _, tool_name in rows:
         tokens = int(estimated_tokens or 0)
+        tool_families[f"{tool_family(tool_name)}|{detected or 'unavailable'}"] += tokens
         if detected == "json":
             if item_count is None:
                 shape = "object_or_scalar"
@@ -139,6 +170,11 @@ def characterize(database: Path, session_limit: int) -> dict:
         "blocks": len(rows),
         "json": {"total_estimated_tokens": total_json_tokens, "shapes": json_shapes},
         "plain_text": {"total_estimated_tokens": total_text_tokens, "shapes": text_shapes},
+        "tool_families": dict(sorted(tool_families.items())),
+        "key_frequency": {
+            "status": "unavailable_without_raw_content",
+            "privacy": "raw_tool_results_are_not_selected_or_persisted",
+        },
         "context_matrix": context_matrix,
         "candidate_forecast": forecast,
         "privacy": "metadata_only_raw_content_not_selected",
@@ -155,7 +191,7 @@ def main() -> None:
     result = characterize(args.db, max(1, min(args.sessions, 10_000)))
     args.json.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n")
     lines = [
-        "# Provider-Compatible Shape Characterization",
+        "# Tool-Aware ToolResult Characterization",
         "",
         f"Sessions: **{result['sessions']}**  ",
         f"ToolResult blocks: **{result['blocks']}**",
@@ -170,6 +206,13 @@ def main() -> None:
     lines += ["", "## Plain-text shapes", ""]
     for name, values in result["plain_text"]["shapes"].items():
         lines.append(f"- `{name}`: {values['blocks']} blocks, {values['estimated_tokens']} estimated tokens")
+    lines += ["", "## Tool families", ""]
+    for name, tokens in result["tool_families"].items():
+        lines.append(f"- `{name}`: {tokens} estimated tokens")
+    lines += [
+        "",
+        "Key-frequency analysis is unavailable without selecting raw ToolResult content; this is intentional.",
+    ]
     lines += ["", "## Origin × kind matrix", "", "| Origin | Kind | Detected | Blocks | Estimated tokens | Share |", "|---|---|---|---:|---:|---:|"]
     for cell in result["context_matrix"]:
         share = "—" if cell["token_share"] is None else f"{cell['token_share'] * 100:.2f}%"

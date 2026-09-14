@@ -50,7 +50,7 @@ def wait_for_daemon(cli: Path, root: Path, env: dict[str, str], process: subproc
     raise RuntimeError("tracepressd did not become ready")
 
 
-def aggregate(database: Path) -> dict[str, Any]:
+def aggregate(database: Path, experiment_id: str) -> dict[str, Any]:
     connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
     experiment = connection.execute(
@@ -58,7 +58,8 @@ def aggregate(database: Path) -> dict[str, Any]:
                   shadow_jobs_admitted,shadow_jobs_processed,shadow_job_drops,
                   candidate_evaluations_attempted,candidate_evaluations_completed,
                   candidate_evaluation_drops,recovery_failures,determinism_failures
-           FROM compression_experiments WHERE experiment_id='shadow-pilot-003'"""
+           FROM compression_experiments WHERE experiment_id=?""",
+        (experiment_id,),
     ).fetchone()
     rows = connection.execute(
         """SELECT c.compressor_id, c.status, m.input_bytes, m.output_bytes, m.bytes_delta,
@@ -69,7 +70,8 @@ def aggregate(database: Path) -> dict[str, Any]:
                   c.json_nested_cell_ratio_basis_points, c.text_shape
            FROM compression_candidates c
            JOIN compression_candidate_metrics m USING(candidate_id)
-           WHERE c.experiment_id='shadow-pilot-003'"""
+           WHERE c.experiment_id=?""",
+        (experiment_id,),
     ).fetchall()
     grouped: dict[str, list[sqlite3.Row]] = defaultdict(list)
     for row in rows:
@@ -117,19 +119,47 @@ def aggregate(database: Path) -> dict[str, Any]:
            FROM compression_candidates c
            JOIN compression_candidate_metrics m USING(candidate_id)
            JOIN context_block_occurrences b USING(block_occurrence_id)
-           WHERE c.experiment_id='shadow-pilot-003'
+           WHERE c.experiment_id=?
            GROUP BY c.compressor_id, size_bucket, detected_kind
            ORDER BY c.compressor_id, size_bucket, detected_kind"""
+        , (experiment_id,)
     ).fetchall()
     coverage = [dict(row) for row in coverage_rows]
+    family_rows = connection.execute(
+        """SELECT origin, kind, COALESCE(detected_kind, 'unavailable') AS detected_kind,
+                  COUNT(*) AS block_count, SUM(raw_bytes) AS raw_bytes,
+                  SUM(estimated_tokens) AS estimated_tokens,
+                  AVG(line_count) AS average_line_count,
+                  AVG(duplicate_line_ratio) AS average_duplicate_line_ratio
+           FROM context_block_occurrences
+          GROUP BY origin, kind, detected_kind
+          ORDER BY origin, kind, detected_kind"""
+    ).fetchall()
+    tool_result_families = [
+        {
+            "origin": row["origin"],
+            "kind": row["kind"],
+            "detected_kind": row["detected_kind"],
+            "block_count": row["block_count"],
+            "raw_bytes": row["raw_bytes"] or 0,
+            "estimated_tokens": row["estimated_tokens"],
+            "average_line_count": row["average_line_count"],
+            "average_duplicate_line_ratio": row["average_duplicate_line_ratio"],
+        }
+        for row in family_rows
+    ]
     result = {
         "experiment": dict(experiment) if experiment else None,
         "sessions": connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0],
         "provider_requests": connection.execute("SELECT COUNT(*) FROM provider_requests").fetchone()[0],
         "analysis_snapshots": connection.execute("SELECT COUNT(*) FROM context_snapshots").fetchone()[0],
         "analysis_complete": connection.execute("SELECT COUNT(*) FROM context_snapshots WHERE status='complete'").fetchone()[0],
-        "unknown_transformed": connection.execute("SELECT COUNT(*) FROM compression_candidates c JOIN context_block_occurrences b USING(block_occurrence_id) WHERE c.experiment_id='shadow-pilot-003' AND b.origin='unknown'").fetchone()[0],
+        "unknown_transformed": connection.execute(
+            "SELECT COUNT(*) FROM compression_candidates c JOIN context_block_occurrences b USING(block_occurrence_id) WHERE c.experiment_id=? AND b.origin='unknown'",
+            (experiment_id,),
+        ).fetchone()[0],
         "candidate_coverage_by_size_and_kind": coverage,
+        "tool_result_families": tool_result_families,
         "candidate_evaluation_accounting": {
             "persisted_candidate_rows": len(rows),
             "counter_completed": (dict(experiment).get("candidate_evaluations_completed", 0) if experiment else 0),
@@ -148,6 +178,8 @@ def main() -> int:
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-md", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=90)
+    parser.add_argument("--experiment-id", default="shadow-pilot-003")
+    parser.add_argument("--report-id", default="TRACEPRESS_SHADOW_PILOT_003_N10")
     args = parser.parse_args()
     repo = args.repo_root.resolve()
     cli = repo / "target/debug/tracepress"
@@ -158,7 +190,7 @@ def main() -> int:
         "TRACEPRESS_HOME": str(root),
         "TRACEPRESS_CONTEXT_ANALYSIS": "shadow",
         "TRACEPRESS_SHADOW_COMPRESSION": "on",
-        "TRACEPRESS_SHADOW_EXPERIMENT_ID": "shadow-pilot-003",
+        "TRACEPRESS_SHADOW_EXPERIMENT_ID": args.experiment_id,
         "TRACEPRESS_DATABASE": str(root / "tracepress.sqlite3"),
         "TRACEPRESS_CONTROL_SOCKET": str(root / "tracepress.sock"),
         "TRACEPRESS_CONTROL_CREDENTIAL": str(root / "control.cred"),
@@ -187,16 +219,19 @@ def main() -> int:
             interrupted = True
         run([str(cli), "daemon", "stop"], cwd=repo, env=env, timeout=30)
         daemon_process.wait(timeout=30)
-        result = aggregate(root / "tracepress.sqlite3")
+        result = aggregate(root / "tracepress.sqlite3", args.experiment_id)
         successful = sum(item["returncode"] == 0 for item in completed)
         shadow_drops = (result.get("experiment") or {}).get("shadow_drops", 0)
         status = "aborted_interrupted" if interrupted else ("completed" if successful == len(PROMPTS) and shadow_drops == 0 else "completed_degraded")
-        result.update({"report_id": "TRACEPRESS_SHADOW_PILOT_003_N10", "status": status, "successful_invocations": successful, "invocations": completed, "privacy": "metadata_only"})
+        result.update({"report_id": args.report_id, "status": status, "successful_invocations": successful, "invocations": completed, "privacy": "metadata_only"})
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
         args.output_json.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         experiment_row = result.get("experiment") or {}
         accounting = result["candidate_evaluation_accounting"]
-        lines = ["# Tracepress Shadow Pilot 003", "", f"Naturalistic N=10 shadow cohort; metadata-only aggregation. Status: **{result['status']}**.", "", f"Successful invocations: {result['successful_invocations']}/10", f"Sessions: {result['sessions']}", f"Provider requests: {result['provider_requests']}", f"Analysis complete: {result['analysis_complete']}/{result['analysis_snapshots']}", f"Unknown transformed: {result['unknown_transformed']}", "", "## Shadow accounting", "", f"Jobs admitted/processed/dropped: **{experiment_row.get('shadow_jobs_admitted', 0)} / {experiment_row.get('shadow_jobs_processed', 0)} / {experiment_row.get('shadow_job_drops', 0)}**", f"Candidate evaluations attempted/completed/dropped: **{accounting['counter_attempted']} / {accounting['counter_completed']} / {accounting['counter_drops']}**", f"Persisted candidate rows: **{accounting['persisted_candidate_rows']}**", "", "| Candidate | Readability | Addressable | Reduction | Recovery | Determinism |", "|---|---|---:|---:|---:|---:|"]
+        lines = [f"# {args.report_id}", "", f"Naturalistic N=10 shadow cohort; experiment `{args.experiment_id}`; metadata-only aggregation. Status: **{result['status']}**.", "", f"Successful invocations: {result['successful_invocations']}/10", f"Sessions: {result['sessions']}", f"Provider requests: {result['provider_requests']}", f"Analysis complete: {result['analysis_complete']}/{result['analysis_snapshots']}", f"Unknown transformed: {result['unknown_transformed']}", "", "## ToolResult characterization", "", "| Origin | Kind | Detected kind | Blocks | Raw bytes | Estimated tokens |", "|---|---|---|---:|---:|---:|"]
+        for family in result["tool_result_families"]:
+            lines.append(f"| `{family['origin']}` | `{family['kind']}` | `{family['detected_kind']}` | {family['block_count']} | {family['raw_bytes']} | {family['estimated_tokens'] if family['estimated_tokens'] is not None else '—'} |")
+        lines += ["", "## Shadow accounting", "", f"Jobs admitted/processed/dropped: **{experiment_row.get('shadow_jobs_admitted', 0)} / {experiment_row.get('shadow_jobs_processed', 0)} / {experiment_row.get('shadow_job_drops', 0)}**", f"Candidate evaluations attempted/completed/dropped: **{accounting['counter_attempted']} / {accounting['counter_completed']} / {accounting['counter_drops']}**", f"Persisted candidate rows: **{accounting['persisted_candidate_rows']}**", "", "| Candidate | Readability | Addressable | Reduction | Recovery | Determinism |", "|---|---|---:|---:|---:|---:|"]
         for candidate in result["compressors"]:
             def percent(value: float | None) -> str:
                 return "—" if value is None else f"{value * 100:.2f}%"

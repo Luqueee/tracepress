@@ -681,7 +681,7 @@ mod tests {
         );
         assert_eq!(
             experiments.first().expect("one experiment").candidate_count,
-            112
+            144
         );
         assert_eq!(experiments.first().expect("one experiment").block_count, 16);
         assert_eq!(
@@ -694,7 +694,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let detail: CompressionExperimentDetail =
             serde_json::from_slice(&body).expect("compression detail JSON");
-        assert_eq!(detail.compressors.len(), 7);
+        assert_eq!(detail.compressors.len(), 9);
         assert!(!detail.workload_distribution_available);
         let minify = detail
             .compressors

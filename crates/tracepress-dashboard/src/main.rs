@@ -825,6 +825,20 @@ fn render_compression_detail(
         Some(Err(error)) => rsx! { ErrorState { message: error.clone() } },
         Some(Ok(detail)) => rsx! {
             ShadowQualityBanner { quality: detail.summary.quality.clone() }
+            if detail
+                .compressors
+                .iter()
+                .any(|compressor| compressor.compressor.starts_with("json.empty_noise_fields")
+                    || compressor.compressor.starts_with("json.repeated_value_elision"))
+            {
+                div { class: "spacer-top", Card { title: "Tool-Aware Reduction",
+                    div { class: "compact-notice",
+                        Badge { text: "SHADOW ONLY", tone: "warning" }
+                        span { class: "spacer-inline", "Tool-aware reducers evaluate conservative JSON projections for ToolResult blocks. " }
+                        span { class: "muted", "The provider request remains byte-exact; no active reduction or quality claim is enabled." }
+                    }
+                } }
+            }
             div { class: "spacer-top", Card { title: "Candidate comparison", DataTable {
                 thead { tr { th { "Candidate" } th { "Provider readability" } th { class: "numeric", "Addressable" } th { class: "numeric", "Applicable" } th { class: "numeric", "Median byte ↓" } th { class: "numeric", "Byte ↓" } th { class: "numeric", "Effective byte ↓" } th { class: "numeric", "Unique byte ↓" } th { class: "numeric", "Est. token ↓" } th { class: "numeric", "Recovery" } th { class: "numeric", "Deterministic" } th { class: "numeric", "P95" } } }
                 tbody { for compressor in &detail.compressors { tr {

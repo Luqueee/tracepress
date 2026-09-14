@@ -14,6 +14,8 @@
 
 mod active;
 mod json;
+mod quality;
+mod reduction;
 mod text;
 
 use std::{fmt, num::NonZeroU64, time::Instant};
@@ -27,6 +29,13 @@ pub use active::{
 pub use json::{
     JsonCompactRecords, JsonKeyElision, JsonMinify, JsonNoop, JsonReadableTable,
     JsonRepeatedSubtree, JsonTabular,
+};
+pub use quality::{
+    ExpectedArtifactKind, QualityEvaluatorKind, QualityOutcome, QualityOutcomeStatus, QualityTask,
+};
+pub use reduction::{
+    JsonEmptyNoiseFieldReducer, JsonRepeatedValueReducer, ReductionCandidate, ReductionMetrics,
+    ReductionPolicyDecision, ReductionStatus, TOOL_AWARE_REDUCTION_VERSION, ToolResultReducer,
 };
 pub use text::{
     TextLogPrefixFold, TextNoop, TextReadableBlockFold, TextReadableLineFold, TextRepeatedLine,
@@ -177,10 +186,9 @@ impl Default for CompressionLimits {
         Self {
             max_candidate_input_bytes: 1_048_576,
             max_candidate_output_bytes: 1_048_576,
-            // The Phase 4.2.1 set contains seven JSON and six plain-text controls/candidates.
-            // Keep the default above the complete set so adding a candidate cannot silently make
-            // the last registered compressor unevaluated.
-            max_candidates_per_block: 13,
+            // The Phase 4.3 set contains seven JSON and six plain-text controls/candidates,
+            // plus the two bounded tool-aware JSON reducers.
+            max_candidates_per_block: 15,
             max_shadow_work_units: 2_000_000,
             max_shadow_wall_time_ms: NonZeroU64::new(100).unwrap_or(NonZeroU64::MIN),
             max_shadow_memory_bytes: 4_194_304,

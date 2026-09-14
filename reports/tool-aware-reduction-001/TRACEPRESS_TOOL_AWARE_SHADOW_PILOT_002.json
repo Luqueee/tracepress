@@ -1,0 +1,50 @@
+{
+  "report_id": "TRACEPRESS_TOOL_AWARE_SHADOW_PILOT_002",
+  "metadata_only": true,
+  "experiment_id": "tool-aware-shadow-pilot-002",
+  "status": "completed",
+  "sessions": 10,
+  "successful_invocations": 10,
+  "provider_requests": 23,
+  "analysis_snapshots": 23,
+  "analysis_complete": 23,
+  "unknown_transformed": 0,
+  "shadow_integrity": {
+    "forwarding_mutations": 0,
+    "shadow_drops": 0,
+    "shadow_jobs_admitted": 23,
+    "shadow_jobs_processed": 23,
+    "shadow_job_drops": 0,
+    "candidate_evaluations_attempted": 149,
+    "candidate_evaluations_completed": 149,
+    "candidate_evaluation_drops": 0,
+    "recovery_failures": 0,
+    "determinism_failures": 0
+  },
+  "tool_result_json": {
+    "shape_distribution": {
+      "array_object": 17
+    },
+    "reduction_candidates": {
+      "json.empty_noise_fields": {
+        "eligible_blocks": 15,
+        "applicable_blocks": 0,
+        "addressable_token_share": 0.0
+      },
+      "json.repeated_value_elision": {
+        "eligible_blocks": 15,
+        "applicable_blocks": 0,
+        "addressable_token_share": 0.0
+      }
+    }
+  },
+  "existing_provider_readable_candidates_applicable": 0,
+  "decision": "lossy_shadow_opportunity_not_demonstrated",
+  "claims": {
+    "provider_token_savings": false,
+    "provider_cache_impact": false,
+    "economic_impact": false,
+    "quality_preservation": false
+  },
+  "privacy": "aggregated_metadata_only"
+}

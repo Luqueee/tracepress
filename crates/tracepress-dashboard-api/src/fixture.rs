@@ -116,7 +116,7 @@ pub(crate) fn create(large: bool) -> Result<FixtureDatabase, rusqlite::Error> {
     }
     if !large {
         let _experiment = transaction.execute(
-            "INSERT INTO compression_experiments(experiment_id,compressor_set_json,runtime_sha,limits_json,status,started_at,completed_at,forwarding_mutations,shadow_drops,recovery_failures,determinism_failures) VALUES ('shadow-pilot-001','[[\"json.noop\",1],[\"json.minify\",1],[\"json.tabular\",1],[\"json.repeated_subtree\",1],[\"json.readable_table\",1],[\"json.compact_records\",1],[\"json.key_elision\",1]]','93ffe0c9c32a0f9a','{\"max_candidate_input_bytes\":1048576}','completed','2026-09-13T13:00:00Z','2026-09-13T13:05:00Z',0,1,0,0)",
+            "INSERT INTO compression_experiments(experiment_id,compressor_set_json,runtime_sha,limits_json,status,started_at,completed_at,forwarding_mutations,shadow_drops,recovery_failures,determinism_failures) VALUES ('shadow-pilot-001','[[\"json.noop\",1],[\"json.minify\",1],[\"json.tabular\",1],[\"json.repeated_subtree\",1],[\"json.readable_table\",1],[\"json.compact_records\",1],[\"json.key_elision\",1],[\"json.empty_noise_fields\",1],[\"json.repeated_value_elision\",1]]','93ffe0c9c32a0f9a','{\"max_candidate_input_bytes\":1048576}','completed','2026-09-13T13:00:00Z','2026-09-13T13:05:00Z',0,1,0,0)",
             [],
         )?;
         for session_index in 0..session_count {
@@ -131,6 +131,8 @@ pub(crate) fn create(large: bool) -> Result<FixtureDatabase, rusqlite::Error> {
                     "json.readable_table",
                     "json.compact_records",
                     "json.key_elision",
+                    "json.empty_noise_fields",
+                    "json.repeated_value_elision",
                 ]
                 .iter()
                 .enumerate()
@@ -140,7 +142,9 @@ pub(crate) fn create(large: bool) -> Result<FixtureDatabase, rusqlite::Error> {
                         || (*compressor == "json.repeated_subtree" && request_index == 3)
                         || (*compressor == "json.readable_table" && request_index % 3 == 0)
                         || (*compressor == "json.compact_records" && request_index % 4 == 0)
-                        || (*compressor == "json.key_elision" && request_index == 2);
+                        || (*compressor == "json.key_elision" && request_index == 2)
+                        || (*compressor == "json.empty_noise_fields" && request_index % 3 == 0)
+                        || (*compressor == "json.repeated_value_elision" && request_index % 5 == 0);
                     let status = if *compressor == "json.noop" {
                         "no_improvement"
                     } else if applicable {
@@ -165,7 +169,7 @@ pub(crate) fn create(large: bool) -> Result<FixtureDatabase, rusqlite::Error> {
                         .map(|_| vec![u8::try_from(compressor_index + 11).unwrap_or(11); 32]);
                     let _candidate = transaction.execute(
                         "INSERT INTO compression_candidates(candidate_id,experiment_id,snapshot_id,block_occurrence_id,compressor_id,compressor_version,status,original_fingerprint,candidate_fingerprint,first_modified_offset,preserved_prefix_bytes,cache_risk,provider_readability,json_root_kind,json_array_length_bucket,json_object_key_count_bucket,json_homogeneity_basis_points,json_primitive_cell_ratio_basis_points,json_nested_cell_ratio_basis_points) VALUES (?1,'shadow-pilot-001',?2,?3,?4,'1',?5,?6,?7,?8,?8,?9,?10,'array_object','2-9','2-9',10000,10000,0)",
-                        params![candidate_id, snapshot_id, block_id, compressor, status, original, candidate, if applicable { Some(32_i64) } else { None }, if request_index == 0 { "high" } else { "medium" }, if compressor == &"json.readable_table" || compressor == &"json.compact_records" || compressor == &"json.key_elision" { "human_readable_structured" } else if compressor == &"json.minify" || compressor == &"json.noop" { "provider_compatible_control" } else { "opaque_custom_encoding" }],
+                        params![candidate_id, snapshot_id, block_id, compressor, status, original, candidate, if applicable { Some(32_i64) } else { None }, if request_index == 0 { "high" } else { "medium" }, if compressor == &"json.readable_table" || compressor == &"json.compact_records" || compressor == &"json.key_elision" || compressor == &"json.empty_noise_fields" || compressor == &"json.repeated_value_elision" { "human_readable_structured" } else if compressor == &"json.minify" || compressor == &"json.noop" { "provider_compatible_control" } else { "opaque_custom_encoding" }],
                     )?;
                     let _metrics = transaction.execute(
                         "INSERT INTO compression_candidate_metrics(candidate_id,input_bytes,output_bytes,bytes_delta,input_estimated_tokens,output_estimated_tokens,estimated_token_delta,processing_us,reversible,recovery_verified,deterministic,preserved_prefix_ratio_basis_points) VALUES (?1,?2,?3,?4,100,?5,?6,?7,1,1,1,?8)",

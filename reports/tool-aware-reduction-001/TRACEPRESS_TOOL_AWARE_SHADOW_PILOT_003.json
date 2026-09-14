@@ -1,0 +1,70 @@
+{
+  "report_id": "TRACEPRESS_TOOL_AWARE_SHADOW_PILOT_003",
+  "metadata_only": true,
+  "experiment_id": "tool-aware-shadow-pilot-003",
+  "status": "completed",
+  "sessions": 10,
+  "successful_invocations": 10,
+  "provider_requests": 24,
+  "analysis_complete": 24,
+  "unknown_transformed": 0,
+  "tool_result_families": {
+    "tool_generated_tool_result_json": {
+      "blocks": 21,
+      "estimated_tokens": 82612,
+      "raw_bytes": 193318
+    },
+    "tool_generated_tool_result_plain_text": {
+      "blocks": 0,
+      "estimated_tokens": null,
+      "raw_bytes": 0
+    },
+    "human_authored_plain_text_excluded": {
+      "blocks": 96,
+      "estimated_tokens": 277581,
+      "raw_bytes": 866065
+    }
+  },
+  "shadow_integrity": {
+    "forwarding_mutations": 0,
+    "shadow_drops": 0,
+    "shadow_jobs_admitted": 24,
+    "shadow_jobs_processed": 24,
+    "candidate_evaluations_attempted": 187,
+    "candidate_evaluations_completed": 187,
+    "candidate_evaluation_drops": 0,
+    "recovery_failures": 0,
+    "determinism_failures": 0
+  },
+  "candidates": {
+    "json.empty_noise_fields": {
+      "eligible_blocks": 20,
+      "applicable_blocks": 0,
+      "addressable_token_share": 0.0
+    },
+    "json.repeated_value_elision": {
+      "eligible_blocks": 20,
+      "applicable_blocks": 2,
+      "addressable_token_share": 0.024923702950152594,
+      "byte_reduction_ratio": 0.00670690811535882,
+      "estimated_token_reduction_ratio": 0.006802721088435374,
+      "recovery_success_rate": 1.0,
+      "determinism_success_rate": 1.0,
+      "processing_p95_us": 3991
+    },
+    "json.tabular": {
+      "applicable_blocks": 2,
+      "addressable_token_share": 0.024923702950152594,
+      "byte_reduction_ratio": 0.0057,
+      "provider_readability": "opaque_custom_encoding"
+    }
+  },
+  "decision": "provider_compatible_candidate_below_materiality_gate",
+  "claims": {
+    "provider_token_savings": false,
+    "provider_cache_impact": false,
+    "economic_impact": false,
+    "quality_preservation": false
+  },
+  "privacy": "aggregated_metadata_only"
+}

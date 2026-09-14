@@ -1,0 +1,69 @@
+{
+  "report_id": "TRACEPRESS_TOOL_AWARE_SHADOW_PILOT_001",
+  "metadata_only": true,
+  "experiment_id": "tool-aware-shadow-pilot-001",
+  "status": "completed",
+  "sessions": 10,
+  "successful_invocations": 10,
+  "provider_requests": 28,
+  "analysis_snapshots": 28,
+  "analysis_complete": 28,
+  "unknown_transformed": 0,
+  "shadow_integrity": {
+    "forwarding_mutations": 0,
+    "shadow_drops": 0,
+    "shadow_jobs_admitted": 28,
+    "shadow_jobs_processed": 28,
+    "shadow_job_drops": 0,
+    "candidate_evaluations_attempted": 305,
+    "candidate_evaluations_completed": 305,
+    "candidate_evaluation_drops": 0,
+    "recovery_failures": 0,
+    "determinism_failures": 0
+  },
+  "candidates": {
+    "json.empty_noise_fields": {
+      "eligible_blocks": 32,
+      "applicable_blocks": 0,
+      "addressable_token_share": 0.0,
+      "effective_byte_reduction": null,
+      "effective_estimated_token_reduction": null,
+      "recovery_success_rate": null,
+      "determinism_success_rate": null,
+      "status": "no_applicable_real_blocks"
+    },
+    "json.minify": {
+      "eligible_blocks": 39,
+      "applicable_blocks": 0,
+      "status": "control_no_real_improvement"
+    },
+    "json.readable_table": {
+      "eligible_blocks": 39,
+      "applicable_blocks": 0,
+      "status": "no_material_opportunity"
+    },
+    "json.compact_records": {
+      "eligible_blocks": 39,
+      "applicable_blocks": 0,
+      "status": "no_material_opportunity"
+    },
+    "json.key_elision": {
+      "eligible_blocks": 39,
+      "applicable_blocks": 0,
+      "status": "no_material_opportunity"
+    },
+    "json.tabular": {
+      "eligible_blocks": 39,
+      "applicable_blocks": 0,
+      "status": "no_material_opportunity"
+    }
+  },
+  "decision": "lossy_shadow_opportunity_not_demonstrated",
+  "claims": {
+    "provider_token_savings": false,
+    "provider_cache_impact": false,
+    "economic_impact": false,
+    "quality_preservation": false
+  },
+  "privacy": "aggregated_metadata_only"
+}

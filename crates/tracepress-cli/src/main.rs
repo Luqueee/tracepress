@@ -35,10 +35,12 @@ use tokio_util::sync::CancellationToken;
 use tracepress_compression::{
     BlockKind as CompressionBlockKind, BlockMetadata, BlockOrigin as CompressionBlockOrigin,
     CacheRisk as CompressionCacheRisk, CandidateMetrics, CandidateStatus, CompressionLimits,
-    DetectedKind as CompressionDetectedKind, JsonCompactRecords, JsonKeyElision, JsonMinify,
-    JsonNoop, JsonReadableTable, JsonRepeatedSubtree, JsonTabular, ShadowCompressor,
-    TextLogPrefixFold, TextNoop, TextReadableBlockFold, TextReadableLineFold, TextRepeatedLine,
-    TextRepeatedRun, evaluate_with_estimator,
+    DetectedKind as CompressionDetectedKind, JsonCompactRecords, JsonEmptyNoiseFieldReducer,
+    JsonKeyElision, JsonMinify, JsonNoop, JsonReadableTable, JsonRepeatedSubtree,
+    JsonRepeatedValueReducer, JsonTabular, ReductionMetrics, ReductionPolicyDecision,
+    ReductionStatus, ShadowCompressor, TextLogPrefixFold, TextNoop, TextReadableBlockFold,
+    TextReadableLineFold, TextRepeatedLine, TextRepeatedRun, ToolResultReducer,
+    evaluate_with_estimator,
 };
 use tracepress_context::{
     ContextAnalysisLimits, ContextAnalysisResult, ContextAnalysisStatus, ContextBlockKind,
@@ -2579,6 +2581,8 @@ impl ShadowCompressionWorker {
             ("json.readable_table", 1),
             ("json.compact_records", 1),
             ("json.key_elision", 1),
+            ("json.empty_noise_fields", 1),
+            ("json.repeated_value_elision", 1),
             ("text.noop", 1),
             ("text.repeated_line", 1),
             ("text.repeated_run", 1),
@@ -2722,6 +2726,7 @@ fn shadow_candidate_batch_fits(candidates: &[ShadowCandidateRecord]) -> bool {
 
 #[allow(
     clippy::too_many_arguments,
+    clippy::too_many_lines,
     reason = "shadow inputs keep independent bounds and accounting explicit"
 )]
 fn evaluate_shadow_job(
@@ -2753,6 +2758,8 @@ fn evaluate_shadow_job(
         &TextReadableBlockFold,
         &TextLogPrefixFold,
     ];
+    let reduction_reducers: [&dyn ToolResultReducer; 2] =
+        [&JsonEmptyNoiseFieldReducer, &JsonRepeatedValueReducer];
     let mut records = Vec::new();
     let mut remaining_work = limits.max_shadow_work_units;
     for block in &job.analysis.blocks[..accepted] {
@@ -2810,6 +2817,63 @@ fn evaluate_shadow_job(
                 metrics,
                 &shape,
             ));
+        }
+        if metadata.is_tool_result_json() {
+            for (reduction_index, reduction_reducer) in reduction_reducers.iter().enumerate() {
+                let candidate_index = json_compressors.len().saturating_add(reduction_index);
+                if candidate_index >= max_candidates {
+                    counters.record_candidate_drop();
+                    continue;
+                }
+                if !matches!(
+                    reduction_reducer
+                        .policy(metadata, u64::try_from(content.len()).unwrap_or(u64::MAX)),
+                    ReductionPolicyDecision::Reduce
+                        | ReductionPolicyDecision::KeepFullWithCandidate
+                ) {
+                    continue;
+                }
+                // A reducer is evaluated twice for determinism. Reserve a conservative shared
+                // budget for both passes so the shadow worker can never outrun its job bound.
+                let work = u64::try_from(content.len())
+                    .unwrap_or(u64::MAX)
+                    .max(1)
+                    .saturating_mul(2);
+                let Some(remaining) = remaining_work.checked_sub(work) else {
+                    counters.record_candidate_drop();
+                    counters.record_drop(ShadowDropReason::WorkBudget);
+                    continue;
+                };
+                remaining_work = remaining;
+                counters.record_candidate_attempt();
+                let reduced = reduction_reducer.reduce(&content, &limits);
+                let repeat = reduction_reducer.reduce(&content, &limits);
+                let deterministic = reduced.metrics().visible_fingerprint
+                    == repeat.metrics().visible_fingerprint
+                    && reduced.metrics().status == repeat.metrics().status;
+                let visible_estimate = reduced.visible().and_then(|bytes| {
+                    estimator
+                        .estimate(&EstimationRequest {
+                            model: None,
+                            content: bytes,
+                            limits: context_limits,
+                        })
+                        .tokens()
+                });
+                let reduced = reduced
+                    .with_estimates(metadata.input_estimated_tokens, visible_estimate)
+                    .with_deterministic(deterministic);
+                counters.record_candidate_completed();
+                let metrics = reduced.metrics();
+                records.push(shadow_reduction_candidate_record(
+                    &generator,
+                    experiment_id,
+                    job.snapshot_id,
+                    u64::from(block.ordinal),
+                    metrics,
+                    &shape,
+                ));
+            }
         }
     }
     records
@@ -3082,6 +3146,59 @@ fn shadow_candidate_record(
     }
 }
 
+#[allow(
+    clippy::too_many_arguments,
+    reason = "reduction association metadata remains explicit"
+)]
+fn shadow_reduction_candidate_record(
+    generator: &UuidV7Generator,
+    experiment_id: &str,
+    snapshot_id: ContextSnapshotId,
+    block_ordinal: u64,
+    metrics: &ReductionMetrics,
+    shape: &ShadowShapeMetadata,
+) -> ShadowCandidateRecord {
+    ShadowCandidateRecord {
+        candidate_id: CompressionCandidateId::generate(generator),
+        experiment_id: experiment_id.to_owned(),
+        snapshot_id,
+        block_ordinal,
+        compressor_id: metrics.reducer_id.to_owned(),
+        compressor_version: metrics.reducer_version.to_string(),
+        status: storage_reduction_status(metrics.status),
+        input_bytes: metrics.input_bytes,
+        output_bytes: metrics.visible_bytes,
+        bytes_delta: metrics.gross_bytes_delta,
+        input_estimated_tokens: metrics.input_estimated_tokens,
+        output_estimated_tokens: metrics.visible_estimated_tokens,
+        estimated_token_delta: metrics.gross_estimated_token_delta,
+        processing_us: metrics.processing_us,
+        reversible: metrics.recovery_available,
+        recovery_verified: metrics.recovery_verified,
+        deterministic: metrics.deterministic,
+        original_fingerprint: metrics.original_fingerprint.to_vec().into_boxed_slice(),
+        candidate_fingerprint: metrics
+            .visible_fingerprint
+            .map(|value| value.to_vec().into_boxed_slice()),
+        recovered_fingerprint: metrics
+            .recovery_verified
+            .then(|| metrics.original_fingerprint.to_vec().into_boxed_slice()),
+        first_modified_offset: metrics.first_modified_offset,
+        preserved_prefix_bytes: metrics.preserved_prefix_bytes,
+        preserved_prefix_ratio_basis_points: None,
+        cache_risk: ShadowCacheRisk::Unknown,
+        provider_readability: metrics.provider_readability.to_owned(),
+        json_root_kind: shape.json_root_kind.clone(),
+        json_array_length_bucket: shape.json_array_length_bucket.clone(),
+        json_object_key_count_bucket: shape.json_object_key_count_bucket.clone(),
+        json_homogeneity_basis_points: shape.json_homogeneity_basis_points,
+        json_primitive_cell_ratio_basis_points: shape.json_primitive_cell_ratio_basis_points,
+        json_nested_cell_ratio_basis_points: shape.json_nested_cell_ratio_basis_points,
+        text_shape: shape.text_shape.clone(),
+        verified_at_us: current_timestamp_us().ok(),
+    }
+}
+
 const fn storage_shadow_status(status: CandidateStatus) -> ShadowCandidateStatus {
     match status {
         CandidateStatus::Applicable => ShadowCandidateStatus::Applicable,
@@ -3090,6 +3207,17 @@ const fn storage_shadow_status(status: CandidateStatus) -> ShadowCandidateStatus
         CandidateStatus::ResourceLimit => ShadowCandidateStatus::ResourceLimit,
         CandidateStatus::InvalidInput => ShadowCandidateStatus::InvalidInput,
         CandidateStatus::RecoveryFailed => ShadowCandidateStatus::RecoveryFailed,
+        _ => ShadowCandidateStatus::InternalError,
+    }
+}
+
+const fn storage_reduction_status(status: ReductionStatus) -> ShadowCandidateStatus {
+    match status {
+        ReductionStatus::Applicable => ShadowCandidateStatus::Applicable,
+        ReductionStatus::NotApplicable => ShadowCandidateStatus::NotApplicable,
+        ReductionStatus::NoImprovement => ShadowCandidateStatus::NoImprovement,
+        ReductionStatus::ResourceLimit => ShadowCandidateStatus::ResourceLimit,
+        ReductionStatus::InvalidInput => ShadowCandidateStatus::InvalidInput,
         _ => ShadowCandidateStatus::InternalError,
     }
 }

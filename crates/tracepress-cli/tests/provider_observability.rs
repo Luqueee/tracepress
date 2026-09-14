@@ -76,7 +76,7 @@ fn request_body() -> String {
 }
 
 fn tool_result_request_body() -> String {
-    r#"{"model":"gpt-test","stream":true,"input":[{"type":"function_call_output","call_id":"call_shadow","output":"{\"name\":\"a\",\"status\":\"ok\",\"size\":10}"}]}"#
+    r#"{"model":"gpt-test","stream":true,"input":[{"type":"function_call_output","call_id":"call_shadow","output":"{\"name\":\"a\",\"status\":\"ok\",\"size\":10,\"empty\":null,\"empty_text\":\"\",\"empty_array\":[],\"empty_object\":{},\"padding\":\"012345678901234567890123456789012345678901234567890123456789012345678901234567890123456789\"}"}]}"#
         .to_owned()
 }
 
@@ -1602,6 +1602,26 @@ fn shadow_compression_post_hardening_smoke_is_bounded_and_byte_exact() -> TestRe
     assert!(
         candidate_count > 0,
         "tool result should produce shadow candidates"
+    );
+    let reduction_count: i64 = database.query_row(
+        "SELECT COUNT(*) FROM compression_candidates
+          WHERE experiment_id = ?1 AND compressor_id = 'json.empty_noise_fields'",
+        [experiment_id],
+        |row| row.get(0),
+    )?;
+    assert_eq!(
+        reduction_count, 1,
+        "lossy reducer should be shadow-evaluated"
+    );
+    let repeated_value_count: i64 = database.query_row(
+        "SELECT COUNT(*) FROM compression_candidates
+          WHERE experiment_id = ?1 AND compressor_id = 'json.repeated_value_elision'",
+        [experiment_id],
+        |row| row.get(0),
+    )?;
+    assert_eq!(
+        repeated_value_count, 1,
+        "repeated-value reducer should be shadow-evaluated"
     );
     let recovery_failures: i64 = database.query_row(
         "SELECT COUNT(*) FROM compression_candidate_metrics m

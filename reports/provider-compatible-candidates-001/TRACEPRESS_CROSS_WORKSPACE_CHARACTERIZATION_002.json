@@ -1,0 +1,59 @@
+{
+  "report_id": "TRACEPRESS_CROSS_WORKSPACE_CHARACTERIZATION_002",
+  "metadata_only": true,
+  "workspace_class": "external_private",
+  "sessions": 10,
+  "provider_requests": 88,
+  "analysis_complete": 88,
+  "toolresult_json": {
+    "blocks": 510,
+    "estimated_tokens": 1512057
+  },
+  "toolresult_plain_text": {
+    "blocks": 0,
+    "estimated_tokens": 0
+  },
+  "shadow_integrity": {
+    "jobs_admitted": 64,
+    "jobs_processed": 64,
+    "job_drops": 0,
+    "candidate_evaluations_attempted": 1638,
+    "candidate_evaluations_completed": 1638,
+    "candidate_evaluation_drops": 0,
+    "shadow_drops": 0,
+    "persistence_drops": 0,
+    "forwarding_mutations": 0,
+    "recovery_failures": 0,
+    "determinism_failures": 0,
+    "unknown_transformed": 0
+  },
+  "candidates": {
+    "json.minify": {
+      "applicable_blocks": 0,
+      "effective_estimated_token_reduction": 0.0,
+      "status": "rejected_no_real_improvement"
+    },
+    "json.readable_table": {
+      "applicable_blocks": 0,
+      "effective_estimated_token_reduction": 0.0,
+      "status": "no_material_opportunity"
+    },
+    "json.compact_records": {
+      "applicable_blocks": 0,
+      "effective_estimated_token_reduction": 0.0,
+      "status": "no_material_opportunity"
+    },
+    "json.key_elision": {
+      "applicable_blocks": 0,
+      "effective_estimated_token_reduction": 0.0,
+      "status": "no_material_opportunity"
+    },
+    "json.tabular": {
+      "applicable_blocks": 1,
+      "addressable_token_share": 0.0001183818,
+      "effective_estimated_token_reduction": 0.0000052908,
+      "status": "shadow_only_opaque_upper_bound"
+    }
+  },
+  "decision": "close_deterministic_provider_compatible_path"
+}

@@ -80,6 +80,7 @@ th.numeric, td.numeric { text-align: right; font-variant-numeric: tabular-nums; 
 .quality-banner.degraded { border-color: color-mix(in srgb, var(--warning) 55%, var(--border)); background: color-mix(in srgb, var(--warning) 7%, var(--surface-1)); }
 .metric-inline { display: flex; flex-wrap: wrap; gap: 8px 18px; }
 .compact-notice { padding: 10px 12px; border: 1px dashed var(--border-strong); color: var(--text-secondary); }
+.spacer-inline { margin-left: 8px; }
 .bar-list { display: grid; gap: 10px; }
 .bar-row { display: grid; grid-template-columns: 110px minmax(80px, 1fr) 64px; align-items: center; gap: 10px; }
 .bar-track { height: 7px; background: var(--surface-2); border: 1px solid var(--border); }

@@ -565,7 +565,14 @@ impl ShadowCompressor for JsonRepeatedSubtree {
     }
 }
 
-fn validate_json(input: &[u8], limits: &CompressionLimits) -> Result<(), TransformError> {
+#[allow(
+    clippy::redundant_pub_crate,
+    reason = "the strict validator is shared only by sibling modules inside this private crate module"
+)]
+pub(crate) fn validate_json(
+    input: &[u8],
+    limits: &CompressionLimits,
+) -> Result<(), TransformError> {
     if u64::try_from(input.len()).unwrap_or(u64::MAX) > limits.max_shadow_work_units {
         return Err(TransformError::ResourceLimit);
     }

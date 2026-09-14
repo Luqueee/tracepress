@@ -150,7 +150,9 @@ decode/edit/re-encode; the `Content-Encoding: zstd` header is retained. `json.ta
 shadow-only: its
 `TPJ2` representation is not a provider-compatible Responses payload and is not sent upstream.
 Active metrics are metadata-only (`original`/`rewritten` sizes and fingerprints) and are offered to
-the observation sink without blocking it. The explicitly enabled active arm performs bounded
+the observation sink without blocking it. The active counters also expose bounded evaluated-span
+and candidate byte totals for `NoImprovement` diagnostics, never the underlying content. The
+explicitly enabled active arm performs bounded
 analysis and rewriting before its upstream `send`; the default path remains byte-exact and does
 not pay that cost. This adapter does not establish provider-token, cache, cost, or quality impact;
 those require the Phase 4.2 A/B experiment and provider-side validation.

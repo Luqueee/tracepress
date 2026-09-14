@@ -248,6 +248,9 @@ def report(options: argparse.Namespace) -> dict[str, Any]:
         for key in (
             "active_compression_attempts",
             "active_compression_rewrites",
+            "active_compression_evaluated_spans",
+            "active_compression_evaluated_input_bytes",
+            "active_compression_evaluated_candidate_bytes",
             "active_compression_no_improvement",
             "active_compression_not_applicable",
             "active_compression_recovery_failures",

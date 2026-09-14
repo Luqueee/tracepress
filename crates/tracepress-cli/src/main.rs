@@ -2374,6 +2374,9 @@ struct ShadowCounters {
 struct ActiveCompressionCounters {
     attempts: AtomicU64,
     rewrites: AtomicU64,
+    evaluated_spans: AtomicU64,
+    evaluated_input_bytes: AtomicU64,
+    evaluated_candidate_bytes: AtomicU64,
     input_bytes: AtomicU64,
     output_bytes: AtomicU64,
     no_improvement: AtomicU64,
@@ -2389,6 +2392,15 @@ impl ActiveCompressionCounters {
     fn record(&self, observation: &ActiveCompressionObservation) {
         let _attempt = self.attempts.fetch_add(1, Ordering::Relaxed);
         let metrics = &observation.metrics;
+        let _spans = self
+            .evaluated_spans
+            .fetch_add(u64::from(metrics.evaluated_spans), Ordering::Relaxed);
+        let _input = self
+            .evaluated_input_bytes
+            .fetch_add(metrics.evaluated_input_bytes, Ordering::Relaxed);
+        let _candidate = self
+            .evaluated_candidate_bytes
+            .fetch_add(metrics.evaluated_candidate_bytes, Ordering::Relaxed);
         if matches!(
             metrics.status,
             tracepress_compression::ActiveRewriteStatus::InternalError
@@ -2433,9 +2445,12 @@ impl ActiveCompressionCounters {
         let output = self.output_bytes.load(Ordering::Relaxed);
         let reduction = input.saturating_sub(output);
         format!(
-            "active_compression_attempts={} active_compression_rewrites={} active_compression_input_bytes={} active_compression_output_bytes={} active_compression_reduction_bytes={} active_compression_no_improvement={} active_compression_not_applicable={} active_compression_resource_limits={} active_compression_invalid_inputs={} active_compression_recovery_failures={} active_compression_determinism_failures={} active_compression_internal_errors={}",
+            "active_compression_attempts={} active_compression_rewrites={} active_compression_evaluated_spans={} active_compression_evaluated_input_bytes={} active_compression_evaluated_candidate_bytes={} active_compression_input_bytes={} active_compression_output_bytes={} active_compression_reduction_bytes={} active_compression_no_improvement={} active_compression_not_applicable={} active_compression_resource_limits={} active_compression_invalid_inputs={} active_compression_recovery_failures={} active_compression_determinism_failures={} active_compression_internal_errors={}",
             self.attempts.load(Ordering::Relaxed),
             self.rewrites.load(Ordering::Relaxed),
+            self.evaluated_spans.load(Ordering::Relaxed),
+            self.evaluated_input_bytes.load(Ordering::Relaxed),
+            self.evaluated_candidate_bytes.load(Ordering::Relaxed),
             input,
             output,
             reduction,

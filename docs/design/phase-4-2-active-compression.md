@@ -47,8 +47,10 @@ preserves keys, values, ordering, and string content while removing structural w
 ## Metadata boundary
 
 The proxy emits `ActiveCompressionObservation` to the non-blocking observation sink. It contains
-only status, compressor/version, byte counts, rewrite count, recovery/determinism flags, and
-original/rewritten SHA-256 fingerprints. The request and candidate bodies never cross this sink.
+only status, compressor/version, evaluated-span byte counts, rewrite count, recovery/determinism
+flags, and original/rewritten SHA-256 fingerprints. The request and candidate bodies never cross
+this sink. Non-improvement diagnostics distinguish evaluated source bytes from candidate bytes
+without retaining either body.
 The CLI aggregates the same fields into bounded run output (`active_compression_*`) for a local A/B
 driver. No active result is interpreted as provider-token savings, cache preservation, cost impact,
 or quality preservation.

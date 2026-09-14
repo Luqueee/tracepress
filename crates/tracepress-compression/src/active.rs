@@ -81,6 +81,12 @@ pub struct ActiveRewriteMetrics {
     pub bytes_delta: Option<i64>,
     /// Number of target spans replaced.
     pub rewrites: u32,
+    /// Number of eligible spans whose candidate was evaluated, including non-improvements.
+    pub evaluated_spans: u32,
+    /// Total decoded bytes in evaluated source spans.
+    pub evaluated_input_bytes: u64,
+    /// Total encoded candidate bytes for evaluated spans.
+    pub evaluated_candidate_bytes: u64,
     /// Whether every transformed span recovered its exact decoded input.
     pub recovery_verified: bool,
     /// Whether repeated transformation produced identical bytes.
@@ -192,6 +198,9 @@ pub fn rewrite_json_minify(
             output_bytes: None,
             bytes_delta: None,
             rewrites: 0,
+            evaluated_spans: 0,
+            evaluated_input_bytes: 0,
+            evaluated_candidate_bytes: 0,
             recovery_verified: false,
             deterministic: false,
             original_fingerprint,
@@ -221,6 +230,8 @@ pub fn rewrite_json_minify(
     let mut evaluated_spans = 0_u32;
     let mut all_deterministic = true;
     let mut all_recovery_verified = true;
+    let mut evaluated_input_bytes = 0_u64;
+    let mut evaluated_candidate_bytes = 0_u64;
     let compressor = JsonMinify;
 
     for span in ordered {
@@ -301,6 +312,10 @@ pub fn rewrite_json_minify(
         } else {
             first.candidate_bytes().to_vec()
         };
+        evaluated_input_bytes =
+            evaluated_input_bytes.saturating_add(u64::try_from(raw.len()).unwrap_or(u64::MAX));
+        evaluated_candidate_bytes = evaluated_candidate_bytes
+            .saturating_add(u64::try_from(replacement.len()).unwrap_or(u64::MAX));
         if u64::try_from(replacement.len()).unwrap_or(u64::MAX) > limits.max_candidate_output_bytes
         {
             terminal = Some(ActiveRewriteStatus::ResourceLimit);
@@ -319,6 +334,9 @@ pub fn rewrite_json_minify(
         let mut result = base(status);
         result.metrics.deterministic = evaluated_spans > 0 && all_deterministic;
         result.metrics.recovery_verified = evaluated_spans > 0 && all_recovery_verified;
+        result.metrics.evaluated_spans = evaluated_spans;
+        result.metrics.evaluated_input_bytes = evaluated_input_bytes;
+        result.metrics.evaluated_candidate_bytes = evaluated_candidate_bytes;
         return result;
     }
     if terminal.is_some_and(|status| {
@@ -362,6 +380,9 @@ pub fn rewrite_json_minify(
             output_bytes: Some(output_bytes),
             bytes_delta: signed_delta(input_bytes, output_bytes),
             rewrites: u32::try_from(replacements.len()).unwrap_or(u32::MAX),
+            evaluated_spans,
+            evaluated_input_bytes,
+            evaluated_candidate_bytes,
             recovery_verified: true,
             deterministic: true,
             original_fingerprint,
@@ -452,6 +473,7 @@ mod tests {
         assert_eq!(result.metrics().status, ActiveRewriteStatus::Rewritten);
         assert!(result.metrics().recovery_verified);
         assert!(result.metrics().deterministic);
+        assert_eq!(result.metrics().evaluated_spans, 1);
         assert!(result.metrics().output_bytes.unwrap_or_default() < request.len() as u64);
         let body = result.body().expect("rewritten body");
         let value: serde_json::Value = serde_json::from_slice(body).expect("rewritten JSON");
@@ -493,6 +515,11 @@ mod tests {
         assert_eq!(
             no_improvement.metrics().status,
             ActiveRewriteStatus::NoImprovement
+        );
+        assert_eq!(no_improvement.metrics().evaluated_spans, 1);
+        assert_eq!(
+            no_improvement.metrics().evaluated_input_bytes,
+            no_improvement.metrics().evaluated_candidate_bytes
         );
         let untouched = no_improvement.reframe(b"wire", b"wire-short".to_vec().into_boxed_slice());
         assert!(untouched.body().is_none());

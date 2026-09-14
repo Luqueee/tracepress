@@ -949,6 +949,14 @@ async fn shadow_candidate_persists_metadata_only_and_resolves_its_own_block() ->
                 preserved_prefix_bytes: Some(4),
                 preserved_prefix_ratio_basis_points: Some(10),
                 cache_risk: ShadowCacheRisk::High,
+                provider_readability: "provider_compatible_control".to_owned(),
+                json_root_kind: Some("array_object".to_owned()),
+                json_array_length_bucket: Some("2-9".to_owned()),
+                json_object_key_count_bucket: Some("3-4".to_owned()),
+                json_homogeneity_basis_points: Some(10_000),
+                json_primitive_cell_ratio_basis_points: Some(10_000),
+                json_nested_cell_ratio_basis_points: Some(0),
+                text_shape: None,
                 verified_at_us: Some(1_757_721_600_000_000),
             },
         })
@@ -962,6 +970,18 @@ async fn shadow_candidate_persists_metadata_only_and_resolves_its_own_block() ->
         |row| row.get(0),
     )?;
     assert_eq!(persisted_block, block_id.to_string());
+    let persisted_shape: (String, Option<String>) = connection.query_row(
+        "SELECT provider_readability, json_root_kind FROM compression_candidates WHERE candidate_id = ?1",
+        [candidate_id.to_string()],
+        |row| Ok((row.get(0)?, row.get(1)?)),
+    )?;
+    assert_eq!(
+        persisted_shape,
+        (
+            "provider_compatible_control".to_owned(),
+            Some("array_object".to_owned())
+        )
+    );
     let content_columns: i64 = connection.query_row(
         "SELECT COUNT(*) FROM pragma_table_info('compression_candidates') WHERE lower(name) LIKE '%content%' OR lower(name) LIKE '%payload%' OR lower(name) LIKE '%body%'",
         [],

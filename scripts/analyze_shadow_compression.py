@@ -71,13 +71,19 @@ def experiment_row(connection: sqlite3.Connection, experiment_id: str) -> dict[s
 
 
 def candidate_rows(connection: sqlite3.Connection, experiment_id: str) -> list[dict[str, Any]]:
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(compression_candidates)")}
+    provider_readability = "c.provider_readability" if "provider_readability" in columns else "'unknown'"
+    json_root_kind = "c.json_root_kind" if "json_root_kind" in columns else "NULL"
+    text_shape = "c.text_shape" if "text_shape" in columns else "NULL"
     rows = connection.execute(
-        """SELECT c.compressor_id, c.compressor_version, c.status,
+        f"""SELECT c.compressor_id, c.compressor_version, c.status,
                   c.original_fingerprint, c.cache_risk, m.input_bytes, m.output_bytes,
                   m.bytes_delta, m.input_estimated_tokens, m.output_estimated_tokens,
                   m.estimated_token_delta, m.processing_us, m.reversible,
                   m.recovery_verified, m.deterministic,
-                  m.preserved_prefix_ratio_basis_points, cs.session_id
+                  m.preserved_prefix_ratio_basis_points, cs.session_id,
+                  {provider_readability} AS provider_readability,
+                  {json_root_kind} AS json_root_kind, {text_shape} AS text_shape
              FROM compression_candidates c
              JOIN compression_candidate_metrics m USING(candidate_id)
              JOIN context_snapshots cs USING(snapshot_id)
@@ -112,6 +118,7 @@ def aggregate_compressors(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
         byte_reduction = sum_present(applicable, "bytes_delta")
         estimated_input = sum_present(applicable, "input_estimated_tokens")
         estimated_reduction = sum_present(applicable, "estimated_token_delta")
+        eligible_estimated = sum_present(group, "input_estimated_tokens")
         status_counts = Counter(row["status"] for row in group)
         result.append(
             {
@@ -121,6 +128,12 @@ def aggregate_compressors(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                 "eligible_blocks": len(group),
                 "applicable_blocks": len(applicable),
                 "applicability": ratio(len(applicable), len(group)),
+                "addressable_token_share": ratio(estimated_input or 0, eligible_estimated or 0),
+                "provider_readability": sorted({row.get("provider_readability") or "unknown" for row in group}),
+                "shape_distribution": dict(sorted(Counter(
+                    row.get("json_root_kind") or row.get("text_shape") or "unavailable"
+                    for row in group
+                ).items())),
                 "status_counts": dict(sorted(status_counts.items())),
                 "input_bytes": input_bytes,
                 "output_bytes": sum_present(applicable, "output_bytes"),
@@ -212,6 +225,7 @@ def select_candidate(
         item
         for item in compressors
         if not item["control"]
+        and item["provider_readability"] == ["human_readable_structured"]
         and item["applicable_blocks"] > 0
         and item["byte_reduction_ratio"] is not None
         and item["byte_reduction_ratio"] > 0
@@ -273,7 +287,7 @@ def build_report(
         "recommended_active_candidate": recommended,
         "recommendation_rationale": manifest.get("recommendation_rationale"),
         "recommendation_status": recommendation_status,
-        "phase_4_2": "ready_for_design" if recommended else "blocked",
+        "phase_4_2_1": "ready_for_active_ab" if recommended else "blocked",
         "limitations": [
             "Candidate reduction is local representation evidence, not provider token savings.",
             "Cache risk is structural evidence, not a provider cache prediction.",
@@ -309,12 +323,14 @@ def markdown(report: dict[str, Any]) -> str:
         "",
         "## Candidate comparison",
         "",
-        "| Candidate | Applicable | Byte reduction | Est. token reduction | Recovery | P95 |",
-        "|---|---:|---:|---:|---:|---:|",
+        "| Candidate | Readability | Addressable | Applicable | Byte reduction | Est. token reduction | Recovery | P95 |",
+        "|---|---|---:|---:|---:|---:|---:|---:|",
     ]
     for item in report["compressors"]:
         lines.append(
-            f"| `{item['id']}` | {format_percent(item['applicability'])} | "
+            f"| `{item['id']}` | {', '.join(item['provider_readability'])} | "
+            f"{format_percent(item['addressable_token_share'])} | "
+            f"{format_percent(item['applicability'])} | "
             f"{format_percent(item['byte_reduction_ratio'])} | "
             f"{format_percent(item['estimated_token_reduction_ratio'])} | "
             f"{format_percent(item['recovery_success_rate'])} | "

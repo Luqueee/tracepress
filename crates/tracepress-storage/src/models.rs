@@ -71,6 +71,17 @@ pub struct ShadowCandidateRecord {
     pub preserved_prefix_bytes: Option<u64>,
     pub preserved_prefix_ratio_basis_points: Option<u16>,
     pub cache_risk: ShadowCacheRisk,
+    /// Human/model readability classification, without candidate content.
+    pub provider_readability: String,
+    /// Metadata-only JSON shape classification.
+    pub json_root_kind: Option<String>,
+    pub json_array_length_bucket: Option<String>,
+    pub json_object_key_count_bucket: Option<String>,
+    pub json_homogeneity_basis_points: Option<u16>,
+    pub json_primitive_cell_ratio_basis_points: Option<u16>,
+    pub json_nested_cell_ratio_basis_points: Option<u16>,
+    /// Metadata-only plain-text shape classification.
+    pub text_shape: Option<String>,
     pub verified_at_us: Option<u64>,
 }
 

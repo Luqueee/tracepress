@@ -21,6 +21,18 @@ pub struct JsonMinify;
 #[derive(Clone, Copy, Debug, Default)]
 pub struct JsonTabular;
 
+/// J5 human-readable table projection for homogeneous JSON rows.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct JsonReadableTable;
+
+/// J6 compact, human-readable records with a fields header.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct JsonCompactRecords;
+
+/// J7 key-elision records with an explicit schema header.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct JsonKeyElision;
+
 /// J3 exact repeated-subtree factoring.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct JsonRepeatedSubtree;
@@ -214,6 +226,280 @@ impl ShadowCompressor for JsonTabular {
         let _: Value =
             serde_json::from_slice(candidate).map_err(|_| TransformError::InvalidInput)?;
         Ok(bounded_vec(recovery, limits)?.into_boxed_slice())
+    }
+}
+
+impl ShadowCompressor for JsonReadableTable {
+    fn id(&self) -> CompressorId {
+        CompressorId("json.readable_table")
+    }
+
+    fn version(&self) -> CompressorVersion {
+        CompressorVersion(1)
+    }
+
+    fn supports(&self, metadata: BlockMetadata) -> bool {
+        metadata.is_tool_result_json()
+    }
+
+    fn transform(
+        &self,
+        input: &[u8],
+        limits: &CompressionLimits,
+    ) -> Result<Transform, TransformError> {
+        readable_table_transform(input, limits, ReadableTableStyle::HumanTable)
+    }
+
+    fn recover(
+        &self,
+        candidate: &[u8],
+        recovery: &[u8],
+        limits: &CompressionLimits,
+    ) -> Result<Box<[u8]>, TransformError> {
+        readable_table_recover(candidate, recovery, limits, ReadableTableStyle::HumanTable)
+    }
+}
+
+impl ShadowCompressor for JsonCompactRecords {
+    fn id(&self) -> CompressorId {
+        CompressorId("json.compact_records")
+    }
+
+    fn version(&self) -> CompressorVersion {
+        CompressorVersion(1)
+    }
+
+    fn supports(&self, metadata: BlockMetadata) -> bool {
+        metadata.is_tool_result_json()
+    }
+
+    fn transform(
+        &self,
+        input: &[u8],
+        limits: &CompressionLimits,
+    ) -> Result<Transform, TransformError> {
+        readable_table_transform(input, limits, ReadableTableStyle::CompactRecords)
+    }
+
+    fn recover(
+        &self,
+        candidate: &[u8],
+        recovery: &[u8],
+        limits: &CompressionLimits,
+    ) -> Result<Box<[u8]>, TransformError> {
+        readable_table_recover(
+            candidate,
+            recovery,
+            limits,
+            ReadableTableStyle::CompactRecords,
+        )
+    }
+}
+
+impl ShadowCompressor for JsonKeyElision {
+    fn id(&self) -> CompressorId {
+        CompressorId("json.key_elision")
+    }
+
+    fn version(&self) -> CompressorVersion {
+        CompressorVersion(1)
+    }
+
+    fn supports(&self, metadata: BlockMetadata) -> bool {
+        metadata.is_tool_result_json()
+    }
+
+    fn transform(
+        &self,
+        input: &[u8],
+        limits: &CompressionLimits,
+    ) -> Result<Transform, TransformError> {
+        readable_table_transform(input, limits, ReadableTableStyle::KeyElision)
+    }
+
+    fn recover(
+        &self,
+        candidate: &[u8],
+        recovery: &[u8],
+        limits: &CompressionLimits,
+    ) -> Result<Box<[u8]>, TransformError> {
+        readable_table_recover(candidate, recovery, limits, ReadableTableStyle::KeyElision)
+    }
+}
+
+#[derive(Clone, Copy)]
+enum ReadableTableStyle {
+    HumanTable,
+    CompactRecords,
+    KeyElision,
+}
+
+fn readable_table_transform(
+    input: &[u8],
+    limits: &CompressionLimits,
+    style: ReadableTableStyle,
+) -> Result<Transform, TransformError> {
+    validate_json(input, limits)?;
+    let value: Value = serde_json::from_slice(input).map_err(|_| TransformError::InvalidInput)?;
+    let Value::Array(rows) = value else {
+        return Err(TransformError::NotApplicable);
+    };
+    if rows.len() < 2 || rows.len() > 100_000 {
+        return Err(if rows.len() > 100_000 {
+            TransformError::ResourceLimit
+        } else {
+            TransformError::NotApplicable
+        });
+    }
+    let first = rows
+        .first()
+        .and_then(Value::as_object)
+        .ok_or(TransformError::NotApplicable)?;
+    if first.is_empty() || first.len() > 64 {
+        return Err(TransformError::NotApplicable);
+    }
+    let columns = first.keys().cloned().collect::<Vec<_>>();
+    let expected = columns.iter().cloned().collect::<BTreeSet<_>>();
+    let mut values = Vec::with_capacity(rows.len());
+    let mut work = 0_u64;
+    for row in &rows {
+        let object = row.as_object().ok_or(TransformError::NotApplicable)?;
+        if object.keys().cloned().collect::<BTreeSet<_>>() != expected {
+            return Err(TransformError::NotApplicable);
+        }
+        let mut cells = Vec::with_capacity(columns.len());
+        for column in &columns {
+            let cell = object
+                .get(column)
+                .cloned()
+                .ok_or(TransformError::Internal)?;
+            let depth = json_value_depth(&cell, 0, limits, &mut work)?;
+            if depth > 8 {
+                return Err(TransformError::NotApplicable);
+            }
+            cells.push(cell);
+        }
+        values.push(cells);
+        if work > limits.max_shadow_work_units {
+            return Err(TransformError::ResourceLimit);
+        }
+    }
+    let candidate = render_readable_table(&columns, &values, style, limits)?;
+    let recovery = bounded_vec(input, limits)?;
+    bounds(&candidate, &recovery, limits)?;
+    Ok(Transform::new(candidate, recovery))
+}
+
+fn readable_table_recover(
+    candidate: &[u8],
+    recovery: &[u8],
+    limits: &CompressionLimits,
+    style: ReadableTableStyle,
+) -> Result<Box<[u8]>, TransformError> {
+    validate_recovery_inputs(candidate, recovery, limits)?;
+    let prefix: &[u8] = match style {
+        ReadableTableStyle::HumanTable => b"Tracepress table v1\n",
+        ReadableTableStyle::CompactRecords => b"Tracepress records v1\n",
+        ReadableTableStyle::KeyElision => b"Tracepress key-elision v1\n",
+    };
+    if !candidate.starts_with(prefix) || std::str::from_utf8(candidate).is_err() {
+        return Err(TransformError::InvalidInput);
+    }
+    Ok(bounded_vec(recovery, limits)?.into_boxed_slice())
+}
+
+fn render_readable_table(
+    columns: &[String],
+    rows: &[Vec<Value>],
+    style: ReadableTableStyle,
+    limits: &CompressionLimits,
+) -> Result<Vec<u8>, TransformError> {
+    let mut output = Vec::new();
+    let prefix = match style {
+        ReadableTableStyle::HumanTable => b"Tracepress table v1\n".as_slice(),
+        ReadableTableStyle::CompactRecords => b"Tracepress records v1\n".as_slice(),
+        ReadableTableStyle::KeyElision => b"Tracepress key-elision v1\n".as_slice(),
+    };
+    output.extend_from_slice(prefix);
+    match style {
+        ReadableTableStyle::HumanTable => {
+            output.extend_from_slice(b"fields\t");
+            write_json(
+                &mut output,
+                &Value::Array(columns.iter().cloned().map(Value::String).collect()),
+            )?;
+            output.push(b'\n');
+            for row in rows {
+                output.extend_from_slice(b"row\t");
+                write_json(&mut output, &Value::Array(row.clone()))?;
+                output.push(b'\n');
+            }
+        }
+        ReadableTableStyle::CompactRecords => {
+            output.extend_from_slice(b"fields: ");
+            write_json(
+                &mut output,
+                &Value::Array(columns.iter().cloned().map(Value::String).collect()),
+            )?;
+            output.push(b'\n');
+            for row in rows {
+                write_json(&mut output, &Value::Array(row.clone()))?;
+                output.push(b'\n');
+            }
+        }
+        ReadableTableStyle::KeyElision => {
+            output.extend_from_slice(b"fields(");
+            for (index, column) in columns.iter().enumerate() {
+                if index > 0 {
+                    output.push(b',');
+                }
+                write_json(&mut output, &Value::String(column.clone()))?;
+            }
+            output.extend_from_slice(b"): \n");
+            for row in rows {
+                output.push(b'(');
+                for (index, cell) in row.iter().enumerate() {
+                    if index > 0 {
+                        output.push(b',');
+                    }
+                    write_json(&mut output, cell)?;
+                }
+                output.extend_from_slice(b")\n");
+            }
+        }
+    }
+    if u64::try_from(output.len()).unwrap_or(u64::MAX) > limits.max_candidate_output_bytes {
+        return Err(TransformError::ResourceLimit);
+    }
+    Ok(output)
+}
+
+fn write_json(output: &mut Vec<u8>, value: &Value) -> Result<(), TransformError> {
+    let bytes = serde_json::to_vec(value).map_err(|_| TransformError::Internal)?;
+    output.extend_from_slice(&bytes);
+    Ok(())
+}
+
+fn json_value_depth(
+    value: &Value,
+    depth: u32,
+    limits: &CompressionLimits,
+    work: &mut u64,
+) -> Result<u32, TransformError> {
+    *work = work.saturating_add(1);
+    if *work > limits.max_shadow_work_units {
+        return Err(TransformError::ResourceLimit);
+    }
+    match value {
+        Value::Array(values) => values.iter().try_fold(depth, |maximum, value| {
+            json_value_depth(value, depth.saturating_add(1), limits, work)
+                .map(|child| maximum.max(child))
+        }),
+        Value::Object(values) => values.values().try_fold(depth, |maximum, value| {
+            json_value_depth(value, depth.saturating_add(1), limits, work)
+                .map(|child| maximum.max(child))
+        }),
+        Value::Null | Value::Bool(_) | Value::Number(_) | Value::String(_) => Ok(depth),
     }
 }
 
@@ -714,5 +1000,48 @@ mod tests {
         recovery.push(0x02);
         let result = JsonMinify.recover(&[], &recovery, &CompressionLimits::default());
         assert_eq!(result, Err(TransformError::InvalidInput));
+    }
+
+    #[test]
+    fn readable_json_candidates_are_human_structured_and_recoverable() {
+        let input = br#"[
+          {"file":"src/very-long-module-name.rs","line":10,"severity":"error"},
+          {"file":"src/another-very-long-module-name.rs","line":42,"severity":"warning"},
+          {"file":"src/third-very-long-module-name.rs","line":84,"severity":"error"}
+        ]"#;
+        for (compressor, prefix) in [
+            (
+                &JsonReadableTable as &dyn ShadowCompressor,
+                b"Tracepress table v1\n".as_slice(),
+            ),
+            (&JsonCompactRecords, b"Tracepress records v1\n".as_slice()),
+            (&JsonKeyElision, b"Tracepress key-elision v1\n".as_slice()),
+        ] {
+            let result = evaluate(
+                compressor,
+                json_metadata(),
+                input,
+                &CompressionLimits::default(),
+            );
+            assert!(result.metrics().recovery_verified);
+            assert!(result.metrics().deterministic);
+            assert!(
+                result
+                    .payload()
+                    .is_some_and(|bytes| bytes.starts_with(prefix))
+            );
+        }
+    }
+
+    #[test]
+    fn readable_json_candidates_reject_heterogeneous_rows() {
+        let input = br#"[{"a":1,"b":2},{"a":3}]"#;
+        let result = evaluate(
+            &JsonKeyElision,
+            json_metadata(),
+            input,
+            &CompressionLimits::default(),
+        );
+        assert_eq!(result.metrics().status, CandidateStatus::NotApplicable);
     }
 }

@@ -11,7 +11,8 @@ Phase 4.0 is frozen at commit `93ffe0c9c32a0f9a78027c6159e70236b2e6a598`, tagged
 - Shadow work starts only after Phase 3 analysis and durable snapshot finalization.
 - `tracepressd` remains the only SQLite writer.
 - Candidate and recovery bytes are ephemeral. Only status, sizes, estimates, timings, fingerprints,
-  prefix evidence, recovery verification, determinism, and cache-risk classification are persisted.
+  prefix evidence, recovery verification, determinism, cache-risk classification, provider
+  readability, and bounded shape labels are persisted.
 - `UnknownTransformPolicy` is permanently `Never` in this phase.
 - Candidate reduction is local representation evidence. It is not provider token savings, a cache
   prediction, a cost claim, or a quality claim.
@@ -31,7 +32,7 @@ independent shadow queue (8 jobs / 16 MiB)
 bounded compression worker
        │ metadata-only micro-batches
        ▼
-tracepressd ─► SQLite migrations 0009/0010 ─► Observatory
+tracepressd ─► SQLite migrations 0009/0010/0011 ─► Observatory
 ```
 
 The queue has independent item and byte budgets. Saturation increments `shadow_drops`; it never
@@ -54,9 +55,15 @@ Implemented controls and candidates:
 | `json.minify` | removes structural JSON whitespace without reserializing values | exact, using bounded whitespace provenance |
 | `json.tabular` | deterministic homogeneous `array<object>` tuple encoding | exact, using ephemeral provenance |
 | `json.repeated_subtree` | exact repeated object/array definitions and references | exact, using ephemeral provenance |
+| `json.readable_table` | explicit human-readable table for homogeneous rows | exact, using ephemeral provenance |
+| `json.compact_records` | explicit human-readable compact records | exact, using ephemeral provenance |
+| `json.key_elision` | explicit schema header plus human-readable records | exact, using ephemeral provenance |
 | `text.noop` | byte-identical control | exact |
 | `text.repeated_line` | binary length/count encoding of consecutive equal lines | exact and self-contained |
 | `text.repeated_run` | bounded folding of adjacent repeated line runs | exact and self-contained |
+| `text.readable_line_fold` | explicit repeated-line representation | exact, using ephemeral provenance |
+| `text.readable_block_fold` | explicit repeated-block representation | exact, using ephemeral provenance |
+| `text.log_prefix_fold` | conservative structured-log factoring | exact, using ephemeral provenance |
 
 Duplicate JSON keys make structural JSON candidates `NotApplicable`. Invalid UTF-8, invalid JSON,
 depth/work exhaustion, expansion, and elapsed-time exhaustion have explicit typed states. A valid

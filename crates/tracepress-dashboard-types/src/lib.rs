@@ -517,6 +517,10 @@ pub struct CompressorSummary {
     pub eligible_blocks: u64,
     pub applicable_blocks: u64,
     pub applicability_basis_points: Option<u16>,
+    /// Estimated-token exposure covered by applicable occurrences.
+    pub addressable_token_share_basis_points: Option<u16>,
+    /// Whether the candidate is readable by a normal provider/model contract.
+    pub provider_readability: String,
     pub input_bytes: Option<u64>,
     pub output_bytes: Option<u64>,
     pub byte_reduction: Option<u64>,
@@ -601,6 +605,14 @@ pub struct CompressionCandidateSummary {
     pub cache_risk: String,
     pub exact_repetition: Option<bool>,
     pub persistence: Option<u64>,
+    pub provider_readability: String,
+    pub json_root_kind: Option<String>,
+    pub json_array_length_bucket: Option<String>,
+    pub json_object_key_count_bucket: Option<String>,
+    pub json_homogeneity_basis_points: Option<u16>,
+    pub json_primitive_cell_ratio_basis_points: Option<u16>,
+    pub json_nested_cell_ratio_basis_points: Option<u16>,
+    pub text_shape: Option<String>,
 }
 
 /// Scheduler accounting summary when certified data exists.

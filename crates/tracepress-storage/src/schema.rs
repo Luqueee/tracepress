@@ -9,7 +9,7 @@ use rusqlite::{Connection, OpenFlags, TransactionBehavior, params};
 
 use crate::StorageError;
 
-const LATEST_SCHEMA_VERSION: u32 = 10;
+const LATEST_SCHEMA_VERSION: u32 = 11;
 pub(crate) const MIGRATION_V1: &str = include_str!("../migrations/0001_initial.sql");
 pub(crate) const MIGRATION_V2: &str = include_str!("../migrations/0002_provider_observability.sql");
 pub(crate) const MIGRATION_V3: &str = include_str!("../migrations/0003_context_analysis.sql");
@@ -24,7 +24,9 @@ pub(crate) const MIGRATION_V8: &str =
     include_str!("../migrations/0008_context_semantic_coverage.sql");
 pub(crate) const MIGRATION_V9: &str = include_str!("../migrations/0009_shadow_compression.sql");
 pub(crate) const MIGRATION_V10: &str = include_str!("../migrations/0010_shadow_drop_reasons.sql");
-const MIGRATIONS: [(u32, &str); 10] = [
+pub(crate) const MIGRATION_V11: &str =
+    include_str!("../migrations/0011_provider_candidate_metadata.sql");
+const MIGRATIONS: [(u32, &str); 11] = [
     (1, MIGRATION_V1),
     (2, MIGRATION_V2),
     (3, MIGRATION_V3),
@@ -35,6 +37,7 @@ const MIGRATIONS: [(u32, &str); 10] = [
     (8, MIGRATION_V8),
     (9, MIGRATION_V9),
     (10, MIGRATION_V10),
+    (11, MIGRATION_V11),
 ];
 const BUSY_TIMEOUT: Duration = Duration::from_secs(5);
 

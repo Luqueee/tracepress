@@ -823,9 +823,11 @@ fn render_compression_detail(
         Some(Ok(detail)) => rsx! {
             ShadowQualityBanner { quality: detail.summary.quality.clone() }
             div { class: "spacer-top", Card { title: "Candidate comparison", DataTable {
-                thead { tr { th { "Candidate" } th { class: "numeric", "Applicable" } th { class: "numeric", "Byte ↓" } th { class: "numeric", "Effective byte ↓" } th { class: "numeric", "Unique byte ↓" } th { class: "numeric", "Est. token ↓" } th { class: "numeric", "Recovery" } th { class: "numeric", "Deterministic" } th { class: "numeric", "P95" } } }
+                thead { tr { th { "Candidate" } th { "Provider readability" } th { class: "numeric", "Addressable" } th { class: "numeric", "Applicable" } th { class: "numeric", "Byte ↓" } th { class: "numeric", "Effective byte ↓" } th { class: "numeric", "Unique byte ↓" } th { class: "numeric", "Est. token ↓" } th { class: "numeric", "Recovery" } th { class: "numeric", "Deterministic" } th { class: "numeric", "P95" } } }
                 tbody { for compressor in &detail.compressors { tr {
                     td { class: "mono", "{compressor.compressor}" span { class: "muted", " v{compressor.version}" } }
+                    td { Badge { text: compressor.provider_readability.clone(), tone: if compressor.provider_readability == "human_readable_structured" { "success" } else { "neutral" } } }
+                    td { class: "numeric", "{format_basis_points(compressor.addressable_token_share_basis_points)}" }
                     td { class: "numeric", "{format_basis_points(compressor.applicability_basis_points)}" }
                     td { class: "numeric", "{format_basis_points(compressor.byte_reduction_basis_points)}" }
                     td { class: "numeric mono", "{format_optional_u64(compressor.candidate_effective_byte_reduction)}" }
@@ -886,21 +888,24 @@ fn render_candidate_rows(
     match state {
         None => rsx! { Skeleton {} },
         Some(Err(error)) => rsx! { ErrorState { message: error.clone() } },
-        Some(Ok(page)) => rsx! { Card { title: "Block-level candidate metadata", DataTable {
-            thead { tr { th { "Candidate" } th { "Block" } th { "Type" } th { "Status" } th { class: "numeric", "Input" } th { class: "numeric", "Output" } th { class: "numeric", "Est. input" } th { class: "numeric", "Est. output" } th { "Recovery" } th { "Cache risk" } } }
-            tbody { for row in &page.items { tr {
-                td { class: "mono", title: row.id.clone(), "{short_candidate_id(&row.id)}" }
-                td { class: "mono", "#{row.block_ordinal} {row.block_kind}" div { class: "muted", "{row.origin}" } }
-                td { "{optional_text(&row.detected_kind)}" }
-                td { Badge { text: row.status.clone(), tone: compression_status_tone(&row.status) } }
-                td { class: "numeric mono", "{compact_u64(row.input_bytes)}" }
-                td { class: "numeric mono", "{format_optional_u64(row.output_bytes)}" }
-                td { class: "numeric mono", "{format_optional_u64(row.input_estimated_tokens)}" }
-                td { class: "numeric mono", "{format_optional_u64(row.output_estimated_tokens)}" }
-                td { Badge { text: if row.recovery_verified { "verified" } else { "failed/unavailable" }, tone: if row.recovery_verified { "success" } else { "danger" } } }
-                td { Badge { text: row.cache_risk.clone(), tone: if row.cache_risk == "high" { "warning" } else { "neutral" } } }
-            } } }
-        } Pagination { next: page.next_cursor.clone(), cursor } } },
+        Some(Ok(page)) => {
+            rsx! { Card { title: "Block-level candidate metadata (content never returned)", DataTable {
+                thead { tr { th { "Candidate" } th { "Block" } th { "Type / shape" } th { "Readability" } th { "Status" } th { class: "numeric", "Input" } th { class: "numeric", "Output" } th { class: "numeric", "Est. input" } th { class: "numeric", "Est. output" } th { "Recovery" } th { "Cache risk" } } }
+                tbody { for row in &page.items { tr {
+                    td { class: "mono", title: row.id.clone(), "{short_candidate_id(&row.id)}" }
+                    td { class: "mono", "#{row.block_ordinal} {row.block_kind}" div { class: "muted", "{row.origin}" } }
+                    td { "{optional_text(&row.detected_kind)}" div { class: "muted mono", "{candidate_shape_label(row)}" } }
+                    td { Badge { text: row.provider_readability.clone(), tone: if row.provider_readability == "human_readable_structured" { "success" } else { "neutral" } } }
+                    td { Badge { text: row.status.clone(), tone: compression_status_tone(&row.status) } }
+                    td { class: "numeric mono", "{compact_u64(row.input_bytes)}" }
+                    td { class: "numeric mono", "{format_optional_u64(row.output_bytes)}" }
+                    td { class: "numeric mono", "{format_optional_u64(row.input_estimated_tokens)}" }
+                    td { class: "numeric mono", "{format_optional_u64(row.output_estimated_tokens)}" }
+                    td { Badge { text: if row.recovery_verified { "verified" } else { "failed/unavailable" }, tone: if row.recovery_verified { "success" } else { "danger" } } }
+                    td { Badge { text: row.cache_risk.clone(), tone: if row.cache_risk == "high" { "warning" } else { "neutral" } } }
+                } } }
+            } Pagination { next: page.next_cursor.clone(), cursor } } }
+        }
     }
 }
 
@@ -941,6 +946,13 @@ fn compact_u64(value: u64) -> String {
     } else {
         value.to_string()
     }
+}
+
+fn candidate_shape_label(row: &CompressionCandidateSummary) -> String {
+    row.json_root_kind
+        .clone()
+        .or_else(|| row.text_shape.clone())
+        .unwrap_or_else(|| "unavailable".to_owned())
 }
 
 fn compression_quality_healthy(quality: &tracepress_dashboard_types::CompressionQuality) -> bool {

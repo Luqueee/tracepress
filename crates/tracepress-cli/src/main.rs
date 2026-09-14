@@ -34,9 +34,10 @@ use tokio_util::sync::CancellationToken;
 use tracepress_compression::{
     BlockKind as CompressionBlockKind, BlockMetadata, BlockOrigin as CompressionBlockOrigin,
     CacheRisk as CompressionCacheRisk, CandidateMetrics, CandidateStatus, CompressionLimits,
-    DetectedKind as CompressionDetectedKind, JsonMinify, JsonNoop, JsonRepeatedSubtree,
-    JsonTabular, ShadowCompressor, TextNoop, TextRepeatedLine, TextRepeatedRun,
-    evaluate_with_estimator,
+    DetectedKind as CompressionDetectedKind, JsonCompactRecords, JsonKeyElision, JsonMinify,
+    JsonNoop, JsonReadableTable, JsonRepeatedSubtree, JsonTabular, ShadowCompressor,
+    TextLogPrefixFold, TextNoop, TextReadableBlockFold, TextReadableLineFold, TextRepeatedLine,
+    TextRepeatedRun, evaluate_with_estimator,
 };
 use tracepress_context::{
     ContextAnalysisLimits, ContextAnalysisResult, ContextAnalysisStatus, ContextBlockKind,
@@ -2505,6 +2506,18 @@ struct ShadowCompressionWorker {
     counters: Arc<ShadowCounters>,
 }
 
+#[derive(Clone, Debug, Default)]
+struct ShadowShapeMetadata {
+    provider_readability: String,
+    json_root_kind: Option<String>,
+    json_array_length_bucket: Option<String>,
+    json_object_key_count_bucket: Option<String>,
+    json_homogeneity_basis_points: Option<u16>,
+    json_primitive_cell_ratio_basis_points: Option<u16>,
+    json_nested_cell_ratio_basis_points: Option<u16>,
+    text_shape: Option<String>,
+}
+
 impl ShadowCompressionWorker {
     async fn run(self, mut jobs: tokio::sync::mpsc::Receiver<ShadowJob>) -> Result<(), String> {
         self.record_manifest("running", None).await?;
@@ -2526,9 +2539,15 @@ impl ShadowCompressionWorker {
             ("json.minify", 1),
             ("json.tabular", 1),
             ("json.repeated_subtree", 1),
+            ("json.readable_table", 1),
+            ("json.compact_records", 1),
+            ("json.key_elision", 1),
             ("text.noop", 1),
             ("text.repeated_line", 1),
             ("text.repeated_run", 1),
+            ("text.readable_line_fold", 1),
+            ("text.readable_block_fold", 1),
+            ("text.log_prefix_fold", 1),
         ])
         .map_err(|error| error.to_string())?;
         let limits_json = serde_json::to_string(&self.limits).map_err(|error| error.to_string())?;
@@ -2617,10 +2636,23 @@ fn evaluate_shadow_job(
         .min(job.analysis.blocks.len());
     let generator = UuidV7Generator::new();
     let estimator = StructuralHeuristicEstimator::new();
-    let json_compressors: [&dyn ShadowCompressor; 4] =
-        [&JsonNoop, &JsonMinify, &JsonTabular, &JsonRepeatedSubtree];
-    let text_compressors: [&dyn ShadowCompressor; 3] =
-        [&TextNoop, &TextRepeatedLine, &TextRepeatedRun];
+    let json_compressors: [&dyn ShadowCompressor; 7] = [
+        &JsonNoop,
+        &JsonMinify,
+        &JsonTabular,
+        &JsonRepeatedSubtree,
+        &JsonReadableTable,
+        &JsonCompactRecords,
+        &JsonKeyElision,
+    ];
+    let text_compressors: [&dyn ShadowCompressor; 6] = [
+        &TextNoop,
+        &TextRepeatedLine,
+        &TextRepeatedRun,
+        &TextReadableLineFold,
+        &TextReadableBlockFold,
+        &TextLogPrefixFold,
+    ];
     let mut records = Vec::new();
     let mut remaining_work = limits.max_shadow_work_units;
     'blocks: for block in &job.analysis.blocks[..accepted] {
@@ -2635,6 +2667,7 @@ fn evaluate_shadow_job(
         let Some(content) = shadow_block_content(job.body.as_ref(), block) else {
             continue;
         };
+        let shape = classify_shadow_shape(&content, metadata.detected_kind);
         for compressor in compressors
             .iter()
             .take(usize::try_from(limits.max_candidates_per_block).unwrap_or(usize::MAX))
@@ -2670,6 +2703,7 @@ fn evaluate_shadow_job(
                 job.snapshot_id,
                 u64::from(block.ordinal),
                 metrics,
+                &shape,
             ));
         }
     }
@@ -2731,6 +2765,160 @@ fn shadow_block_metadata(
 }
 
 #[allow(
+    clippy::too_many_lines,
+    reason = "the metadata-only shape classifier keeps all bounded shape rules together"
+)]
+fn classify_shadow_shape(
+    input: &[u8],
+    detected_kind: CompressionDetectedKind,
+) -> ShadowShapeMetadata {
+    let provider_readability = "unknown";
+    match detected_kind {
+        CompressionDetectedKind::Json => {
+            let Ok(value) = serde_json::from_slice::<serde_json::Value>(input) else {
+                return ShadowShapeMetadata {
+                    provider_readability: provider_readability.to_owned(),
+                    ..ShadowShapeMetadata::default()
+                };
+            };
+            let mut shape = ShadowShapeMetadata {
+                provider_readability: provider_readability.to_owned(),
+                ..ShadowShapeMetadata::default()
+            };
+            match &value {
+                serde_json::Value::Array(rows) => {
+                    shape.json_array_length_bucket = Some(length_bucket(rows.len()));
+                    if rows.iter().all(serde_json::Value::is_object) {
+                        shape.json_root_kind = Some("array_object".to_owned());
+                        let objects: Vec<&serde_json::Map<String, serde_json::Value>> = rows
+                            .iter()
+                            .filter_map(serde_json::Value::as_object)
+                            .collect();
+                        let first_keys = objects
+                            .first()
+                            .map(|object| object.keys().cloned().collect::<BTreeSet<_>>())
+                            .unwrap_or_default();
+                        let homogeneous = objects
+                            .iter()
+                            .filter(|object| {
+                                object.keys().cloned().collect::<BTreeSet<_>>() == first_keys
+                            })
+                            .count();
+                        shape.json_homogeneity_basis_points =
+                            Some(ratio_basis_points(homogeneous, objects.len()));
+                        shape.json_object_key_count_bucket = Some(length_bucket(first_keys.len()));
+                        let mut primitive = 0_usize;
+                        let mut nested = 0_usize;
+                        for object in &objects {
+                            for cell in object.values() {
+                                if cell.is_array() || cell.is_object() {
+                                    nested = nested.saturating_add(1);
+                                } else {
+                                    primitive = primitive.saturating_add(1);
+                                }
+                            }
+                        }
+                        let total = primitive.saturating_add(nested);
+                        shape.json_primitive_cell_ratio_basis_points =
+                            Some(ratio_basis_points(primitive, total));
+                        shape.json_nested_cell_ratio_basis_points =
+                            Some(ratio_basis_points(nested, total));
+                    } else if rows
+                        .iter()
+                        .all(|value| value.is_object() || value.is_array())
+                    {
+                        shape.json_root_kind = Some("array_nested".to_owned());
+                    } else if rows
+                        .iter()
+                        .all(|value| !value.is_object() && !value.is_array())
+                    {
+                        shape.json_root_kind = Some("array_scalar".to_owned());
+                    } else {
+                        shape.json_root_kind = Some("array_heterogeneous".to_owned());
+                    }
+                }
+                serde_json::Value::Object(object) => {
+                    shape.json_root_kind = Some("object".to_owned());
+                    shape.json_object_key_count_bucket = Some(length_bucket(object.len()));
+                }
+                serde_json::Value::String(_) => shape.json_root_kind = Some("string".to_owned()),
+                serde_json::Value::Number(_) => shape.json_root_kind = Some("number".to_owned()),
+                serde_json::Value::Bool(_) => shape.json_root_kind = Some("boolean".to_owned()),
+                serde_json::Value::Null => shape.json_root_kind = Some("null".to_owned()),
+            }
+            shape
+        }
+        CompressionDetectedKind::PlainText => {
+            let text = String::from_utf8_lossy(input);
+            let lines: Vec<&str> = text.lines().collect();
+            let mut counts = BTreeMap::<&str, usize>::new();
+            for line in &lines {
+                let count = counts.entry(line).or_default();
+                *count = count.saturating_add(1);
+            }
+            let duplicate_lines = counts.values().any(|count| *count > 1);
+            let log_like = lines
+                .iter()
+                .filter(|line| line.split_whitespace().count() >= 3 && line.contains(' '))
+                .count();
+            ShadowShapeMetadata {
+                provider_readability: provider_readability.to_owned(),
+                text_shape: Some(
+                    if duplicate_lines {
+                        "duplicate_lines"
+                    } else if log_like.saturating_mul(2) >= lines.len().max(1) {
+                        "logs_like"
+                    } else {
+                        "plain"
+                    }
+                    .to_owned(),
+                ),
+                ..ShadowShapeMetadata::default()
+            }
+        }
+        _ => ShadowShapeMetadata {
+            provider_readability: provider_readability.to_owned(),
+            ..ShadowShapeMetadata::default()
+        },
+    }
+}
+
+fn length_bucket(length: usize) -> String {
+    match length {
+        0 => "0".to_owned(),
+        1..=1 => "1".to_owned(),
+        2..=9 => "2-9".to_owned(),
+        10..=99 => "10-99".to_owned(),
+        100..=999 => "100-999".to_owned(),
+        _ => "1000+".to_owned(),
+    }
+}
+
+#[allow(
+    clippy::arithmetic_side_effects,
+    reason = "bounded ratio conversion saturates before narrowing"
+)]
+fn ratio_basis_points(numerator: usize, denominator: usize) -> u16 {
+    if denominator == 0 {
+        return 0;
+    }
+    u16::try_from((numerator.saturating_mul(10_000) / denominator).min(10_000)).unwrap_or(10_000)
+}
+
+fn compressor_provider_readability(compressor_id: &str) -> String {
+    match compressor_id {
+        "json.readable_table"
+        | "json.compact_records"
+        | "json.key_elision"
+        | "text.readable_line_fold"
+        | "text.readable_block_fold"
+        | "text.log_prefix_fold" => "human_readable_structured".to_owned(),
+        "json.noop" | "json.minify" | "text.noop" => "provider_compatible_control".to_owned(),
+        _ => "opaque_custom_encoding".to_owned(),
+    }
+}
+
+#[allow(
     clippy::too_many_arguments,
     reason = "candidate association metadata remains explicit"
 )]
@@ -2740,7 +2928,10 @@ fn shadow_candidate_record(
     snapshot_id: ContextSnapshotId,
     block_ordinal: u64,
     metrics: &CandidateMetrics,
+    shape: &ShadowShapeMetadata,
 ) -> ShadowCandidateRecord {
+    let mut shape = shape.clone();
+    shape.provider_readability = compressor_provider_readability(&metrics.compressor_id);
     ShadowCandidateRecord {
         candidate_id: CompressionCandidateId::generate(generator),
         experiment_id: experiment_id.to_owned(),
@@ -2774,6 +2965,14 @@ fn shadow_candidate_record(
         preserved_prefix_bytes: metrics.preserved_prefix_bytes,
         preserved_prefix_ratio_basis_points: metrics.preserved_prefix_ratio_basis_points,
         cache_risk: storage_cache_risk(metrics.cache_risk),
+        provider_readability: shape.provider_readability,
+        json_root_kind: shape.json_root_kind,
+        json_array_length_bucket: shape.json_array_length_bucket,
+        json_object_key_count_bucket: shape.json_object_key_count_bucket,
+        json_homogeneity_basis_points: shape.json_homogeneity_basis_points,
+        json_primitive_cell_ratio_basis_points: shape.json_primitive_cell_ratio_basis_points,
+        json_nested_cell_ratio_basis_points: shape.json_nested_cell_ratio_basis_points,
+        text_shape: shape.text_shape,
         verified_at_us: current_timestamp_us().ok(),
     }
 }

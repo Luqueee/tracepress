@@ -1,0 +1,20 @@
+{
+  "blocks": 1,
+  "candidate_forecast": {},
+  "json": {
+    "shapes": {
+      "nested_array_or_object|items=2-9|depth=2-9": {
+        "blocks": 1,
+        "estimated_tokens": 95,
+        "raw_bytes": 435
+      }
+    },
+    "total_estimated_tokens": 95
+  },
+  "plain_text": {
+    "shapes": {},
+    "total_estimated_tokens": 0
+  },
+  "privacy": "metadata_only_raw_content_not_selected",
+  "sessions": 1
+}

@@ -24,8 +24,14 @@ use sha2::{Digest as _, Sha256};
 pub use active::{
     ActiveJsonSpan, ActiveRewrite, ActiveRewriteMetrics, ActiveRewriteStatus, rewrite_json_minify,
 };
-pub use json::{JsonMinify, JsonNoop, JsonRepeatedSubtree, JsonTabular};
-pub use text::{TextNoop, TextRepeatedLine, TextRepeatedRun};
+pub use json::{
+    JsonCompactRecords, JsonKeyElision, JsonMinify, JsonNoop, JsonReadableTable,
+    JsonRepeatedSubtree, JsonTabular,
+};
+pub use text::{
+    TextLogPrefixFold, TextNoop, TextReadableBlockFold, TextReadableLineFold, TextRepeatedLine,
+    TextRepeatedRun,
+};
 
 /// Phase 4.1 compressor contract version.
 pub const SHADOW_COMPRESSION_VERSION: u32 = 1;
@@ -171,7 +177,10 @@ impl Default for CompressionLimits {
         Self {
             max_candidate_input_bytes: 1_048_576,
             max_candidate_output_bytes: 1_048_576,
-            max_candidates_per_block: 6,
+            // The Phase 4.2.1 set contains seven JSON and six plain-text controls/candidates.
+            // Keep the default above the complete set so adding a candidate cannot silently make
+            // the last registered compressor unevaluated.
+            max_candidates_per_block: 13,
             max_shadow_work_units: 2_000_000,
             max_shadow_wall_time_ms: NonZeroU64::new(100).unwrap_or(NonZeroU64::MIN),
             max_shadow_memory_bytes: 4_194_304,

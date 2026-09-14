@@ -824,7 +824,13 @@ fn compressor_summaries(
     connection: &Connection,
     experiment_id: &str,
 ) -> Result<Vec<CompressorSummary>, rusqlite::Error> {
-    let mut statement = connection.prepare(
+    let readability_expression =
+        if table_column_exists(connection, "compression_candidates", "provider_readability")? {
+            "MAX(c.provider_readability)"
+        } else {
+            "'unknown'"
+        };
+    let sql = format!(
         "SELECT c.compressor_id, c.compressor_version, COUNT(*),
                 SUM(c.status = 'applicable'),
                 SUM(CASE WHEN c.status = 'applicable' THEN m.input_bytes END),
@@ -839,13 +845,17 @@ fn compressor_summaries(
                 SUM(CASE WHEN m.output_bytes IS NOT NULL THEN m.deterministic END),
                 SUM(m.output_bytes IS NOT NULL),
                 SUM(c.cache_risk = 'low'), SUM(c.cache_risk = 'medium'),
-                SUM(c.cache_risk = 'high'), SUM(c.cache_risk = 'unknown')
+                SUM(c.cache_risk = 'high'), SUM(c.cache_risk = 'unknown'),
+                SUM(CASE WHEN m.input_estimated_tokens IS NOT NULL THEN m.input_estimated_tokens END),
+                SUM(CASE WHEN c.status = 'applicable' THEN m.input_estimated_tokens END),
+                {readability_expression}
          FROM compression_candidates c
          JOIN compression_candidate_metrics m ON m.candidate_id = c.candidate_id
          WHERE c.experiment_id = ?1
          GROUP BY c.compressor_id, c.compressor_version
-         ORDER BY c.compressor_id",
-    )?;
+         ORDER BY c.compressor_id"
+    );
+    let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map([experiment_id], |row| {
         let eligible = nonnegative(row.get(2)?);
         let applicable = nonnegative(row.get(3)?);
@@ -862,6 +872,13 @@ fn compressor_summaries(
                 eligible_blocks: eligible,
                 applicable_blocks: applicable,
                 applicability_basis_points: ratio_basis_points(applicable, eligible),
+                addressable_token_share_basis_points: ratio_basis_points(
+                    nonnegative(row.get::<_, Option<i64>>(19)?.unwrap_or(0)),
+                    nonnegative(row.get::<_, Option<i64>>(18)?.unwrap_or(0)),
+                ),
+                provider_readability: row
+                    .get::<_, Option<String>>(20)?
+                    .unwrap_or_else(|| "unknown".to_owned()),
                 input_bytes,
                 output_bytes,
                 byte_reduction,
@@ -1032,7 +1049,17 @@ pub(crate) fn compression_candidates(
     limit: u32,
     offset: u64,
 ) -> Result<Page<CompressionCandidateSummary>, rusqlite::Error> {
-    let mut statement = connection.prepare(
+    let metadata_columns =
+        table_column_exists(connection, "compression_candidates", "provider_readability")?;
+    let metadata_select = if metadata_columns {
+        "c.provider_readability, c.json_root_kind, c.json_array_length_bucket,
+                c.json_object_key_count_bucket, c.json_homogeneity_basis_points,
+                c.json_primitive_cell_ratio_basis_points, c.json_nested_cell_ratio_basis_points,
+                c.text_shape"
+    } else {
+        "'unknown', NULL, NULL, NULL, NULL, NULL, NULL, NULL"
+    };
+    let sql = format!(
         "SELECT c.candidate_id, c.experiment_id, c.snapshot_id, b.ordinal, b.kind, b.origin,
                 b.detected_kind, c.compressor_id, c.compressor_version, c.status,
                 m.input_bytes, m.output_bytes, m.bytes_delta, m.input_estimated_tokens,
@@ -1043,13 +1070,15 @@ pub(crate) fn compression_candidates(
                     (SELECT COUNT(*) > 1 FROM context_block_occurrences bx WHERE bx.exact_fingerprint = b.exact_fingerprint) END,
                 CASE WHEN b.exact_fingerprint IS NULL THEN NULL ELSE
                     (SELECT COUNT(*) FROM context_block_occurrences bx WHERE bx.exact_fingerprint = b.exact_fingerprint) END
+                , {metadata_select}
          FROM compression_candidates c
          JOIN compression_candidate_metrics m ON m.candidate_id = c.candidate_id
          JOIN context_block_occurrences b ON b.block_occurrence_id = c.block_occurrence_id
          WHERE c.experiment_id = ?1
          ORDER BY c.candidate_id
-         LIMIT ?2 OFFSET ?3",
-    )?;
+         LIMIT ?2 OFFSET ?3"
+    );
+    let mut statement = connection.prepare(&sql)?;
     let requested = u64::from(limit).saturating_add(1);
     let rows = statement.query_map(
         params![
@@ -1086,6 +1115,23 @@ pub(crate) fn compression_candidates(
                 cache_risk: row.get(21)?,
                 exact_repetition: row.get(22)?,
                 persistence: row.get::<_, Option<i64>>(23)?.and_then(to_u64),
+                provider_readability: row.get(24)?,
+                json_root_kind: row.get(25)?,
+                json_array_length_bucket: row.get(26)?,
+                json_object_key_count_bucket: row.get(27)?,
+                json_homogeneity_basis_points: row
+                    .get::<_, Option<i64>>(28)?
+                    .and_then(to_u64)
+                    .and_then(|value| u16::try_from(value).ok()),
+                json_primitive_cell_ratio_basis_points: row
+                    .get::<_, Option<i64>>(29)?
+                    .and_then(to_u64)
+                    .and_then(|value| u16::try_from(value).ok()),
+                json_nested_cell_ratio_basis_points: row
+                    .get::<_, Option<i64>>(30)?
+                    .and_then(to_u64)
+                    .and_then(|value| u16::try_from(value).ok()),
+                text_shape: row.get(31)?,
             })
         },
     )?;
@@ -1104,6 +1150,15 @@ fn table_exists(connection: &Connection, table: &str) -> Result<bool, rusqlite::
         [table],
         |row| row.get(0),
     )
+}
+
+fn table_column_exists(
+    connection: &Connection,
+    table: &str,
+    column: &str,
+) -> Result<bool, rusqlite::Error> {
+    let sql = format!("SELECT EXISTS(SELECT 1 FROM pragma_table_info('{table}') WHERE name = ?1)");
+    connection.query_row(&sql, [column], |row| row.get(0))
 }
 
 fn ratio_basis_points(numerator: u64, denominator: u64) -> Option<u16> {

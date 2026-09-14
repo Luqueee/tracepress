@@ -196,7 +196,7 @@ fn insert(
         ))?),
         WriteCommand::ShadowCompressionCandidate { candidate } => {
             let inserted = sqlite(transaction.execute(
-                "INSERT INTO compression_candidates(candidate_id, experiment_id, snapshot_id, block_occurrence_id, compressor_id, compressor_version, status, original_fingerprint, candidate_fingerprint, first_modified_offset, preserved_prefix_bytes, cache_risk) SELECT ?1, ?2, ?3, block_occurrence_id, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12 FROM context_block_occurrences WHERE snapshot_id = ?3 AND ordinal = ?4",
+                "INSERT INTO compression_candidates(candidate_id, experiment_id, snapshot_id, block_occurrence_id, compressor_id, compressor_version, status, original_fingerprint, candidate_fingerprint, first_modified_offset, preserved_prefix_bytes, cache_risk, provider_readability, json_root_kind, json_array_length_bucket, json_object_key_count_bucket, json_homogeneity_basis_points, json_primitive_cell_ratio_basis_points, json_nested_cell_ratio_basis_points, text_shape) SELECT ?1, ?2, ?3, block_occurrence_id, ?5, ?6, ?7, ?8, ?9, ?10, ?11, ?12, ?13, ?14, ?15, ?16, ?17, ?18, ?19, ?20 FROM context_block_occurrences WHERE snapshot_id = ?3 AND ordinal = ?4",
                 params![
                     candidate.candidate_id.to_string(),
                     candidate.experiment_id,
@@ -210,6 +210,14 @@ fn insert(
                     sqlite_optional(candidate.first_modified_offset, "first_modified_offset")?,
                     sqlite_optional(candidate.preserved_prefix_bytes, "preserved_prefix_bytes")?,
                     shadow_cache_risk_text(candidate.cache_risk),
+                    candidate.provider_readability,
+                    candidate.json_root_kind,
+                    candidate.json_array_length_bucket,
+                    candidate.json_object_key_count_bucket,
+                    candidate.json_homogeneity_basis_points.map(i64::from),
+                    candidate.json_primitive_cell_ratio_basis_points.map(i64::from),
+                    candidate.json_nested_cell_ratio_basis_points.map(i64::from),
+                    candidate.text_shape,
                 ],
             ))?;
             if inserted != 1 {

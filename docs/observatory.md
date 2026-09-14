@@ -105,11 +105,17 @@ Sessions accept `limit`, opaque `cursor`, `model`, `transport`, `status`, `has_c
 
 The baseline/workload/opportunity endpoints read reproducible JSON report artifacts. They do not replace or modify those artifacts, and official convergence status is projected rather than recalculated.
 
-Compression Lab reads migration 0009 metadata from operational SQLite. It shows experiment quality,
-compressor applicability, local byte/token-estimate reduction, recovery, determinism, latency,
-prefix evidence, cache risk, and paginated block metadata. It never returns original or candidate
-content. Workload distributions remain explicitly unavailable until operational sessions carry a
-certified workload mapping.
+Compression Lab reads operational shadow metadata in SQLite read-only mode. It shows experiment
+quality, compressor applicability, addressable estimated-token share, local byte/token-estimate
+reduction, recovery, determinism, latency, prefix evidence, cache risk, provider readability, and
+paginated block metadata. It never returns original or candidate content. Workload distributions
+remain explicitly unavailable until operational sessions carry a certified workload mapping.
+
+Phase 4.2.1 also persists bounded JSON/plain-text shape labels and exposes them in the candidate
+table. `scripts/characterize_provider_shapes.py` generates a metadata-only distribution for up to
+ten sessions; it never selects raw context or fingerprints. `json.minify` is retained as a
+`rejected_no_real_improvement` control after the real provider diagnostic, while TPJ2 remains
+shadow-only.
 
 Generate the reproducible metadata-only experiment report with:
 

@@ -40,9 +40,15 @@ replacement body. All other headers and routes keep the existing forwarding beha
 
 `json.tabular` remains shadow-only. Its `TPJ2` bytes are a local representation and are not a
 provider-compatible Responses `function_call_output.output` value. Sending those bytes would make
-the provider/model responsible for a new decoding contract that does not exist yet. The first
-active candidate is therefore `json.minify`, whose replacement remains a valid JSON document and
-preserves keys, values, ordering, and string content while removing structural whitespace.
+the provider/model responsible for a new decoding contract that does not exist yet. The provider
+diagnostic formally classifies `json.minify` as `rejected_no_real_improvement`: it remains a lossless
+provider-compatible control, but the real workload produced no material rewrite. It is not the
+current active candidate.
+
+Phase 4.2.1 adds human-readable shadow candidates (`json.readable_table`, `json.compact_records`,
+`json.key_elision`, `text.readable_line_fold`, `text.readable_block_fold`, and
+`text.log_prefix_fold`). They must pass a naturalistic applicability/reduction gate before any
+active A/B. Each has exact Tracepress recovery, deterministic replay, and independent bounds.
 
 ## Metadata boundary
 

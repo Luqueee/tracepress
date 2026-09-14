@@ -2362,6 +2362,12 @@ impl Drop for ShadowBytePermit {
 #[derive(Debug, Default)]
 struct ShadowCounters {
     drops: AtomicU64,
+    jobs_admitted: AtomicU64,
+    jobs_processed: AtomicU64,
+    job_drops: AtomicU64,
+    candidate_evaluations_attempted: AtomicU64,
+    candidate_evaluations_completed: AtomicU64,
+    candidate_evaluation_drops: AtomicU64,
     queue_full_drops: AtomicU64,
     byte_budget_drops: AtomicU64,
     work_budget_drops: AtomicU64,
@@ -2476,6 +2482,36 @@ enum ShadowDropReason {
 }
 
 impl ShadowCounters {
+    fn record_job_admitted(&self) {
+        let _count = self.jobs_admitted.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_job_processed(&self) {
+        let _count = self.jobs_processed.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_job_drop(&self) {
+        let _count = self.job_drops.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_candidate_attempt(&self) {
+        let _count = self
+            .candidate_evaluations_attempted
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_candidate_completed(&self) {
+        let _count = self
+            .candidate_evaluations_completed
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn record_candidate_drop(&self) {
+        let _count = self
+            .candidate_evaluation_drops
+            .fetch_add(1, Ordering::Relaxed);
+    }
+
     fn record_drop(&self, reason: ShadowDropReason) {
         let _total = self.drops.fetch_add(1, Ordering::Relaxed);
         let counter = match reason {
@@ -2573,6 +2609,7 @@ impl ShadowCompressionWorker {
     }
 
     async fn record_job(&self, job: ShadowJob) {
+        self.counters.record_job_processed();
         let candidates = evaluate_shadow_job(
             &job,
             &self.experiment_id,
@@ -2606,6 +2643,18 @@ impl ShadowCompressionWorker {
                     self.experiment_id.clone(),
                     0,
                     self.counters.drops.swap(0, Ordering::AcqRel),
+                    self.counters.jobs_admitted.swap(0, Ordering::AcqRel),
+                    self.counters.jobs_processed.swap(0, Ordering::AcqRel),
+                    self.counters.job_drops.swap(0, Ordering::AcqRel),
+                    self.counters
+                        .candidate_evaluations_attempted
+                        .swap(0, Ordering::AcqRel),
+                    self.counters
+                        .candidate_evaluations_completed
+                        .swap(0, Ordering::AcqRel),
+                    self.counters
+                        .candidate_evaluation_drops
+                        .swap(0, Ordering::AcqRel),
                     self.counters.queue_full_drops.swap(0, Ordering::AcqRel),
                     self.counters.byte_budget_drops.swap(0, Ordering::AcqRel),
                     self.counters.work_budget_drops.swap(0, Ordering::AcqRel),
@@ -2655,7 +2704,7 @@ fn evaluate_shadow_job(
     ];
     let mut records = Vec::new();
     let mut remaining_work = limits.max_shadow_work_units;
-    'blocks: for block in &job.analysis.blocks[..accepted] {
+    for block in &job.analysis.blocks[..accepted] {
         let metadata = shadow_block_metadata(block, job.body.len());
         let compressors: &[&dyn ShadowCompressor] = match metadata.detected_kind {
             CompressionDetectedKind::Json if metadata.is_tool_result_json() => &json_compressors,
@@ -2668,16 +2717,20 @@ fn evaluate_shadow_job(
             continue;
         };
         let shape = classify_shadow_shape(&content, metadata.detected_kind);
-        for compressor in compressors
-            .iter()
-            .take(usize::try_from(limits.max_candidates_per_block).unwrap_or(usize::MAX))
-        {
+        let max_candidates = usize::try_from(limits.max_candidates_per_block).unwrap_or(usize::MAX);
+        for (candidate_index, compressor) in compressors.iter().enumerate() {
+            if candidate_index >= max_candidates {
+                counters.record_candidate_drop();
+                continue;
+            }
             let work = u64::try_from(content.len()).unwrap_or(u64::MAX).max(1);
             let Some(remaining) = remaining_work.checked_sub(work) else {
+                counters.record_candidate_drop();
                 counters.record_drop(ShadowDropReason::WorkBudget);
-                break 'blocks;
+                continue;
             };
             remaining_work = remaining;
+            counters.record_candidate_attempt();
             let candidate =
                 evaluate_with_estimator(*compressor, metadata, &content, &limits, |bytes| {
                     estimator
@@ -2689,6 +2742,7 @@ fn evaluate_shadow_job(
                         .tokens()
                 });
             let metrics = candidate.metrics();
+            counters.record_candidate_completed();
             if matches!(metrics.status, CandidateStatus::RecoveryFailed) {
                 let _counted = counters.recovery_failures.fetch_add(1, Ordering::Relaxed);
             }
@@ -3276,6 +3330,7 @@ impl ContextIngestionWorker {
         };
         let bytes = u64::try_from(body.len()).unwrap_or(u64::MAX);
         let Some(byte_permit) = self.shadow_budget.try_acquire(bytes) else {
+            self.shadow_counters.record_job_drop();
             self.shadow_counters
                 .record_drop(ShadowDropReason::ByteBudget);
             return;
@@ -3288,13 +3343,17 @@ impl ContextIngestionWorker {
             _byte_permit: byte_permit,
         };
         match sender.try_send(job) {
-            Ok(()) => {}
-            Err(tokio::sync::mpsc::error::TrySendError::Full(_job)) => self
-                .shadow_counters
-                .record_drop(ShadowDropReason::QueueFull),
-            Err(tokio::sync::mpsc::error::TrySendError::Closed(_job)) => self
-                .shadow_counters
-                .record_drop(ShadowDropReason::WorkerClosed),
+            Ok(()) => self.shadow_counters.record_job_admitted(),
+            Err(tokio::sync::mpsc::error::TrySendError::Full(_job)) => {
+                self.shadow_counters.record_job_drop();
+                self.shadow_counters
+                    .record_drop(ShadowDropReason::QueueFull);
+            }
+            Err(tokio::sync::mpsc::error::TrySendError::Closed(_job)) => {
+                self.shadow_counters.record_job_drop();
+                self.shadow_counters
+                    .record_drop(ShadowDropReason::WorkerClosed);
+            }
         }
     }
 

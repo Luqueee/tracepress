@@ -42,8 +42,36 @@ def characterize(database: Path, session_limit: int) -> dict:
         )
     ]
     if not session_ids:
-        return {"sessions": 0, "blocks": 0, "json": {}, "plain_text": {}, "candidate_forecast": {}}
+        return {"sessions": 0, "blocks": 0, "json": {}, "plain_text": {}, "context_matrix": [], "candidate_forecast": {}}
     placeholders = ",".join("?" for _ in session_ids)
+    matrix_rows = connection.execute(
+        f"""SELECT COALESCE(cbo.origin, 'unknown'), COALESCE(cbo.kind, 'unknown'),
+                   COALESCE(cbo.detected_kind, 'unavailable'), COUNT(*),
+                   SUM(COALESCE(cbo.estimated_tokens, 0)), SUM(COALESCE(cbo.raw_bytes, 0)),
+                   AVG(CASE WHEN cbo.detected_kind = 'plain_text' THEN cbo.duplicate_line_ratio END),
+                   AVG(CASE WHEN cbo.detected_kind = 'plain_text' THEN cbo.line_count END)
+            FROM context_block_occurrences cbo
+            JOIN context_snapshots cs ON cs.snapshot_id = cbo.snapshot_id
+            WHERE cs.session_id IN ({placeholders})
+            GROUP BY cbo.origin, cbo.kind, cbo.detected_kind
+            ORDER BY SUM(COALESCE(cbo.estimated_tokens, 0)) DESC""",
+        session_ids,
+    ).fetchall()
+    matrix_total_tokens = sum(int(row[4] or 0) for row in matrix_rows)
+    context_matrix = []
+    for origin, kind, detected, blocks, tokens, raw_bytes, duplicate_ratio, line_count in matrix_rows:
+        token_count = int(tokens or 0)
+        context_matrix.append({
+            "origin": origin,
+            "kind": kind,
+            "detected_kind": detected,
+            "blocks": int(blocks or 0),
+            "estimated_tokens": token_count,
+            "token_share": (token_count / matrix_total_tokens) if matrix_total_tokens else None,
+            "raw_bytes": int(raw_bytes or 0),
+            "plain_text_duplicate_line_ratio": duplicate_ratio,
+            "plain_text_mean_line_count": line_count,
+        })
     rows = connection.execute(
         f"""SELECT cbo.detected_kind, cbo.raw_bytes, cbo.estimated_tokens,
                    cbo.line_count, cbo.duplicate_line_ratio, cbo.json_item_count,
@@ -111,6 +139,7 @@ def characterize(database: Path, session_limit: int) -> dict:
         "blocks": len(rows),
         "json": {"total_estimated_tokens": total_json_tokens, "shapes": json_shapes},
         "plain_text": {"total_estimated_tokens": total_text_tokens, "shapes": text_shapes},
+        "context_matrix": context_matrix,
         "candidate_forecast": forecast,
         "privacy": "metadata_only_raw_content_not_selected",
     }
@@ -141,6 +170,10 @@ def main() -> None:
     lines += ["", "## Plain-text shapes", ""]
     for name, values in result["plain_text"]["shapes"].items():
         lines.append(f"- `{name}`: {values['blocks']} blocks, {values['estimated_tokens']} estimated tokens")
+    lines += ["", "## Origin × kind matrix", "", "| Origin | Kind | Detected | Blocks | Estimated tokens | Share |", "|---|---|---|---:|---:|---:|"]
+    for cell in result["context_matrix"]:
+        share = "—" if cell["token_share"] is None else f"{cell['token_share'] * 100:.2f}%"
+        lines.append(f"| `{cell['origin']}` | `{cell['kind']}` | `{cell['detected_kind']}` | {cell['blocks']} | {cell['estimated_tokens']} | {share} |")
     lines += ["", "## Candidate forecast", ""]
     if result["candidate_forecast"]:
         for name, values in result["candidate_forecast"].items():

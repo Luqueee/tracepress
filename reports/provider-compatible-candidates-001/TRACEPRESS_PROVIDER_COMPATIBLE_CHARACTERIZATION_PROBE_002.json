@@ -1,0 +1,110 @@
+{
+  "blocks": 1,
+  "candidate_forecast": {},
+  "context_matrix": [
+    {
+      "blocks": 6,
+      "detected_kind": "plain_text",
+      "estimated_tokens": 23060,
+      "kind": "text",
+      "origin": "human_authored",
+      "plain_text_duplicate_line_ratio": 0.1971966666666667,
+      "plain_text_mean_line_count": 137.66666666666666,
+      "raw_bytes": 71926,
+      "token_share": 0.6591961580241267
+    },
+    {
+      "blocks": 12,
+      "detected_kind": "unknown",
+      "estimated_tokens": 11574,
+      "kind": "text",
+      "origin": "human_authored",
+      "plain_text_duplicate_line_ratio": null,
+      "plain_text_mean_line_count": null,
+      "raw_bytes": 33366,
+      "token_share": 0.330855868732491
+    },
+    {
+      "blocks": 2,
+      "detected_kind": "source_code",
+      "estimated_tokens": 166,
+      "kind": "text",
+      "origin": "human_authored",
+      "plain_text_duplicate_line_ratio": null,
+      "plain_text_mean_line_count": null,
+      "raw_bytes": 404,
+      "token_share": 0.004745297581613401
+    },
+    {
+      "blocks": 1,
+      "detected_kind": "json",
+      "estimated_tokens": 95,
+      "kind": "tool_result",
+      "origin": "tool_generated",
+      "plain_text_duplicate_line_ratio": null,
+      "plain_text_mean_line_count": null,
+      "raw_bytes": 435,
+      "token_share": 0.002715682350923332
+    },
+    {
+      "blocks": 1,
+      "detected_kind": "unknown",
+      "estimated_tokens": 87,
+      "kind": "tool_call",
+      "origin": "agent_generated",
+      "plain_text_duplicate_line_ratio": null,
+      "plain_text_mean_line_count": null,
+      "raw_bytes": 492,
+      "token_share": 0.002486993310845578
+    },
+    {
+      "blocks": 8,
+      "detected_kind": "unavailable",
+      "estimated_tokens": 0,
+      "kind": "message",
+      "origin": "human_authored",
+      "plain_text_duplicate_line_ratio": null,
+      "plain_text_mean_line_count": null,
+      "raw_bytes": 108606,
+      "token_share": 0.0
+    },
+    {
+      "blocks": 1,
+      "detected_kind": "unavailable",
+      "estimated_tokens": 0,
+      "kind": "opaque_reasoning",
+      "origin": "provider_managed",
+      "plain_text_duplicate_line_ratio": null,
+      "plain_text_mean_line_count": null,
+      "raw_bytes": 1933,
+      "token_share": 0.0
+    },
+    {
+      "blocks": 2,
+      "detected_kind": "unavailable",
+      "estimated_tokens": 0,
+      "kind": "unknown",
+      "origin": "unknown",
+      "plain_text_duplicate_line_ratio": null,
+      "plain_text_mean_line_count": null,
+      "raw_bytes": 61762,
+      "token_share": 0.0
+    }
+  ],
+  "json": {
+    "shapes": {
+      "nested_array_or_object|items=2-9|depth=2-9": {
+        "blocks": 1,
+        "estimated_tokens": 95,
+        "raw_bytes": 435
+      }
+    },
+    "total_estimated_tokens": 95
+  },
+  "plain_text": {
+    "shapes": {},
+    "total_estimated_tokens": 0
+  },
+  "privacy": "metadata_only_raw_content_not_selected",
+  "sessions": 1
+}

@@ -189,7 +189,7 @@ async fn migration_from_empty_and_reopen() -> TestResult {
         [],
         |row| row.get(0),
     )?;
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     let mut statement = connection.prepare(
         "SELECT name FROM sqlite_schema WHERE type = 'table' AND name NOT LIKE 'sqlite_%' ORDER BY name",
     )?;
@@ -228,7 +228,7 @@ fn shadow_drop_reason_counters_are_additive_and_zero_initialized() -> TestResult
     let (connection, _settings) = schema::open_database(&database, Durability::Balanced)?;
 
     let columns: Vec<String> = connection
-        .prepare("SELECT name FROM pragma_table_info('compression_experiments') WHERE name LIKE 'shadow_%_drops' ORDER BY name")?
+        .prepare("SELECT name FROM pragma_table_info('compression_experiments') WHERE name IN ('shadow_byte_budget_drops', 'shadow_persistence_drops', 'shadow_queue_full_drops', 'shadow_work_budget_drops', 'shadow_worker_closed_drops') ORDER BY name")?
         .query_map([], |row| row.get(0))?
         .collect::<rusqlite::Result<_>>()?;
     assert_eq!(
@@ -244,15 +244,39 @@ fn shadow_drop_reason_counters_are_additive_and_zero_initialized() -> TestResult
     Ok(())
 }
 
+#[test]
+fn shadow_integrity_counters_are_additive_and_zero_initialized() -> TestResult {
+    let directory = TempDir::new()?;
+    let database = directory.path().join("shadow-integrity.sqlite3");
+    let (connection, _settings) = schema::open_database(&database, Durability::Balanced)?;
+
+    let columns: Vec<String> = connection
+        .prepare("SELECT name FROM pragma_table_info('compression_experiments') WHERE name IN ('shadow_jobs_admitted', 'shadow_jobs_processed', 'shadow_job_drops', 'candidate_evaluations_attempted', 'candidate_evaluations_completed', 'candidate_evaluation_drops') ORDER BY name")?
+        .query_map([], |row| row.get(0))?
+        .collect::<rusqlite::Result<_>>()?;
+    assert_eq!(
+        columns,
+        vec![
+            "candidate_evaluation_drops",
+            "candidate_evaluations_attempted",
+            "candidate_evaluations_completed",
+            "shadow_job_drops",
+            "shadow_jobs_admitted",
+            "shadow_jobs_processed",
+        ]
+    );
+    Ok(())
+}
+
 #[tokio::test]
-async fn unsupported_schema_version_above_v11_is_rejected_on_open() -> TestResult {
+async fn unsupported_schema_version_above_v12_is_rejected_on_open() -> TestResult {
     // Given: a real database whose schema metadata records a future version.
     let directory = TempDir::new()?;
     let database = directory.path().join("newer-schema.sqlite3");
     let connection = Connection::open(&database)?;
     connection.execute_batch(
         "CREATE TABLE schema_metadata (schema_version INTEGER NOT NULL PRIMARY KEY, applied_at TEXT NOT NULL) STRICT;
-         INSERT INTO schema_metadata(schema_version, applied_at) VALUES (12, '2026-09-08T00:00:00Z');",
+         INSERT INTO schema_metadata(schema_version, applied_at) VALUES (13, '2026-09-08T00:00:00Z');",
     )?;
     drop(connection);
     let config = StorageConfig::new(database, Durability::Balanced, MaxIpcQueueItems::new(1)?);
@@ -264,8 +288,8 @@ async fn unsupported_schema_version_above_v11_is_rejected_on_open() -> TestResul
     assert!(matches!(
         result,
         Err(StorageError::UnsupportedSchemaVersion {
-            found: 12,
-            supported: 11
+            found: 13,
+            supported: 12
         })
     ));
     Ok(())
@@ -297,7 +321,7 @@ fn sqlite_busy_and_interrupted_migration_leaves_prior_or_complete_state() -> Tes
         [],
         |row| row.get(0),
     )?;
-    assert_eq!(version, 11);
+    assert_eq!(version, 12);
     Ok(())
 }
 
@@ -347,7 +371,7 @@ fn interrupted_v2_migration_rolls_back_atomically_from_v1() -> TestResult {
     let versions = statement
         .query_map([], |row| row.get::<_, i64>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     for (table, columns) in V2_COLUMNS {
         let actual = table_columns(&connection, table)?;
         for column in columns {
@@ -415,7 +439,7 @@ fn interrupted_v3_migration_rolls_back_atomically_from_v2() -> TestResult {
     let versions = statement
         .query_map([], |row| row.get::<_, i64>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     for table in V3_TABLES {
         assert!(
             !table_columns(&connection, table)?.is_empty(),
@@ -506,7 +530,7 @@ async fn existing_phase_two_database_upgrades_to_v3_without_losing_rows() -> Tes
     let versions = statement
         .query_map([], |row| row.get::<_, i64>(0))?
         .collect::<rusqlite::Result<Vec<_>>>()?;
-    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+    assert_eq!(versions, vec![1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12]);
     let preserved: (String, i64, i64) = connection.query_row(
         "SELECT model, request_bytes, (SELECT input_total FROM provider_usage WHERE attempt_id = 'phase-two-attempt') FROM provider_requests WHERE request_id = 'phase-two-request'",
         [],

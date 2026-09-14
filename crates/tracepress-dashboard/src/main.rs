@@ -795,6 +795,9 @@ fn ShadowQualityBanner(quality: tracepress_dashboard_types::CompressionQuality) 
         Badge { text: if healthy { "SHADOW INTEGRITY" } else { "SHADOW DEGRADED" }, tone: if healthy { "success" } else { "danger" } }
         div { class: "metric-inline", span { strong { "Forwarding mutations: " } "{quality.forwarding_mutations}" }
             span { strong { "Shadow drops: " } "{quality.shadow_drops}" }
+            span { strong { "Jobs: " } "{quality.shadow_jobs_processed}/{quality.shadow_jobs_admitted}" }
+            span { strong { "Evaluations: " } "{quality.candidate_evaluations_completed}/{quality.candidate_evaluations_attempted}" }
+            span { class: "muted", title: "Jobs are admitted once per completed analysis; candidate evaluations are counted inside each job.", "job drops " "{quality.shadow_job_drops}" " · candidate drops " "{quality.candidate_evaluation_drops}" }
             span { class: "muted", title: "Queue, byte-budget, work-budget, worker-closed and persistence drop counters.", "queue " "{quality.shadow_queue_full_drops}" " · bytes " "{quality.shadow_byte_budget_drops}" " · work " "{quality.shadow_work_budget_drops}" " · closed " "{quality.shadow_worker_closed_drops}" " · persistence " "{quality.shadow_persistence_drops}" }
             span { strong { "Recovery failures: " } "{quality.recovery_failures}" }
             span { strong { "Determinism failures: " } "{quality.determinism_failures}" }
@@ -959,6 +962,10 @@ fn candidate_shape_label(row: &CompressionCandidateSummary) -> String {
 fn compression_quality_healthy(quality: &tracepress_dashboard_types::CompressionQuality) -> bool {
     quality.forwarding_mutations == 0
         && quality.shadow_drops == 0
+        && quality.shadow_job_drops == 0
+        && quality.candidate_evaluation_drops == 0
+        && quality.shadow_jobs_admitted == quality.shadow_jobs_processed
+        && quality.candidate_evaluations_attempted == quality.candidate_evaluations_completed
         && quality.recovery_failures == 0
         && quality.determinism_failures == 0
 }

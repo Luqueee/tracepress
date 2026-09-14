@@ -752,9 +752,27 @@ pub(crate) fn compression_experiments(
     if !table_exists(connection, "compression_experiments")? {
         return Ok(Vec::new());
     }
-    let mut statement = connection.prepare(
+    let column = |name: &str| -> Result<String, rusqlite::Error> {
+        Ok(
+            if table_column_exists(connection, "compression_experiments", name)? {
+                format!("e.{name}")
+            } else {
+                "0".to_owned()
+            },
+        )
+    };
+    let shadow_jobs_admitted = column("shadow_jobs_admitted")?;
+    let shadow_jobs_processed = column("shadow_jobs_processed")?;
+    let shadow_job_drops = column("shadow_job_drops")?;
+    let candidate_evaluations_attempted = column("candidate_evaluations_attempted")?;
+    let candidate_evaluations_completed = column("candidate_evaluations_completed")?;
+    let candidate_evaluation_drops = column("candidate_evaluation_drops")?;
+    let sql = format!(
         "SELECT e.experiment_id, e.status, e.runtime_sha, e.started_at, e.completed_at,
-                e.forwarding_mutations, e.shadow_drops, e.shadow_queue_full_drops,
+                e.forwarding_mutations, e.shadow_drops,
+                {shadow_jobs_admitted}, {shadow_jobs_processed}, {shadow_job_drops},
+                {candidate_evaluations_attempted}, {candidate_evaluations_completed}, {candidate_evaluation_drops},
+                e.shadow_queue_full_drops,
                 e.shadow_byte_budget_drops, e.shadow_work_budget_drops,
                 e.shadow_worker_closed_drops, e.shadow_persistence_drops,
                 e.recovery_failures, e.determinism_failures,
@@ -764,8 +782,9 @@ pub(crate) fn compression_experiments(
          LEFT JOIN context_snapshots cs ON cs.snapshot_id = c.snapshot_id
          LEFT JOIN sessions s ON s.session_id = cs.session_id
          GROUP BY e.experiment_id
-         ORDER BY e.started_at DESC, e.experiment_id DESC",
-    )?;
+         ORDER BY e.started_at DESC, e.experiment_id DESC"
+    );
+    let mut statement = connection.prepare(&sql)?;
     statement
         .query_map([], |row| {
             Ok(CompressionExperimentSummary {
@@ -777,17 +796,23 @@ pub(crate) fn compression_experiments(
                 quality: CompressionQuality {
                     forwarding_mutations: nonnegative(row.get(5)?),
                     shadow_drops: nonnegative(row.get(6)?),
-                    shadow_queue_full_drops: nonnegative(row.get(7)?),
-                    shadow_byte_budget_drops: nonnegative(row.get(8)?),
-                    shadow_work_budget_drops: nonnegative(row.get(9)?),
-                    shadow_worker_closed_drops: nonnegative(row.get(10)?),
-                    shadow_persistence_drops: nonnegative(row.get(11)?),
-                    recovery_failures: nonnegative(row.get(12)?),
-                    determinism_failures: nonnegative(row.get(13)?),
+                    shadow_jobs_admitted: nonnegative(row.get(7)?),
+                    shadow_jobs_processed: nonnegative(row.get(8)?),
+                    shadow_job_drops: nonnegative(row.get(9)?),
+                    candidate_evaluations_attempted: nonnegative(row.get(10)?),
+                    candidate_evaluations_completed: nonnegative(row.get(11)?),
+                    candidate_evaluation_drops: nonnegative(row.get(12)?),
+                    shadow_queue_full_drops: nonnegative(row.get(13)?),
+                    shadow_byte_budget_drops: nonnegative(row.get(14)?),
+                    shadow_work_budget_drops: nonnegative(row.get(15)?),
+                    shadow_worker_closed_drops: nonnegative(row.get(16)?),
+                    shadow_persistence_drops: nonnegative(row.get(17)?),
+                    recovery_failures: nonnegative(row.get(18)?),
+                    determinism_failures: nonnegative(row.get(19)?),
                 },
-                candidate_count: nonnegative(row.get(14)?),
-                block_count: nonnegative(row.get(15)?),
-                session_count: nonnegative(row.get(16)?),
+                candidate_count: nonnegative(row.get(20)?),
+                block_count: nonnegative(row.get(21)?),
+                session_count: nonnegative(row.get(22)?),
             })
         })?
         .collect()

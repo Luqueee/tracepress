@@ -54,7 +54,11 @@ def aggregate(database: Path) -> dict[str, Any]:
     connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True)
     connection.row_factory = sqlite3.Row
     experiment = connection.execute(
-        "SELECT experiment_id,status,forwarding_mutations,shadow_drops,recovery_failures,determinism_failures FROM compression_experiments WHERE experiment_id='shadow-pilot-003'"
+        """SELECT experiment_id,status,forwarding_mutations,shadow_drops,
+                  shadow_jobs_admitted,shadow_jobs_processed,shadow_job_drops,
+                  candidate_evaluations_attempted,candidate_evaluations_completed,
+                  candidate_evaluation_drops,recovery_failures,determinism_failures
+           FROM compression_experiments WHERE experiment_id='shadow-pilot-003'"""
     ).fetchone()
     rows = connection.execute(
         """SELECT c.compressor_id, c.status, m.input_bytes, m.output_bytes, m.bytes_delta,
@@ -103,6 +107,21 @@ def aggregate(database: Path) -> dict[str, Any]:
             "processing_us": {"p50": p50, "p95": p95},
             "shape_distribution": dict(sorted(shapes.items())),
         })
+    coverage_rows = connection.execute(
+        """SELECT c.compressor_id,
+                  CASE WHEN m.input_bytes < 1024 THEN '<1KiB'
+                       WHEN m.input_bytes < 1048576 THEN '1KiB-1MiB'
+                       ELSE '>=1MiB' END AS size_bucket,
+                  COALESCE(b.detected_kind, 'unavailable') AS detected_kind,
+                  COUNT(*) AS persisted_evaluations
+           FROM compression_candidates c
+           JOIN compression_candidate_metrics m USING(candidate_id)
+           JOIN context_block_occurrences b USING(block_occurrence_id)
+           WHERE c.experiment_id='shadow-pilot-003'
+           GROUP BY c.compressor_id, size_bucket, detected_kind
+           ORDER BY c.compressor_id, size_bucket, detected_kind"""
+    ).fetchall()
+    coverage = [dict(row) for row in coverage_rows]
     result = {
         "experiment": dict(experiment) if experiment else None,
         "sessions": connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0],
@@ -110,6 +129,13 @@ def aggregate(database: Path) -> dict[str, Any]:
         "analysis_snapshots": connection.execute("SELECT COUNT(*) FROM context_snapshots").fetchone()[0],
         "analysis_complete": connection.execute("SELECT COUNT(*) FROM context_snapshots WHERE status='complete'").fetchone()[0],
         "unknown_transformed": connection.execute("SELECT COUNT(*) FROM compression_candidates c JOIN context_block_occurrences b USING(block_occurrence_id) WHERE c.experiment_id='shadow-pilot-003' AND b.origin='unknown'").fetchone()[0],
+        "candidate_coverage_by_size_and_kind": coverage,
+        "candidate_evaluation_accounting": {
+            "persisted_candidate_rows": len(rows),
+            "counter_completed": (dict(experiment).get("candidate_evaluations_completed", 0) if experiment else 0),
+            "counter_attempted": (dict(experiment).get("candidate_evaluations_attempted", 0) if experiment else 0),
+            "counter_drops": (dict(experiment).get("candidate_evaluation_drops", 0) if experiment else 0),
+        },
         "compressors": compressors,
     }
     connection.close()
@@ -121,7 +147,7 @@ def main() -> int:
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-md", type=Path, required=True)
-    parser.add_argument("--timeout", type=int, default=300)
+    parser.add_argument("--timeout", type=int, default=90)
     args = parser.parse_args()
     repo = args.repo_root.resolve()
     cli = repo / "target/debug/tracepress"
@@ -147,24 +173,30 @@ def main() -> int:
         daemon_process = subprocess.Popen([str(daemon)], cwd=repo, env=env, stdout=log, stderr=subprocess.STDOUT, start_new_session=True, text=True)
         wait_for_daemon(cli, root, env, daemon_process)
         completed = []
-        for index, prompt in enumerate(PROMPTS, start=1):
-            try:
-                result = run([str(cli), "run", "codex", "exec", "-m", "gpt-5.6-luna", "-s", "read-only", "--skip-git-repo-check", prompt], cwd=repo, env=env, timeout=args.timeout)
-                completed.append({"index": index, "returncode": result.returncode})
-            except subprocess.TimeoutExpired:
-                completed.append({"index": index, "returncode": None, "status": "timeout"})
-            if completed[-1]["returncode"] not in (0,):
-                continue
+        interrupted = False
+        try:
+            for index, prompt in enumerate(PROMPTS, start=1):
+                try:
+                    result = run([str(cli), "run", "codex", "exec", "-m", "gpt-5.6-luna", "-s", "read-only", "--skip-git-repo-check", prompt], cwd=repo, env=env, timeout=args.timeout)
+                    completed.append({"index": index, "returncode": result.returncode})
+                except subprocess.TimeoutExpired:
+                    completed.append({"index": index, "returncode": None, "status": "timeout"})
+                if completed[-1]["returncode"] not in (0,):
+                    continue
+        except KeyboardInterrupt:
+            interrupted = True
         run([str(cli), "daemon", "stop"], cwd=repo, env=env, timeout=30)
         daemon_process.wait(timeout=30)
         result = aggregate(root / "tracepress.sqlite3")
         successful = sum(item["returncode"] == 0 for item in completed)
         shadow_drops = (result.get("experiment") or {}).get("shadow_drops", 0)
-        status = "completed" if successful == len(PROMPTS) and shadow_drops == 0 else "completed_degraded"
+        status = "aborted_interrupted" if interrupted else ("completed" if successful == len(PROMPTS) and shadow_drops == 0 else "completed_degraded")
         result.update({"report_id": "TRACEPRESS_SHADOW_PILOT_003_N10", "status": status, "successful_invocations": successful, "invocations": completed, "privacy": "metadata_only"})
         args.output_json.parent.mkdir(parents=True, exist_ok=True)
         args.output_json.write_text(json.dumps(result, indent=2, sort_keys=True) + "\n", encoding="utf-8")
-        lines = ["# Tracepress Shadow Pilot 003", "", f"Naturalistic N=10 shadow cohort; metadata-only aggregation. Status: **{result['status']}**.", "", f"Successful invocations: {result['successful_invocations']}/10", f"Sessions: {result['sessions']}", f"Provider requests: {result['provider_requests']}", f"Analysis complete: {result['analysis_complete']}/{result['analysis_snapshots']}", f"Unknown transformed: {result['unknown_transformed']}", "", "| Candidate | Readability | Addressable | Reduction | Recovery | Determinism |", "|---|---|---:|---:|---:|---:|"]
+        experiment_row = result.get("experiment") or {}
+        accounting = result["candidate_evaluation_accounting"]
+        lines = ["# Tracepress Shadow Pilot 003", "", f"Naturalistic N=10 shadow cohort; metadata-only aggregation. Status: **{result['status']}**.", "", f"Successful invocations: {result['successful_invocations']}/10", f"Sessions: {result['sessions']}", f"Provider requests: {result['provider_requests']}", f"Analysis complete: {result['analysis_complete']}/{result['analysis_snapshots']}", f"Unknown transformed: {result['unknown_transformed']}", "", "## Shadow accounting", "", f"Jobs admitted/processed/dropped: **{experiment_row.get('shadow_jobs_admitted', 0)} / {experiment_row.get('shadow_jobs_processed', 0)} / {experiment_row.get('shadow_job_drops', 0)}**", f"Candidate evaluations attempted/completed/dropped: **{accounting['counter_attempted']} / {accounting['counter_completed']} / {accounting['counter_drops']}**", f"Persisted candidate rows: **{accounting['persisted_candidate_rows']}**", "", "| Candidate | Readability | Addressable | Reduction | Recovery | Determinism |", "|---|---|---:|---:|---:|---:|"]
         for candidate in result["compressors"]:
             def percent(value: float | None) -> str:
                 return "—" if value is None else f"{value * 100:.2f}%"

@@ -1,0 +1,44 @@
+{
+  "report_id": "TRACEPRESS_SHADOW_INTEGRITY_001",
+  "phase": "4.2.2",
+  "status": "integrity_instrumented_target_characterization_complete",
+  "forwarding_mutations": 0,
+  "scheduler": {
+    "job_granularity": "one_shadow_job_per_finalized_context_analysis",
+    "candidate_evaluations_inside_job": true,
+    "queue_pressure_multiplier": "analysis_jobs_only"
+  },
+  "controlled_smoke": {
+    "test": "shadow_compression_post_hardening_smoke_is_bounded_and_byte_exact",
+    "jobs_admitted_equals_processed": true,
+    "shadow_job_drops": 0,
+    "candidate_evaluations_attempted_equals_completed": true,
+    "candidate_evaluation_drops": 0,
+    "recovery_failures": 0,
+    "determinism_failures": 0,
+    "forwarding_mutations": 0
+  },
+  "previous_naturalistic_pilot": {
+    "report": "TRACEPRESS_SHADOW_PILOT_003_N10",
+    "sessions": 10,
+    "provider_requests": 31,
+    "shadow_drops": 24,
+    "status": "completed_degraded",
+    "interpretation": "pre-v12 aggregate; not an integrity-clean efficacy gate"
+  },
+  "characterization_probe": {
+    "report": "TRACEPRESS_PROVIDER_COMPATIBLE_CHARACTERIZATION_PROBE_002",
+    "sessions": 1,
+    "target_toolresult_plain_text_blocks": 0,
+    "target_toolresult_json_blocks": 1,
+    "global_plain_text_tokens": 23060,
+    "global_plain_text_origin": "human_authored",
+    "privacy": "metadata_only"
+  },
+  "decision": {
+    "naturalistic_plain_text_cohort": "not_started_target_exposure_not_observed",
+    "active_candidate": null,
+    "phase_4_3": "blocked",
+    "reason": "The integrity instrumentation is clean in controlled smoke, but the existing N=10 naturalistic pilot remains degraded and the available probe places PlainText outside the safe ToolResult target. A clean directed cohort is required before closing or advancing the deterministic gate."
+  }
+}

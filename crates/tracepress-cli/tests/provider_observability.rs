@@ -1555,25 +1555,45 @@ fn shadow_compression_post_hardening_smoke_is_bounded_and_byte_exact() -> TestRe
     assert_upstream_saw_exact_request(&recorded.received, &recorded.request)?;
 
     let database = Connection::open(recorded.directory.path().join("tracepress.sqlite3"))?;
-    let quality: (i64, i64, i64, i64, i64, i64) = database.query_row(
-        "SELECT forwarding_mutations, shadow_drops, shadow_queue_full_drops,
+    let quality: (i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64, i64) = database
+        .query_row(
+            "SELECT forwarding_mutations, shadow_drops, shadow_jobs_admitted,
+                shadow_jobs_processed, shadow_job_drops,
+                candidate_evaluations_attempted, candidate_evaluations_completed,
+                candidate_evaluation_drops, shadow_queue_full_drops,
                 shadow_byte_budget_drops, shadow_work_budget_drops,
                 shadow_worker_closed_drops + shadow_persistence_drops
            FROM compression_experiments WHERE experiment_id = ?1",
-        [experiment_id],
-        |row| {
-            Ok((
-                row.get(0)?,
-                row.get(1)?,
-                row.get(2)?,
-                row.get(3)?,
-                row.get(4)?,
-                row.get(5)?,
-            ))
-        },
-    )?;
+            [experiment_id],
+            |row| {
+                Ok((
+                    row.get(0)?,
+                    row.get(1)?,
+                    row.get(2)?,
+                    row.get(3)?,
+                    row.get(4)?,
+                    row.get(5)?,
+                    row.get(6)?,
+                    row.get(7)?,
+                    row.get(8)?,
+                    row.get(9)?,
+                    row.get(10)?,
+                    row.get(11)?,
+                ))
+            },
+        )?;
     assert_eq!(quality.0, 0, "shadow must not mutate forwarding");
-    assert_eq!(quality.1, quality.2 + quality.3 + quality.4 + quality.5);
+    assert_eq!(quality.2, quality.3, "one admitted job must be processed");
+    assert_eq!(quality.4, 0, "controlled smoke must not drop shadow jobs");
+    assert_eq!(
+        quality.5, quality.6,
+        "all attempted candidates must complete"
+    );
+    assert_eq!(
+        quality.7, 0,
+        "controlled smoke must not drop candidate evaluations"
+    );
+    assert_eq!(quality.1, quality.8 + quality.9 + quality.10 + quality.11);
     let candidate_count: i64 = database.query_row(
         "SELECT COUNT(*) FROM compression_candidates WHERE experiment_id = ?1",
         [experiment_id],

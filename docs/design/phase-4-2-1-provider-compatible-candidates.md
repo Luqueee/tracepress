@@ -38,3 +38,7 @@ reduction in this cohort; `json.minify` remained a no-improvement control. Phase
 blocked and no active candidate is selected. The current conclusion is an insufficient
 deterministic/reversible opportunity for active compression; any lossy or selective strategy needs
 a separately designed quality phase.
+
+Phase 4.2.2 adds integrity accounting before interpreting another cohort. See
+`phase-4-2-2-shadow-integrity-toolresult-characterization.md` and
+`reports/provider-compatible-candidates-001/TRACEPRESS_SHADOW_INTEGRITY_001.md`.

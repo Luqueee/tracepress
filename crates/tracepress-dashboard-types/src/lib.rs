@@ -496,6 +496,12 @@ pub struct CompressionExperimentSummary {
 pub struct CompressionQuality {
     pub forwarding_mutations: u64,
     pub shadow_drops: u64,
+    pub shadow_jobs_admitted: u64,
+    pub shadow_jobs_processed: u64,
+    pub shadow_job_drops: u64,
+    pub candidate_evaluations_attempted: u64,
+    pub candidate_evaluations_completed: u64,
+    pub candidate_evaluation_drops: u64,
     pub shadow_queue_full_drops: u64,
     pub shadow_byte_budget_drops: u64,
     pub shadow_work_budget_drops: u64,

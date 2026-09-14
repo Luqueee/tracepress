@@ -33,8 +33,8 @@ use sha2::{Digest as _, Sha256};
 use thiserror::Error;
 use tokio::sync::{Notify, Semaphore};
 use tracepress_compression::{
-    ActiveJsonSpan, ActiveRewriteMetrics, ActiveRewriteStatus, CompressionLimits,
-    rewrite_json_minify,
+    ActiveJsonSpan, ActiveRewriteMetrics, ActiveRewriteStatus, ActiveTextSpan, CompressionLimits,
+    rewrite_json_minify, rewrite_search_projection,
 };
 pub use tracepress_context::ContextAnalysisDropReason;
 use tracepress_context::{
@@ -365,6 +365,8 @@ pub enum ActiveCompressionMode {
     Off,
     /// Apply the lossless `json.minify` candidate to eligible `ToolResult` JSON spans.
     JsonMinify,
+    /// Apply the provider-readable semantic Search projection to eligible text `ToolResult` spans.
+    SearchProjection,
 }
 
 /// Inbound route one request was accepted on.
@@ -1432,6 +1434,7 @@ async fn forward_inner(
 /// to the original bytes and publish no mutation.
 #[allow(
     clippy::too_many_arguments,
+    clippy::too_many_lines,
     reason = "the active rewrite boundary keeps route, encoding, and original bytes explicit"
 )]
 fn active_forward_body(
@@ -1442,7 +1445,7 @@ fn active_forward_body(
 ) -> (WireBody, Option<ActiveRewriteMetrics>) {
     if !matches!(
         proxy.config.active_compression_mode,
-        ActiveCompressionMode::JsonMinify
+        ActiveCompressionMode::JsonMinify | ActiveCompressionMode::SearchProjection
     ) || !matches!(route, InboundRoute::Responses)
         || matches!(content_encoding, ContentEncoding::Unsupported)
     {
@@ -1477,7 +1480,8 @@ fn active_forward_body(
     ) {
         return (original.clone(), None);
     }
-    let spans = analysis
+    let active_mode = proxy.config.active_compression_mode;
+    let json_spans = analysis
         .blocks
         .iter()
         .filter(|block| {
@@ -1497,8 +1501,38 @@ fn active_forward_body(
             ActiveJsonSpan::new(start, end, encoded_string)
         })
         .collect::<Vec<_>>();
+    let text_spans = analysis
+        .blocks
+        .iter()
+        .filter(|block| {
+            block.origin == ContextOrigin::ToolGenerated
+                && block.kind == ContextBlockKind::ToolResult
+                && block.detection_result.as_ref().is_some_and(|result| {
+                    matches!(
+                        result.kind,
+                        DetectedContentKind::PlainText | DetectedContentKind::SearchResults
+                    )
+                })
+        })
+        .filter_map(|block| {
+            let [start, end] = block
+                .content_span
+                .unwrap_or([block.locator.raw_value_start, block.locator.raw_value_end]);
+            let start_index = usize::try_from(start).ok()?;
+            let encoded_string = decoded.get(start_index).copied() == Some(b'"');
+            ActiveTextSpan::new(start, end, encoded_string)
+        })
+        .collect::<Vec<_>>();
     let compression_limits = CompressionLimits::default();
-    let result = rewrite_json_minify(decoded.as_ref(), &spans, &compression_limits);
+    let result = match active_mode {
+        ActiveCompressionMode::JsonMinify => {
+            rewrite_json_minify(decoded.as_ref(), &json_spans, &compression_limits)
+        }
+        ActiveCompressionMode::SearchProjection => {
+            rewrite_search_projection(decoded.as_ref(), &text_spans, &compression_limits)
+        }
+        ActiveCompressionMode::Off => return (original.clone(), None),
+    };
     if !matches!(result.metrics().status, ActiveRewriteStatus::Rewritten) {
         let metrics = result.metrics().clone();
         return (original.clone(), Some(metrics));

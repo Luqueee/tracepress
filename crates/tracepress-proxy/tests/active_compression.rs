@@ -210,6 +210,80 @@ async fn explicit_active_mode_rewrites_only_tool_result_json() -> TestResult {
 }
 
 #[tokio::test]
+async fn explicit_search_mode_rewrites_only_search_tool_result_text() -> TestResult {
+    let capture = StateCapture::default();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let address = listener.local_addr()?;
+    let upstream_task = tokio::spawn({
+        let state = capture.clone();
+        async move {
+            let _ = axum::serve(
+                listener,
+                Router::new()
+                    .route("/v1/responses", post(upstream))
+                    .with_state(state),
+            )
+            .await;
+        }
+    });
+
+    let sink = Arc::new(ObservationCapture::default());
+    let proxy = TransparentProxy::new(
+        ProxyConfig::new(
+            ProviderEndpoint::new(&format!("http://{address}/v1/responses"))?,
+            resource_limits()?,
+            ContextAnalysisMode::Shadow,
+        )?
+        .with_active_compression_mode(ActiveCompressionMode::SearchProjection),
+    )?
+    .with_metadata_sink(Arc::clone(&sink) as Arc<dyn MetadataSink>)
+    .with_observation_sink(Arc::clone(&sink) as Arc<dyn ProviderObservationSink>);
+    let proxy_listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
+    let proxy_address = proxy_listener.local_addr()?;
+    let proxy_task = tokio::spawn(async move {
+        let _ = axum::serve(proxy_listener, proxy.router()).await;
+    });
+
+    let original = br#"{"model":"test","input":[{"type":"function_call_output","call_id":"x","output":"src/a.rs:10:foo\nsrc/a.rs:11:bar\nsrc/a.rs:12:baz\nsrc/b.rs:2:foo\nsrc/b.rs:3:bar\nsrc/b.rs:4:baz\n"}]}"#;
+    let response = reqwest::Client::new()
+        .post(format!("http://{proxy_address}/v1/responses"))
+        .header("content-type", "application/json")
+        .body(original.as_slice())
+        .send()
+        .await?;
+    assert_eq!(response.status(), StatusCode::OK);
+    let _ = response.bytes().await?;
+
+    let forwarded = capture
+        .body
+        .lock()
+        .map_err(|_| "capture poisoned")?
+        .clone()
+        .ok_or("upstream did not receive a request")?;
+    let forwarded_value: serde_json::Value = serde_json::from_slice(&forwarded)?;
+    let projected = forwarded_value["input"][0]["output"]
+        .as_str()
+        .ok_or("projected search result was not a string")?;
+    assert!(projected.starts_with("[search results]\nsrc/a.rs:\n"));
+    assert_ne!(forwarded.as_ref(), original);
+
+    let active = sink.active.lock().map_err(|_| "active capture poisoned")?;
+    assert_eq!(active.len(), 1);
+    let metrics = &active[0].metrics;
+    assert_eq!(
+        metrics.compressor_id,
+        "search.result_projection".to_owned()
+    );
+    assert_eq!(metrics.status, tracepress_compression::ActiveRewriteStatus::Rewritten);
+    assert!(metrics.recovery_verified);
+    assert!(metrics.deterministic);
+    drop(active);
+    proxy_task.abort();
+    upstream_task.abort();
+    Ok(())
+}
+
+#[tokio::test]
 async fn active_mode_is_not_enabled_by_default() -> TestResult {
     let limits = resource_limits()?;
     let endpoint = ProviderEndpoint::new("http://127.0.0.1:1/v1/responses")?;

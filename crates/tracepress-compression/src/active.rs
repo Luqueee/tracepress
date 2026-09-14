@@ -9,7 +9,10 @@ use std::fmt;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
-use crate::{CompressionLimits, JsonMinify, ShadowCompressor, TransformError};
+use crate::{
+    CompressionLimits, JsonMinify, ReductionStatus, SearchResultReducer, ShadowCompressor,
+    ToolResultReducer, TransformError,
+};
 
 /// One JSON value span in the request being evaluated.
 ///
@@ -27,6 +30,36 @@ pub struct ActiveJsonSpan {
 }
 
 impl ActiveJsonSpan {
+    /// Creates a validated non-empty span.
+    #[must_use]
+    pub const fn new(start: u64, end: u64, encoded_string: bool) -> Option<Self> {
+        if start < end {
+            Some(Self {
+                start,
+                end,
+                encoded_string,
+            })
+        } else {
+            None
+        }
+    }
+}
+
+/// One bounded plain-text `ToolResult` span in a Responses request.
+///
+/// `encoded_string` is true for a Responses `function_call_output.output` string: the reducer
+/// sees decoded text bytes while the replacement is encoded as one JSON string again.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub struct ActiveTextSpan {
+    /// First byte of the JSON value, including quotes for an encoded string.
+    pub start: u64,
+    /// One past the last byte of the JSON value.
+    pub end: u64,
+    /// Whether this span is a JSON string carrying plain text.
+    pub encoded_string: bool,
+}
+
+impl ActiveTextSpan {
     /// Creates a validated non-empty span.
     #[must_use]
     pub const fn new(start: u64, end: u64, encoded_string: bool) -> Option<Self> {
@@ -398,6 +431,237 @@ pub fn rewrite_json_minify(
     }
 }
 
+/// Rewrites selected plain-text `ToolResult` spans with the provider-readable Search projection.
+///
+/// The span itself remains a normal Responses JSON string. The transformation is semantic-search
+/// lossless (all parsed matches remain present), while Tracepress retains an in-memory exact
+/// recovery copy for the active safety gate. Any malformed, unsupported, non-deterministic, or
+/// non-recoverable span fails open to the original request.
+#[must_use]
+#[allow(
+    clippy::too_many_lines,
+    reason = "the active adapter keeps validation, recovery, and fail-open gates in one bounded state machine"
+)]
+pub fn rewrite_search_projection(
+    input: &[u8],
+    spans: &[ActiveTextSpan],
+    limits: &CompressionLimits,
+) -> ActiveRewrite {
+    let original_fingerprint = digest(input);
+    let base = |status| ActiveRewrite {
+        metrics: ActiveRewriteMetrics {
+            compressor_id: "search.result_projection".to_owned(),
+            compressor_version: 1,
+            status,
+            input_bytes: u64::try_from(input.len()).unwrap_or(u64::MAX),
+            output_bytes: None,
+            bytes_delta: None,
+            rewrites: 0,
+            evaluated_spans: 0,
+            evaluated_input_bytes: 0,
+            evaluated_candidate_bytes: 0,
+            recovery_verified: false,
+            deterministic: false,
+            original_fingerprint,
+            rewritten_fingerprint: None,
+            first_modified_offset: None,
+            preserved_prefix_bytes: None,
+            wire_input_bytes: None,
+            wire_output_bytes: None,
+            wire_bytes_delta: None,
+        },
+        body: None,
+    };
+
+    if spans.is_empty() {
+        return base(ActiveRewriteStatus::NotApplicable);
+    }
+    if u64::try_from(input.len()).unwrap_or(u64::MAX) > limits.max_shadow_memory_bytes {
+        return base(ActiveRewriteStatus::ResourceLimit);
+    }
+
+    let mut ordered = spans.to_vec();
+    ordered.sort_by_key(|span| (span.start, span.end));
+    let mut replacements = Vec::with_capacity(ordered.len());
+    let mut previous_end = 0_u64;
+    let mut work = 0_u64;
+    let mut terminal = None;
+    let mut evaluated_spans = 0_u32;
+    let mut applicable_spans = 0_u32;
+    let mut all_deterministic = true;
+    let mut all_recovery_verified = true;
+    let mut evaluated_input_bytes = 0_u64;
+    let mut evaluated_candidate_bytes = 0_u64;
+    let reducer = SearchResultReducer;
+
+    for span in ordered {
+        if span.start < previous_end {
+            return base(ActiveRewriteStatus::InvalidInput);
+        }
+        let Ok(start) = usize::try_from(span.start) else {
+            return base(ActiveRewriteStatus::InvalidInput);
+        };
+        let Ok(end) = usize::try_from(span.end) else {
+            return base(ActiveRewriteStatus::InvalidInput);
+        };
+        let Some(raw) = input.get(start..end) else {
+            return base(ActiveRewriteStatus::InvalidInput);
+        };
+        previous_end = span.end;
+        let content = if span.encoded_string {
+            let Ok(decoded) = serde_json::from_slice::<String>(raw) else {
+                terminal = Some(ActiveRewriteStatus::InvalidInput);
+                continue;
+            };
+            decoded.into_bytes()
+        } else {
+            raw.to_vec()
+        };
+        let content_len = u64::try_from(content.len()).unwrap_or(u64::MAX);
+        work = work.saturating_add(content_len.saturating_mul(2));
+        if work > limits.max_shadow_work_units || content_len > limits.max_candidate_input_bytes {
+            terminal = Some(ActiveRewriteStatus::ResourceLimit);
+            continue;
+        }
+        let first = reducer.reduce(&content, limits);
+        let second = reducer.reduce(&content, limits);
+        let first_visible = first.visible().map(ToOwned::to_owned);
+        let second_visible = second.visible().map(ToOwned::to_owned);
+        let first_recovered = first.recover();
+        let second_recovered = second.recover();
+        if first_visible != second_visible || first_recovered != second_recovered {
+            all_deterministic = false;
+            terminal = Some(ActiveRewriteStatus::InternalError);
+            continue;
+        }
+        evaluated_spans = evaluated_spans.saturating_add(1);
+        evaluated_input_bytes = evaluated_input_bytes
+            .saturating_add(u64::try_from(raw.len()).unwrap_or(u64::MAX));
+        let status = first.metrics().status;
+        if !matches!(status, ReductionStatus::Applicable) {
+            terminal = Some(match status {
+                ReductionStatus::NotApplicable => ActiveRewriteStatus::NotApplicable,
+                ReductionStatus::NoImprovement => ActiveRewriteStatus::NoImprovement,
+                ReductionStatus::ResourceLimit => ActiveRewriteStatus::ResourceLimit,
+                ReductionStatus::InvalidInput => ActiveRewriteStatus::InvalidInput,
+                ReductionStatus::InternalError | ReductionStatus::Applicable => {
+                    ActiveRewriteStatus::InternalError
+                }
+            });
+            continue;
+        }
+        applicable_spans = applicable_spans.saturating_add(1);
+        let Some(candidate) = first_visible else {
+            terminal = Some(ActiveRewriteStatus::InternalError);
+            continue;
+        };
+        let Some(recovered) = first_recovered else {
+            all_recovery_verified = false;
+            terminal = Some(ActiveRewriteStatus::RecoveryFailed);
+            continue;
+        };
+        if digest(&recovered) != digest(&content) || !first.metrics().recovery_verified {
+            all_recovery_verified = false;
+            terminal = Some(ActiveRewriteStatus::RecoveryFailed);
+            continue;
+        }
+        let replacement = if span.encoded_string {
+            let Ok(candidate_text) = std::str::from_utf8(&candidate) else {
+                terminal = Some(ActiveRewriteStatus::InvalidInput);
+                continue;
+            };
+            let Ok(encoded) = serde_json::to_vec(candidate_text) else {
+                terminal = Some(ActiveRewriteStatus::InternalError);
+                continue;
+            };
+            encoded
+        } else {
+            candidate
+        };
+        evaluated_candidate_bytes = evaluated_candidate_bytes
+            .saturating_add(u64::try_from(replacement.len()).unwrap_or(u64::MAX));
+        if u64::try_from(replacement.len()).unwrap_or(u64::MAX)
+            > limits.max_candidate_output_bytes
+        {
+            terminal = Some(ActiveRewriteStatus::ResourceLimit);
+            continue;
+        }
+        if replacement.len() < raw.len() {
+            replacements.push((start, end, replacement));
+        } else {
+            terminal = Some(ActiveRewriteStatus::NoImprovement);
+        }
+    }
+
+    if replacements.is_empty() {
+        let status = terminal.unwrap_or(ActiveRewriteStatus::NoImprovement);
+        let mut result = base(status);
+        result.metrics.deterministic = evaluated_spans > 0 && all_deterministic;
+        result.metrics.recovery_verified = applicable_spans > 0 && all_recovery_verified;
+        result.metrics.evaluated_spans = evaluated_spans;
+        result.metrics.evaluated_input_bytes = evaluated_input_bytes;
+        result.metrics.evaluated_candidate_bytes = evaluated_candidate_bytes;
+        return result;
+    }
+    if terminal.is_some_and(|status| {
+        matches!(
+            status,
+            ActiveRewriteStatus::ResourceLimit
+                | ActiveRewriteStatus::InvalidInput
+                | ActiveRewriteStatus::RecoveryFailed
+                | ActiveRewriteStatus::InternalError
+        )
+    }) {
+        return base(terminal.unwrap_or(ActiveRewriteStatus::InternalError));
+    }
+
+    let mut body = Vec::with_capacity(input.len());
+    let mut cursor = 0_usize;
+    for (start, end, replacement) in &replacements {
+        let Some(prefix) = input.get(cursor..*start) else {
+            return base(ActiveRewriteStatus::InternalError);
+        };
+        body.extend_from_slice(prefix);
+        body.extend_from_slice(replacement);
+        cursor = *end;
+    }
+    let Some(suffix) = input.get(cursor..) else {
+        return base(ActiveRewriteStatus::InternalError);
+    };
+    body.extend_from_slice(suffix);
+    if u64::try_from(body.len()).unwrap_or(u64::MAX) > limits.max_shadow_memory_bytes {
+        return base(ActiveRewriteStatus::ResourceLimit);
+    }
+    let prefix = common_prefix(input, &body);
+    let input_bytes = u64::try_from(input.len()).unwrap_or(u64::MAX);
+    let output_bytes = u64::try_from(body.len()).unwrap_or(u64::MAX);
+    ActiveRewrite {
+        metrics: ActiveRewriteMetrics {
+            compressor_id: "search.result_projection".to_owned(),
+            compressor_version: 1,
+            status: ActiveRewriteStatus::Rewritten,
+            input_bytes,
+            output_bytes: Some(output_bytes),
+            bytes_delta: signed_delta(input_bytes, output_bytes),
+            rewrites: u32::try_from(replacements.len()).unwrap_or(u32::MAX),
+            evaluated_spans,
+            evaluated_input_bytes,
+            evaluated_candidate_bytes,
+            recovery_verified: applicable_spans > 0 && all_recovery_verified,
+            deterministic: evaluated_spans > 0 && all_deterministic,
+            original_fingerprint,
+            rewritten_fingerprint: Some(digest(&body)),
+            first_modified_offset: (prefix < input.len())
+                .then_some(u64::try_from(prefix).unwrap_or(u64::MAX)),
+            preserved_prefix_bytes: Some(u64::try_from(prefix).unwrap_or(u64::MAX)),
+            wire_input_bytes: None,
+            wire_output_bytes: None,
+            wire_bytes_delta: None,
+        },
+        body: Some(body.into_boxed_slice()),
+    }
+}
+
 const fn status_for_transform(error: TransformError) -> ActiveRewriteStatus {
     match error {
         TransformError::NotApplicable => ActiveRewriteStatus::NotApplicable,
@@ -481,6 +745,26 @@ mod tests {
             value["input"][0]["output"],
             serde_json::Value::String(r#"{"name":"a","size":10}"#.to_owned())
         );
+    }
+
+    #[test]
+    fn search_projection_rewrites_grouped_matches_and_recovers_exact_text() {
+        let request = br#"{"input":[{"type":"function_call_output","output":"src/a.rs:10:foo\nsrc/a.rs:11:bar\nsrc/a.rs:12:baz\nsrc/b.rs:2:foo\nsrc/b.rs:3:bar\nsrc/b.rs:4:baz\n"}]}"#;
+        let span = output_span(request);
+        let text_span = ActiveTextSpan::new(span.start, span.end, span.encoded_string)
+            .expect("text span");
+        let result = rewrite_search_projection(request, &[text_span], &limits());
+        assert_eq!(result.metrics().status, ActiveRewriteStatus::Rewritten);
+        assert!(result.metrics().recovery_verified);
+        assert!(result.metrics().deterministic);
+        assert!(result.metrics().output_bytes.unwrap_or_default() < request.len() as u64);
+        let body = result.body().expect("rewritten body");
+        let value: serde_json::Value = serde_json::from_slice(body).expect("rewritten JSON");
+        let projected = value["input"][0]["output"]
+            .as_str()
+            .expect("projected search text");
+        assert!(projected.starts_with("[search results]\nsrc/a.rs:\n"));
+        assert!(projected.contains("src/b.rs:\n"));
     }
 
     #[test]

@@ -24,7 +24,8 @@ use serde::{Deserialize, Serialize};
 use sha2::{Digest as _, Sha256};
 
 pub use active::{
-    ActiveJsonSpan, ActiveRewrite, ActiveRewriteMetrics, ActiveRewriteStatus, rewrite_json_minify,
+    ActiveJsonSpan, ActiveRewrite, ActiveRewriteMetrics, ActiveRewriteStatus, ActiveTextSpan,
+    rewrite_json_minify, rewrite_search_projection,
 };
 pub use json::{
     JsonCompactRecords, JsonKeyElision, JsonMinify, JsonNoop, JsonReadableTable,

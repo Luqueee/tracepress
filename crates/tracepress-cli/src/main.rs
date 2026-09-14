@@ -4652,8 +4652,11 @@ fn active_compression_mode() -> Result<ActiveCompressionMode, String> {
     match value.as_str() {
         "off" => Ok(ActiveCompressionMode::Off),
         "json.minify" | "json_minify" => Ok(ActiveCompressionMode::JsonMinify),
+        "search.result_projection" | "search_projection" => {
+            Ok(ActiveCompressionMode::SearchProjection)
+        }
         _ => Err(format!(
-            "TRACEPRESS_ACTIVE_COMPRESSION must be `off` or `json.minify`, got `{value}`"
+            "TRACEPRESS_ACTIVE_COMPRESSION must be `off`, `json.minify`, or `search.result_projection`, got `{value}`"
         )),
     }
 }

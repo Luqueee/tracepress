@@ -194,6 +194,20 @@ provider-impact evidence. The follow-up diagnostic
 `TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_DIAGNOSTIC_001.{json,md}` records why: one eligible span
 was evaluated at 224 input bytes and 224 candidate bytes, so the never-worse guard kept it.
 
+The provider-readable Search projection has an explicit, fail-open active mode for the controlled
+public pilot:
+
+```bash
+TRACEPRESS_CONTEXT_ANALYSIS=shadow \
+TRACEPRESS_ACTIVE_COMPRESSION=search.result_projection \
+tracepress run codex exec ...
+```
+
+It is disabled by default and rewrites only transient `ToolGenerated + ToolResult` text/search
+spans after local recovery and determinism checks. The pilot driver is
+`scripts/run_public_search_quality_pilot_001.py`; a run with zero evaluated spans is an
+infrastructure diagnostic and must not be interpreted as a quality comparison.
+
 The targeted spaced-JSON diagnostic
 `TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_DIAGNOSTIC_002.{json,md}` repeats that check with one
 cardinality-matched invocation per arm and an explicitly spaced JSON-producing shell workload. The

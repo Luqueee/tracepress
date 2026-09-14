@@ -1,0 +1,942 @@
+{
+  "arms": {
+    "control": {
+      "aggregate": {
+        "cache_read": 148992,
+        "context_complete": 10,
+        "context_snapshots": 10,
+        "input_total": 194459,
+        "input_uncached": 45467,
+        "output_total": 2646,
+        "provider_errors": 0,
+        "provider_requests": 10,
+        "reasoning": 2128,
+        "tool_calls": 0
+      },
+      "arm": "control",
+      "rows": [
+        {
+          "active": {
+            "active_compression_attempts": 0,
+            "active_compression_determinism_failures": 0,
+            "active_compression_evaluated_candidate_bytes": 0,
+            "active_compression_evaluated_input_bytes": 0,
+            "active_compression_evaluated_spans": 0,
+            "active_compression_internal_errors": 0,
+            "active_compression_no_improvement": 0,
+            "active_compression_not_applicable": 0,
+            "active_compression_recovery_failures": 0,
+            "active_compression_resource_limits": 0,
+            "active_compression_rewrites": 0
+          },
+          "answer_observed": {
+            "files": 7,
+            "matches": 20
+          },
+          "arm": "control",
+          "evaluator": "KnownAnswer",
+          "evaluator_status": "success",
+          "provider": {
+            "cache_read": null,
+            "context_complete": 2,
+            "context_snapshots": 2,
+            "input_total": null,
+            "input_uncached": null,
+            "output_total": null,
+            "provider_errors": 0,
+            "provider_requests": 2,
+            "reasoning": null,
+            "tool_calls": 0
+          },
+          "return_code": 0,
+          "task_id": "search-01",
+          "task_success": true
+        },
+        {
+          "active": {
+            "active_compression_attempts": 0,
+            "active_compression_determinism_failures": 0,
+            "active_compression_evaluated_candidate_bytes": 0,
+            "active_compression_evaluated_input_bytes": 0,
+            "active_compression_evaluated_spans": 0,
+            "active_compression_internal_errors": 0,
+            "active_compression_no_improvement": 0,
+            "active_compression_not_applicable": 0,
+            "active_compression_recovery_failures": 0,
+            "active_compression_resource_limits": 0,
+            "active_compression_rewrites": 0
+          },
+          "answer_observed": null,
+          "arm": "control",
+          "evaluator": "KnownAnswer",
+          "evaluator_status": "unavailable",
+          "provider": {
+            "cache_read": 18176,
+            "context_complete": 1,
+            "context_snapshots": 1,
+            "input_total": 19133,
+            "input_uncached": 957,
+            "output_total": 318,
+            "provider_errors": 0,
+            "provider_requests": 1,
+            "reasoning": 244,
+            "tool_calls": 0
+          },
+          "return_code": 124,
+          "task_id": "search-02",
+          "task_success": false
+        },
+        {
+          "active": {
+            "active_compression_attempts": 0,
+            "active_compression_determinism_failures": 0,
+            "active_compression_evaluated_candidate_bytes": 0,
+            "active_compression_evaluated_input_bytes": 0,
+            "active_compression_evaluated_spans": 0,
+            "active_compression_internal_errors": 0,
+            "active_compression_no_improvement": 0,
+            "active_compression_not_applicable": 0,
+            "active_compression_recovery_failures": 0,
+            "active_compression_resource_limits": 0,
+            "active_compression_rewrites": 0
+          },
+          "answer_observed": {
+            "files": 10,
+            "matches": 13
+          },
+          "arm": "control",
+          "evaluator": "KnownAnswer",
+          "evaluator_status": "success",
+          "provider": {
+            "cache_read": 28160,
+            "context_complete": 2,
+            "context_snapshots": 2,
+            "input_total": 38847,
+            "input_uncached": 10687,
+            "output_total": 321,
+            "provider_errors": 0,
+            "provider_requests": 2,
+            "reasoning": 229,
+            "tool_calls": 0
+          },
+          "return_code": 0,
+          "task_id": "search-03",
+          "task_success": true
+        },
+        {
+          "active": {
+            "active_compression_attempts": 0,
+            "active_compression_determinism_failures": 0,
+            "active_compression_evaluated_candidate_bytes": 0,
+            "active_compression_evaluated_input_bytes": 0,
+            "active_compression_evaluated_spans": 0,
+            "active_compression_internal_errors": 0,
+            "active_compression_no_improvement": 0,
+            "active_compression_not_applicable": 0,
+            "active_compression_recovery_failures": 0,
+            "active_compression_resource_limits": 0,
+            "active_compression_rewrites": 0
+          },
+          "answer_observed": null,
+          "arm": "control",
+          "evaluator": "KnownAnswer",
+          "evaluator_status": "unavailable",
+          "provider": {
+            "cache_read": 9984,
+            "context_complete": 1,
+            "context_snapshots": 1,
+            "input_total": 19133,
+            "input_uncached": 9149,
+            "output_total": 348,
+            "provider_errors": 0,
+            "provider_requests": 1,
+            "reasoning": 274,
+            "tool_calls": 0
+          },
+          "return_code": 124,
+          "task_id": "search-04",
+          "task_success": false
+        },
+        {
+          "active": {
+            "active_compression_attempts": 0,
+            "active_compression_determinism_failures": 0,
+            "active_compression_evaluated_candidate_bytes": 0,
+            "active_compression_evaluated_input_bytes": 0,
+            "active_compression_evaluated_spans": 0,
+            "active_compression_internal_errors": 0,
+            "active_compression_no_improvement": 0,
+            "active_compression_not_applicable": 0,
+            "active_compression_recovery_failures": 0,
+            "active_compression_resource_limits": 0,
+            "active_compression_rewrites": 0
+          },
+          "answer_observed": {
+            "files": 13,
+            "matches": 38
+          },
+          "arm": "control",
+          "evaluator": "KnownAnswer",
+          "evaluator_status": "success",
+          "provider": {
+            "cache_read": 36352,
+            "context_complete": 2,
+            "context_snapshots": 2,
+            "input_total": 39840,
+            "input_uncached": 3488,
+            "output_total": 977,
+            "provider_errors": 0,
+            "provider_requests": 2,
+            "reasoning": 880,
+            "tool_calls": 0
+          },
+          "return_code": 0,
+          "task_id": "search-05",
+          "task_success": true
+        },
+        {
+          "active": {
+            "active_compression_attempts": 0,
+            "active_compression_determinism_failures": 0,
+            "active_compression_evaluated_candidate_bytes": 0,
+            "active_compression_evaluated_input_bytes": 0,
+            "active_compression_evaluated_spans": 0,
+            "active_compression_internal_errors": 0,
+            "active_compression_no_improvement": 0,
+            "active_compression_not_applicable": 0,
+            "active_compression_recovery_failures": 0,
+            "active_compression_resource_limits": 0,
+            "active_compression_rewrites": 0
+          },
+          "answer_observed": {
+            "files": 1,
+            "matches": 2
+          },
+          "arm": "control",
+          "evaluator": "KnownAnswer",
+          "evaluator_status": "success",
+          "provider": {
+            "cache_read": 28160,
+            "context_complete": 2,
+            "context_snapshots": 2,
+            "input_total": 38567,
+            "input_uncached": 10407,
+            "output_total": 269,
+            "provider_errors": 0,
+            "provider_requests": 2,
+            "reasoning": 178,
+            "tool_calls": 0
+          },
+          "return_code": 0,
+          "task_id": "search-06",
+          "task_success": true
+        }
+      ]
+    },
+    "treatment": {
+      "aggregate": {
+        "cache_read": 175360,
+        "context_complete": 11,
+        "context_snapshots": 11,
+        "input_total": 219209,
+        "input_uncached": 43849,
+        "output_total": 4672,
+        "provider_errors": 0,
+        "provider_requests": 11,
+        "reasoning": 4143,
+        "tool_calls": 0
+      },
+      "arm": "treatment",
+      "rows": [
+        {
+          "active": {
+            "active_compression_attempts": 2,
+            "active_compression_determinism_failures": 0,
+            "active_compression_evaluated_candidate_bytes": 0,
+            "active_compression_evaluated_input_bytes": 0,
+            "active_compression_evaluated_spans": 0,
+            "active_compression_internal_errors": 0,
+            "active_compression_no_improvement": 0,
+            "active_compression_not_applicable": 2,
+            "active_compression_recovery_failures": 0,
+            "active_compression_resource_limits": 0,
+            "active_compression_rewrites": 0
+          },
+          "answer_observed": {
+            "files": 7,
+            "matches": 20
+          },
+          "arm": "treatment",
+          "evaluator": "KnownAnswer",
+          "evaluator_status": "success",
+          "provider": {
+            "cache_read": null,
+            "context_complete": 2,
+            "context_snapshots": 2,
+            "input_total": null,
+            "input_uncached": null,
+            "output_total": null,
+            "provider_errors": 0,
+            "provider_requests": 2,
+            "reasoning": null,
+            "tool_calls": 0
+          },
+          "return_code": 0,
+          "task_id": "search-01",
+          "task_success": true
+        },
+        {
+          "active": {
+            "active_compression_attempts": 0,
+            "active_compression_determinism_failures": 0,
+            "active_compression_evaluated_candidate_bytes": 0,
+            "active_compression_evaluated_input_bytes": 0,
+            "active_compression_evaluated_spans": 0,
+            "active_compression_internal_errors": 0,
+            "active_compression_no_improvement": 0,
+            "active_compression_not_applicable": 0,
+            "active_compression_recovery_failures": 0,
+            "active_compression_resource_limits": 0,
+            "active_compression_rewrites": 0
+          },
+          "answer_observed": null,
+          "arm": "treatment",
+          "evaluator": "KnownAnswer",
+          "evaluator_status": "unavailable",
+          "provider": {
+            "cache_read": 18176,
+            "context_complete": 1,
+            "context_snapshots": 1,
+            "input_total": 19133,
+            "input_uncached": 957,
+            "output_total": 388,
+            "provider_errors": 0,
+            "provider_requests": 1,
+            "reasoning": 314,
+            "tool_calls": 0
+          },
+          "return_code": 124,
+          "task_id": "search-02",
+          "task_success": false
+        },
+        {
+          "active": {
+            "active_compression_attempts": 2,
+            "active_compression_determinism_failures": 0,
+            "active_compression_evaluated_candidate_bytes": 0,
+            "active_compression_evaluated_input_bytes": 0,
+            "active_compression_evaluated_spans": 0,
+            "active_compression_internal_errors": 0,
+            "active_compression_no_improvement": 0,
+            "active_compression_not_applicable": 2,
+            "active_compression_recovery_failures": 0,
+            "active_compression_resource_limits": 0,
+            "active_compression_rewrites": 0
+          },
+          "answer_observed": {
+            "files": 10,
+            "matches": 13
+          },
+          "arm": "treatment",
+          "evaluator": "KnownAnswer",
+          "evaluator_status": "success",
+          "provider": {
+            "cache_read": 28160,
+            "context_complete": 2,
+            "context_snapshots": 2,
+            "input_total": 38964,
+            "input_uncached": 10804,
+            "output_total": 467,
+            "provider_errors": 0,
+            "provider_requests": 2,
+            "reasoning": 375,
+            "tool_calls": 0
+          },
+          "return_code": 0,
+          "task_id": "search-03",
+          "task_success": true
+        },
+        {
+          "active": {
+            "active_compression_attempts": 2,
+            "active_compression_determinism_failures": 0,
+            "active_compression_evaluated_candidate_bytes": 0,
+            "active_compression_evaluated_input_bytes": 0,
+            "active_compression_evaluated_spans": 0,
+            "active_compression_internal_errors": 0,
+            "active_compression_no_improvement": 0,
+            "active_compression_not_applicable": 2,
+            "active_compression_recovery_failures": 0,
+            "active_compression_resource_limits": 0,
+            "active_compression_rewrites": 0
+          },
+          "answer_observed": {
+            "files": 53,
+            "matches": 309
+          },
+          "arm": "treatment",
+          "evaluator": "KnownAnswer",
+          "evaluator_status": "failure",
+          "provider": {
+            "cache_read": 36352,
+            "context_complete": 2,
+            "context_snapshots": 2,
+            "input_total": 44162,
+            "input_uncached": 7810,
+            "output_total": 2598,
+            "provider_errors": 0,
+            "provider_requests": 2,
+            "reasoning": 2509,
+            "tool_calls": 0
+          },
+          "return_code": 0,
+          "task_id": "search-04",
+          "task_success": false
+        },
+        {
+          "active": {
+            "active_compression_attempts": 2,
+            "active_compression_determinism_failures": 0,
+            "active_compression_evaluated_candidate_bytes": 0,
+            "active_compression_evaluated_input_bytes": 0,
+            "active_compression_evaluated_spans": 0,
+            "active_compression_internal_errors": 0,
+            "active_compression_no_improvement": 0,
+            "active_compression_not_applicable": 2,
+            "active_compression_recovery_failures": 0,
+            "active_compression_resource_limits": 0,
+            "active_compression_rewrites": 0
+          },
+          "answer_observed": {
+            "files": 13,
+            "matches": 38
+          },
+          "arm": "treatment",
+          "evaluator": "KnownAnswer",
+          "evaluator_status": "success",
+          "provider": {
+            "cache_read": 36352,
+            "context_complete": 2,
+            "context_snapshots": 2,
+            "input_total": 39519,
+            "input_uncached": 3167,
+            "output_total": 624,
+            "provider_errors": 0,
+            "provider_requests": 2,
+            "reasoning": 529,
+            "tool_calls": 0
+          },
+          "return_code": 0,
+          "task_id": "search-05",
+          "task_success": true
+        },
+        {
+          "active": {
+            "active_compression_attempts": 2,
+            "active_compression_determinism_failures": 0,
+            "active_compression_evaluated_candidate_bytes": 0,
+            "active_compression_evaluated_input_bytes": 0,
+            "active_compression_evaluated_spans": 0,
+            "active_compression_internal_errors": 0,
+            "active_compression_no_improvement": 0,
+            "active_compression_not_applicable": 2,
+            "active_compression_recovery_failures": 0,
+            "active_compression_resource_limits": 0,
+            "active_compression_rewrites": 0
+          },
+          "answer_observed": {
+            "files": 1,
+            "matches": 2
+          },
+          "arm": "treatment",
+          "evaluator": "KnownAnswer",
+          "evaluator_status": "success",
+          "provider": {
+            "cache_read": 28160,
+            "context_complete": 2,
+            "context_snapshots": 2,
+            "input_total": 38548,
+            "input_uncached": 10388,
+            "output_total": 249,
+            "provider_errors": 0,
+            "provider_requests": 2,
+            "reasoning": 160,
+            "tool_calls": 0
+          },
+          "return_code": 0,
+          "task_id": "search-06",
+          "task_success": true
+        }
+      ]
+    }
+  },
+  "assignment_unit": "session",
+  "determinism_failures": 0,
+  "experiment_id": "public-search-quality-pilot-001",
+  "family": "Search",
+  "active_candidate_evaluations": 0,
+  "active_candidate_rewrites": 0,
+  "treatment_exercised": false,
+  "quality_comparable": false,
+  "decision": "blocked_no_active_candidate_applicability",
+  "forwarding_mutations": 0,
+  "limitations": [
+    "This is a bounded public pilot, not a universal quality or provider-savings claim.",
+    "Reports contain aggregate evaluator, provider, and active-rewrite metrics only.",
+    "No prompt, command, path, source, ToolResult, response, or secret was persisted.",
+    "The provider subscription billing model is not inferred from these observations."
+  ],
+  "model": "gpt-5.6-luna",
+  "phase": "4.5",
+  "recovery_failures": 0,
+  "reducer": {
+    "id": "search.result_projection",
+    "version": 1
+  },
+  "repository_pins": [
+    {
+      "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "repository": "BurntSushi/ripgrep",
+      "url": "https://github.com/BurntSushi/ripgrep"
+    }
+  ],
+  "shadow_only": false,
+  "status": "completed_infrastructure_diagnostic",
+  "tasks": [
+    {
+      "active": {
+        "active_compression_attempts": 0,
+        "active_compression_determinism_failures": 0,
+        "active_compression_evaluated_candidate_bytes": 0,
+        "active_compression_evaluated_input_bytes": 0,
+        "active_compression_evaluated_spans": 0,
+        "active_compression_internal_errors": 0,
+        "active_compression_no_improvement": 0,
+        "active_compression_not_applicable": 0,
+        "active_compression_recovery_failures": 0,
+        "active_compression_resource_limits": 0,
+        "active_compression_rewrites": 0
+      },
+      "answer_observed": {
+        "files": 7,
+        "matches": 20
+      },
+      "arm": "control",
+      "evaluator": "KnownAnswer",
+      "evaluator_status": "success",
+      "provider": {
+        "cache_read": null,
+        "context_complete": 2,
+        "context_snapshots": 2,
+        "input_total": null,
+        "input_uncached": null,
+        "output_total": null,
+        "provider_errors": 0,
+        "provider_requests": 2,
+        "reasoning": null,
+        "tool_calls": 0
+      },
+      "return_code": 0,
+      "task_id": "search-01",
+      "task_success": true
+    },
+    {
+      "active": {
+        "active_compression_attempts": 0,
+        "active_compression_determinism_failures": 0,
+        "active_compression_evaluated_candidate_bytes": 0,
+        "active_compression_evaluated_input_bytes": 0,
+        "active_compression_evaluated_spans": 0,
+        "active_compression_internal_errors": 0,
+        "active_compression_no_improvement": 0,
+        "active_compression_not_applicable": 0,
+        "active_compression_recovery_failures": 0,
+        "active_compression_resource_limits": 0,
+        "active_compression_rewrites": 0
+      },
+      "answer_observed": null,
+      "arm": "control",
+      "evaluator": "KnownAnswer",
+      "evaluator_status": "unavailable",
+      "provider": {
+        "cache_read": 18176,
+        "context_complete": 1,
+        "context_snapshots": 1,
+        "input_total": 19133,
+        "input_uncached": 957,
+        "output_total": 318,
+        "provider_errors": 0,
+        "provider_requests": 1,
+        "reasoning": 244,
+        "tool_calls": 0
+      },
+      "return_code": 124,
+      "task_id": "search-02",
+      "task_success": false
+    },
+    {
+      "active": {
+        "active_compression_attempts": 0,
+        "active_compression_determinism_failures": 0,
+        "active_compression_evaluated_candidate_bytes": 0,
+        "active_compression_evaluated_input_bytes": 0,
+        "active_compression_evaluated_spans": 0,
+        "active_compression_internal_errors": 0,
+        "active_compression_no_improvement": 0,
+        "active_compression_not_applicable": 0,
+        "active_compression_recovery_failures": 0,
+        "active_compression_resource_limits": 0,
+        "active_compression_rewrites": 0
+      },
+      "answer_observed": {
+        "files": 10,
+        "matches": 13
+      },
+      "arm": "control",
+      "evaluator": "KnownAnswer",
+      "evaluator_status": "success",
+      "provider": {
+        "cache_read": 28160,
+        "context_complete": 2,
+        "context_snapshots": 2,
+        "input_total": 38847,
+        "input_uncached": 10687,
+        "output_total": 321,
+        "provider_errors": 0,
+        "provider_requests": 2,
+        "reasoning": 229,
+        "tool_calls": 0
+      },
+      "return_code": 0,
+      "task_id": "search-03",
+      "task_success": true
+    },
+    {
+      "active": {
+        "active_compression_attempts": 0,
+        "active_compression_determinism_failures": 0,
+        "active_compression_evaluated_candidate_bytes": 0,
+        "active_compression_evaluated_input_bytes": 0,
+        "active_compression_evaluated_spans": 0,
+        "active_compression_internal_errors": 0,
+        "active_compression_no_improvement": 0,
+        "active_compression_not_applicable": 0,
+        "active_compression_recovery_failures": 0,
+        "active_compression_resource_limits": 0,
+        "active_compression_rewrites": 0
+      },
+      "answer_observed": null,
+      "arm": "control",
+      "evaluator": "KnownAnswer",
+      "evaluator_status": "unavailable",
+      "provider": {
+        "cache_read": 9984,
+        "context_complete": 1,
+        "context_snapshots": 1,
+        "input_total": 19133,
+        "input_uncached": 9149,
+        "output_total": 348,
+        "provider_errors": 0,
+        "provider_requests": 1,
+        "reasoning": 274,
+        "tool_calls": 0
+      },
+      "return_code": 124,
+      "task_id": "search-04",
+      "task_success": false
+    },
+    {
+      "active": {
+        "active_compression_attempts": 0,
+        "active_compression_determinism_failures": 0,
+        "active_compression_evaluated_candidate_bytes": 0,
+        "active_compression_evaluated_input_bytes": 0,
+        "active_compression_evaluated_spans": 0,
+        "active_compression_internal_errors": 0,
+        "active_compression_no_improvement": 0,
+        "active_compression_not_applicable": 0,
+        "active_compression_recovery_failures": 0,
+        "active_compression_resource_limits": 0,
+        "active_compression_rewrites": 0
+      },
+      "answer_observed": {
+        "files": 13,
+        "matches": 38
+      },
+      "arm": "control",
+      "evaluator": "KnownAnswer",
+      "evaluator_status": "success",
+      "provider": {
+        "cache_read": 36352,
+        "context_complete": 2,
+        "context_snapshots": 2,
+        "input_total": 39840,
+        "input_uncached": 3488,
+        "output_total": 977,
+        "provider_errors": 0,
+        "provider_requests": 2,
+        "reasoning": 880,
+        "tool_calls": 0
+      },
+      "return_code": 0,
+      "task_id": "search-05",
+      "task_success": true
+    },
+    {
+      "active": {
+        "active_compression_attempts": 0,
+        "active_compression_determinism_failures": 0,
+        "active_compression_evaluated_candidate_bytes": 0,
+        "active_compression_evaluated_input_bytes": 0,
+        "active_compression_evaluated_spans": 0,
+        "active_compression_internal_errors": 0,
+        "active_compression_no_improvement": 0,
+        "active_compression_not_applicable": 0,
+        "active_compression_recovery_failures": 0,
+        "active_compression_resource_limits": 0,
+        "active_compression_rewrites": 0
+      },
+      "answer_observed": {
+        "files": 1,
+        "matches": 2
+      },
+      "arm": "control",
+      "evaluator": "KnownAnswer",
+      "evaluator_status": "success",
+      "provider": {
+        "cache_read": 28160,
+        "context_complete": 2,
+        "context_snapshots": 2,
+        "input_total": 38567,
+        "input_uncached": 10407,
+        "output_total": 269,
+        "provider_errors": 0,
+        "provider_requests": 2,
+        "reasoning": 178,
+        "tool_calls": 0
+      },
+      "return_code": 0,
+      "task_id": "search-06",
+      "task_success": true
+    },
+    {
+      "active": {
+        "active_compression_attempts": 2,
+        "active_compression_determinism_failures": 0,
+        "active_compression_evaluated_candidate_bytes": 0,
+        "active_compression_evaluated_input_bytes": 0,
+        "active_compression_evaluated_spans": 0,
+        "active_compression_internal_errors": 0,
+        "active_compression_no_improvement": 0,
+        "active_compression_not_applicable": 2,
+        "active_compression_recovery_failures": 0,
+        "active_compression_resource_limits": 0,
+        "active_compression_rewrites": 0
+      },
+      "answer_observed": {
+        "files": 7,
+        "matches": 20
+      },
+      "arm": "treatment",
+      "evaluator": "KnownAnswer",
+      "evaluator_status": "success",
+      "provider": {
+        "cache_read": null,
+        "context_complete": 2,
+        "context_snapshots": 2,
+        "input_total": null,
+        "input_uncached": null,
+        "output_total": null,
+        "provider_errors": 0,
+        "provider_requests": 2,
+        "reasoning": null,
+        "tool_calls": 0
+      },
+      "return_code": 0,
+      "task_id": "search-01",
+      "task_success": true
+    },
+    {
+      "active": {
+        "active_compression_attempts": 0,
+        "active_compression_determinism_failures": 0,
+        "active_compression_evaluated_candidate_bytes": 0,
+        "active_compression_evaluated_input_bytes": 0,
+        "active_compression_evaluated_spans": 0,
+        "active_compression_internal_errors": 0,
+        "active_compression_no_improvement": 0,
+        "active_compression_not_applicable": 0,
+        "active_compression_recovery_failures": 0,
+        "active_compression_resource_limits": 0,
+        "active_compression_rewrites": 0
+      },
+      "answer_observed": null,
+      "arm": "treatment",
+      "evaluator": "KnownAnswer",
+      "evaluator_status": "unavailable",
+      "provider": {
+        "cache_read": 18176,
+        "context_complete": 1,
+        "context_snapshots": 1,
+        "input_total": 19133,
+        "input_uncached": 957,
+        "output_total": 388,
+        "provider_errors": 0,
+        "provider_requests": 1,
+        "reasoning": 314,
+        "tool_calls": 0
+      },
+      "return_code": 124,
+      "task_id": "search-02",
+      "task_success": false
+    },
+    {
+      "active": {
+        "active_compression_attempts": 2,
+        "active_compression_determinism_failures": 0,
+        "active_compression_evaluated_candidate_bytes": 0,
+        "active_compression_evaluated_input_bytes": 0,
+        "active_compression_evaluated_spans": 0,
+        "active_compression_internal_errors": 0,
+        "active_compression_no_improvement": 0,
+        "active_compression_not_applicable": 2,
+        "active_compression_recovery_failures": 0,
+        "active_compression_resource_limits": 0,
+        "active_compression_rewrites": 0
+      },
+      "answer_observed": {
+        "files": 10,
+        "matches": 13
+      },
+      "arm": "treatment",
+      "evaluator": "KnownAnswer",
+      "evaluator_status": "success",
+      "provider": {
+        "cache_read": 28160,
+        "context_complete": 2,
+        "context_snapshots": 2,
+        "input_total": 38964,
+        "input_uncached": 10804,
+        "output_total": 467,
+        "provider_errors": 0,
+        "provider_requests": 2,
+        "reasoning": 375,
+        "tool_calls": 0
+      },
+      "return_code": 0,
+      "task_id": "search-03",
+      "task_success": true
+    },
+    {
+      "active": {
+        "active_compression_attempts": 2,
+        "active_compression_determinism_failures": 0,
+        "active_compression_evaluated_candidate_bytes": 0,
+        "active_compression_evaluated_input_bytes": 0,
+        "active_compression_evaluated_spans": 0,
+        "active_compression_internal_errors": 0,
+        "active_compression_no_improvement": 0,
+        "active_compression_not_applicable": 2,
+        "active_compression_recovery_failures": 0,
+        "active_compression_resource_limits": 0,
+        "active_compression_rewrites": 0
+      },
+      "answer_observed": {
+        "files": 53,
+        "matches": 309
+      },
+      "arm": "treatment",
+      "evaluator": "KnownAnswer",
+      "evaluator_status": "failure",
+      "provider": {
+        "cache_read": 36352,
+        "context_complete": 2,
+        "context_snapshots": 2,
+        "input_total": 44162,
+        "input_uncached": 7810,
+        "output_total": 2598,
+        "provider_errors": 0,
+        "provider_requests": 2,
+        "reasoning": 2509,
+        "tool_calls": 0
+      },
+      "return_code": 0,
+      "task_id": "search-04",
+      "task_success": false
+    },
+    {
+      "active": {
+        "active_compression_attempts": 2,
+        "active_compression_determinism_failures": 0,
+        "active_compression_evaluated_candidate_bytes": 0,
+        "active_compression_evaluated_input_bytes": 0,
+        "active_compression_evaluated_spans": 0,
+        "active_compression_internal_errors": 0,
+        "active_compression_no_improvement": 0,
+        "active_compression_not_applicable": 2,
+        "active_compression_recovery_failures": 0,
+        "active_compression_resource_limits": 0,
+        "active_compression_rewrites": 0
+      },
+      "answer_observed": {
+        "files": 13,
+        "matches": 38
+      },
+      "arm": "treatment",
+      "evaluator": "KnownAnswer",
+      "evaluator_status": "success",
+      "provider": {
+        "cache_read": 36352,
+        "context_complete": 2,
+        "context_snapshots": 2,
+        "input_total": 39519,
+        "input_uncached": 3167,
+        "output_total": 624,
+        "provider_errors": 0,
+        "provider_requests": 2,
+        "reasoning": 529,
+        "tool_calls": 0
+      },
+      "return_code": 0,
+      "task_id": "search-05",
+      "task_success": true
+    },
+    {
+      "active": {
+        "active_compression_attempts": 2,
+        "active_compression_determinism_failures": 0,
+        "active_compression_evaluated_candidate_bytes": 0,
+        "active_compression_evaluated_input_bytes": 0,
+        "active_compression_evaluated_spans": 0,
+        "active_compression_internal_errors": 0,
+        "active_compression_no_improvement": 0,
+        "active_compression_not_applicable": 2,
+        "active_compression_recovery_failures": 0,
+        "active_compression_resource_limits": 0,
+        "active_compression_rewrites": 0
+      },
+      "answer_observed": {
+        "files": 1,
+        "matches": 2
+      },
+      "arm": "treatment",
+      "evaluator": "KnownAnswer",
+      "evaluator_status": "success",
+      "provider": {
+        "cache_read": 28160,
+        "context_complete": 2,
+        "context_snapshots": 2,
+        "input_total": 38548,
+        "input_uncached": 10388,
+        "output_total": 249,
+        "provider_errors": 0,
+        "provider_requests": 2,
+        "reasoning": 160,
+        "tool_calls": 0
+      },
+      "return_code": 0,
+      "task_id": "search-06",
+      "task_success": true
+    }
+  ]
+}

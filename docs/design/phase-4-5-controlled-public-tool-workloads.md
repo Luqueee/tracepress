@@ -71,9 +71,10 @@ provider-token savings, cache effects, cost claims, or agent-quality results.
 ## Decision
 
 `search.result_projection` passes the Phase 4.5 shadow opportunity gate for this workload class
-and is eligible for a future paired quality pilot. Active Control/Treatment is deliberately not
-started in Phase 4.5. The next experiment must use the same pinned repositories and task IDs,
-with objective outcomes, session-level assignment, fail-open behavior, and no Kena input.
+and was exercised only by a bounded infrastructure diagnostic. The treatment path reached the
+proxy, but no provider-native Search span was evaluated, so no quality comparison is valid. A
+future quality pilot must use the same pinned repositories and task IDs, with objective outcomes,
+session-level assignment, fail-open behavior, and no Kena input.
 
 ## Quality-pilot preparation
 
@@ -91,5 +92,22 @@ reports/public-tool-workloads-001/TRACEPRESS_SEARCH_QUALITY_PILOT_PREPARATION_00
 
 This preparation deliberately starts zero provider sessions and performs zero request rewrites.
 It stores only aggregate match/file counts, public repository provenance, evaluator metadata, and
-planned session assignments. The active quality pilot remains gated until the runner is reviewed
+planned session assignments. The active quality comparison remains gated until the runner is reviewed
 for fail-open behavior, recovery isolation, and provider usage instrumentation.
+
+The reviewed runner is:
+
+```text
+scripts/run_public_search_quality_pilot_001.py
+```
+
+Its first bounded run completed with zero active Search rewrites: the treatment path was reached,
+but no eligible Search span was evaluated. This is recorded as an infrastructure diagnostic, not
+as a quality result; active quality comparison remains invalid until the provider-native ToolResult
+shape is characterized and the reducer reaches a real evaluated span.
+
+The diagnostic artifact is:
+
+```text
+reports/public-tool-workloads-001/TRACEPRESS_SEARCH_QUALITY_ACTIVE_PILOT_001.{json,md}
+```

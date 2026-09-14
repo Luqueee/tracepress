@@ -681,7 +681,7 @@ mod tests {
         );
         assert_eq!(
             experiments.first().expect("one experiment").candidate_count,
-            160
+            176
         );
         assert_eq!(experiments.first().expect("one experiment").block_count, 16);
         assert_eq!(
@@ -694,7 +694,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let detail: CompressionExperimentDetail =
             serde_json::from_slice(&body).expect("compression detail JSON");
-        assert_eq!(detail.compressors.len(), 10);
+        assert_eq!(detail.compressors.len(), 11);
         assert!(!detail.workload_distribution_available);
         let minify = detail
             .compressors
@@ -711,6 +711,13 @@ mod tests {
             .iter()
             .find(|summary| summary.compressor == "json.tabular")
             .expect("json.tabular summary");
+        let search = detail
+            .compressors
+            .iter()
+            .find(|summary| summary.compressor == "search.result_projection")
+            .expect("search.result_projection summary");
+        assert_eq!(search.tool_family, "search");
+        assert_eq!(search.applicable_blocks, 0);
         assert_eq!(tabular.recovery_basis_points, Some(10_000));
         assert_eq!(tabular.deterministic_basis_points, Some(10_000));
         let (status, body) = response(

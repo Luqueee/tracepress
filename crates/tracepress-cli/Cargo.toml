@@ -11,6 +11,10 @@ autobins = false
 name = "tracepress"
 path = "src/main.rs"
 
+[[bin]]
+name = "tracepress-tool-shadow"
+path = "src/bin/tracepress-tool-shadow.rs"
+
 [dependencies]
 axum = { version = "0.8", default-features = false, features = ["http1", "tokio"] }
 clap = { version = "4", features = ["derive"] }

@@ -519,6 +519,7 @@ pub struct CompressionQuality {
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct CompressorSummary {
     pub compressor: String,
+    pub tool_family: String,
     pub version: String,
     pub eligible_blocks: u64,
     pub applicable_blocks: u64,

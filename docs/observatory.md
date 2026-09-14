@@ -46,6 +46,20 @@ dx serve --platform web
 
 `Dioxus.toml` proxies `/api/` to `http://127.0.0.1:4319/api/`. Dioxus 0.7 discovers `tailwind.css`, compiles it into `assets/tailwind.css`, and watches the Rust/CSS sources. The application also keeps its small token-based base stylesheet local, so it loads no CDN, remote font, script, or telemetry. The WASM tracing logger reports without console color styles, so Dioxus diagnostics do not trigger inline-style CSP violations.
 
+## Public tool-family shadow
+
+Phase 4.5 uses pinned public repositories outside the checkout and a bounded stdin-only evaluator:
+
+```bash
+cargo build --bin tracepress-tool-shadow
+python3 scripts/run_public_tool_workloads_001.py \
+  --output-json reports/public-tool-workloads-001/TRACEPRESS_PUBLIC_TOOL_WORKLOADS_001.json \
+  --output-md reports/public-tool-workloads-001/TRACEPRESS_PUBLIC_TOOL_WORKLOADS_001.md
+```
+
+Command and ToolResult bytes remain transient and are never included in reports. This remains
+shadow-only; it cannot rewrite provider requests or establish provider/cache/quality claims.
+
 ## Architecture
 
 ```text

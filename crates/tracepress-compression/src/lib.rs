@@ -32,12 +32,14 @@ pub use json::{
 };
 pub use quality::{
     ExpectedArtifactKind, QualityAssignment, QualityEvaluatorKind, QualityExperimentArm,
-    QualityOutcome, QualityOutcomeStatus, QualitySessionMetrics, QualityTask, ToolFamily,
+    QualityOutcome, QualityOutcomeStatus, QualitySessionMetrics, QualityTask, ShellSemanticFamily,
+    ToolFamily,
 };
 pub use reduction::{
     JsonEmptyNoiseFieldReducer, JsonRepeatedValueReducer, ReductionCandidate, ReductionMetrics,
-    ReductionPolicyDecision, ReductionStatus, ShellDiagnosticProjectionReducer,
-    TOOL_AWARE_REDUCTION_VERSION, ToolResultReducer,
+    ReductionPolicyDecision, ReductionStatus, SearchMatch, SearchResultModel, SearchResultReducer,
+    ShellDiagnosticProjectionReducer, TOOL_AWARE_REDUCTION_VERSION, TestFailure, TestResultModel,
+    ToolResultReducer,
 };
 pub use text::{
     TextLogPrefixFold, TextNoop, TextReadableBlockFold, TextReadableLineFold, TextRepeatedLine,

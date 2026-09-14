@@ -882,6 +882,7 @@ fn compressor_summaries(
     );
     let mut statement = connection.prepare(&sql)?;
     let rows = statement.query_map([experiment_id], |row| {
+        let compressor_id: String = row.get(0)?;
         let eligible = nonnegative(row.get(2)?);
         let applicable = nonnegative(row.get(3)?);
         let input_bytes = row.get::<_, Option<i64>>(4)?.and_then(to_u64);
@@ -892,7 +893,8 @@ fn compressor_summaries(
         let estimated_reduction = row.get::<_, Option<i64>>(9)?.and_then(to_u64);
         Ok((
             CompressorSummary {
-                compressor: row.get(0)?,
+                compressor: compressor_id.clone(),
+                tool_family: compressor_tool_family(&compressor_id).to_owned(),
                 version: row.get(1)?,
                 eligible_blocks: eligible,
                 applicable_blocks: applicable,
@@ -915,7 +917,7 @@ fn compressor_summaries(
                 median_byte_reduction_basis_points: compressor_reduction_percentile(
                     connection,
                     experiment_id,
-                    &row.get::<_, String>(0)?,
+                    &compressor_id,
                     "bytes_delta",
                     50,
                 )?,
@@ -930,7 +932,7 @@ fn compressor_summaries(
                 median_estimated_reduction_basis_points: compressor_reduction_percentile(
                     connection,
                     experiment_id,
-                    &row.get::<_, String>(0)?,
+                    &compressor_id,
                     "estimated_token_delta",
                     50,
                 )?,
@@ -972,6 +974,28 @@ fn compressor_summaries(
         summaries.push(summary);
     }
     Ok(summaries)
+}
+
+fn compressor_tool_family(compressor: &str) -> &'static str {
+    if compressor.starts_with("search.") {
+        "search"
+    } else if compressor.starts_with("tests.") {
+        "tests"
+    } else if compressor.starts_with("build.") {
+        "build"
+    } else if compressor.starts_with("lint.") {
+        "lint"
+    } else if compressor.starts_with("dependency.") {
+        "dependency"
+    } else if compressor.starts_with("version_control.") {
+        "version_control"
+    } else if compressor.starts_with("shell.") {
+        "shell_generic"
+    } else if compressor.starts_with("json.") || compressor.starts_with("text.") {
+        "generic_control"
+    } else {
+        "unknown"
+    }
 }
 
 fn unique_candidate_reductions(

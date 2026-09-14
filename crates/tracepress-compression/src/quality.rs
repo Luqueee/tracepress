@@ -48,6 +48,117 @@ pub enum ToolFamily {
     Unknown,
 }
 
+/// Transient semantic family for a generic shell invocation.
+///
+/// This label is derived from bounded command/output signals while a request is in memory. It is
+/// safe to persist as an aggregate label, but the command, arguments, working directory, and
+/// output that produced it must never cross the metadata boundary.
+#[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
+#[non_exhaustive]
+pub enum ShellSemanticFamily {
+    /// Search and code-index output such as `rg` or `grep`.
+    Search,
+    /// Test runner output.
+    Tests,
+    /// Build and compilation diagnostics.
+    Build,
+    /// Static-analysis and lint output.
+    Lint,
+    /// Dependency and package-resolution output.
+    Dependency,
+    /// Version-control output.
+    VersionControl,
+    /// A shell command without a safer semantic family.
+    Generic,
+    /// Signals were insufficient or contradictory.
+    Unknown,
+}
+
+impl ShellSemanticFamily {
+    /// Stable metadata/report label.
+    #[must_use]
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Search => "search",
+            Self::Tests => "tests",
+            Self::Build => "build",
+            Self::Lint => "lint",
+            Self::Dependency => "dependency",
+            Self::VersionControl => "version_control",
+            Self::Generic => "generic",
+            Self::Unknown => "unknown",
+        }
+    }
+
+    /// Classify bounded transient command/output signals without retaining either input.
+    #[must_use]
+    pub fn from_transient_signals(command: Option<&[u8]>, output: Option<&[u8]>) -> Self {
+        let command = command.map_or_else(String::new, bounded_signal);
+        let output = output.map_or_else(String::new, bounded_signal);
+        let classify = |signal: &str| {
+            if contains_any(signal, &["rg ", "rg\"", "grep", "ripgrep", "search"])
+                || signal.contains("match") && signal.contains("line_number")
+            {
+                Some(Self::Search)
+            } else if contains_any(
+                signal,
+                &["cargo test", "pytest", "tox", "npm test", "vitest", "jest"],
+            ) || contains_any(signal, &["passed", "failed", "skipped", "test session"])
+                && (signal.contains("test")
+                    || signal.contains("pytest")
+                    || signal.contains("passed") && signal.contains("failed"))
+            {
+                Some(Self::Tests)
+            } else if contains_any(signal, &["cargo build", "cargo check", "make", "compile"])
+                || contains_any(signal, &["compiling", "built", "build finished"])
+            {
+                Some(Self::Build)
+            } else if contains_any(signal, &["clippy", "ruff", "eslint", "mypy", "lint"])
+                || contains_any(signal, &["warning:", "error:"]) && signal.contains("diagnostic")
+            {
+                Some(Self::Lint)
+            } else if contains_any(
+                signal,
+                &[
+                    "cargo tree",
+                    "npm install",
+                    "npm ls",
+                    "pnpm",
+                    "dependency",
+                    "resolver",
+                ],
+            ) {
+                Some(Self::Dependency)
+            } else if contains_any(
+                signal,
+                &["git ", "git\"", "git status", "git diff", "git log"],
+            ) {
+                Some(Self::VersionControl)
+            } else {
+                None
+            }
+        };
+        match (classify(&command), classify(&output)) {
+            (Some(command), Some(output)) if command != output => Self::Unknown,
+            (Some(family), _) | (_, Some(family)) => family,
+            (None, None) if !command.is_empty() || !output.is_empty() => Self::Generic,
+            (None, None) => Self::Unknown,
+        }
+    }
+}
+
+fn bounded_signal(bytes: &[u8]) -> String {
+    const MAX_SIGNAL_BYTES: usize = 4096;
+    let bounded = bytes
+        .get(..bytes.len().min(MAX_SIGNAL_BYTES))
+        .unwrap_or(bytes);
+    String::from_utf8_lossy(bounded).to_ascii_lowercase()
+}
+
+fn contains_any(signal: &str, markers: &[&str]) -> bool {
+    markers.iter().any(|marker| signal.contains(marker))
+}
+
 impl ToolFamily {
     /// Classifies a bounded tool name without returning or persisting the name itself.
     #[must_use]
@@ -331,5 +442,25 @@ mod tests {
         let encoded = serde_json::to_vec(&metrics).unwrap_or_default();
         assert!(String::from_utf8_lossy(&encoded).contains(r#""uncached_input":null"#));
         assert!(String::from_utf8_lossy(&encoded).contains(r#""task_success":null"#));
+    }
+
+    #[test]
+    fn shell_family_uses_transient_signals_and_fails_closed_on_conflict() {
+        assert_eq!(
+            ShellSemanticFamily::from_transient_signals(Some(br#"{"cmd":"rg --json foo"}"#), None),
+            ShellSemanticFamily::Search
+        );
+        assert_eq!(
+            ShellSemanticFamily::from_transient_signals(None, Some(b"4 passed, 1 failed")),
+            ShellSemanticFamily::Tests
+        );
+        assert_eq!(
+            ShellSemanticFamily::from_transient_signals(Some(b"cargo test"), Some(b"cargo build")),
+            ShellSemanticFamily::Unknown
+        );
+        assert_eq!(
+            ShellSemanticFamily::from_transient_signals(Some(b"echo hello"), None),
+            ShellSemanticFamily::Generic
+        );
     }
 }

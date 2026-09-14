@@ -4,7 +4,7 @@
 //! The caller may place the original in a local recovery store, but this module never persists or
 //! serializes either representation. Unknown and non-ToolResult content is never eligible.
 
-use std::collections::BTreeSet;
+use std::collections::{BTreeMap, BTreeSet};
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -178,6 +178,309 @@ pub trait ToolResultReducer: Send + Sync {
 
     /// Produces a transient reduced view and local recovery boundary.
     fn reduce(&self, input: &[u8], limits: &CompressionLimits) -> ReductionCandidate;
+}
+
+/// Canonical semantic match extracted from a transient search result.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct SearchMatch {
+    /// Relative/display file identifier from the result, retained in memory only.
+    pub file: String,
+    /// One-based line number.
+    pub line: u64,
+    /// Match payload or line text.
+    pub text: String,
+}
+
+/// Canonical model used to compare original and grouped search output.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct SearchResultModel {
+    /// All matches, canonicalized by file, line, and payload.
+    pub matches: Vec<SearchMatch>,
+    /// Non-match framing retained only when it is not a known runner envelope.
+    pub summary: Vec<String>,
+}
+
+impl SearchResultModel {
+    /// Parses bounded plain `rg`-style output or line-delimited `rg --json` output.
+    #[must_use]
+    pub fn parse(input: &[u8], limits: &CompressionLimits) -> Option<Self> {
+        if u64::try_from(input.len()).ok()? > limits.max_candidate_input_bytes {
+            return None;
+        }
+        let text = std::str::from_utf8(input).ok()?;
+        let mut matches = Vec::new();
+        let mut summary = Vec::new();
+        let mut grouped_file: Option<&str> = None;
+        for line in text.lines() {
+            if line.is_empty() {
+                continue;
+            }
+            if line == "[search results]" {
+                continue;
+            }
+            if let Some(file) = line.strip_suffix(':')
+                && !file.is_empty()
+                && !file.contains(' ')
+            {
+                grouped_file = Some(file);
+                continue;
+            }
+            if let Some(file) = grouped_file
+                && let Some((line_number, text)) = line.split_once('\t')
+            {
+                if let Ok(line_number) = line_number.parse::<u64>() {
+                    matches.push(SearchMatch {
+                        file: file.to_owned(),
+                        line: line_number,
+                        text: text.replace("\\n", "\n"),
+                    });
+                    continue;
+                }
+            }
+            if let Ok(value) = serde_json::from_str::<Value>(line) {
+                if value.get("type").and_then(Value::as_str) == Some("match") {
+                    let data = value.get("data")?;
+                    let file = data
+                        .get("path")
+                        .and_then(|path| path.get("text"))
+                        .and_then(Value::as_str)?
+                        .to_owned();
+                    let line_number = data.get("line_number").and_then(Value::as_u64)?;
+                    let text = data
+                        .get("lines")
+                        .and_then(|lines| lines.get("text"))
+                        .and_then(Value::as_str)?
+                        .trim_end_matches(['\r', '\n'])
+                        .to_owned();
+                    matches.push(SearchMatch {
+                        file,
+                        line: line_number,
+                        text,
+                    });
+                } else if value.get("type").and_then(Value::as_str) != Some("begin")
+                    && value.get("type").and_then(Value::as_str) != Some("end")
+                    && value.get("type").and_then(Value::as_str) != Some("summary")
+                {
+                    summary.push("structured_event".to_owned());
+                }
+                continue;
+            }
+            let mut fields = line.splitn(3, ':');
+            let Some(file) = fields.next() else {
+                summary.push(line.to_owned());
+                continue;
+            };
+            let Some(line_number) = fields.next().and_then(|value| value.parse::<u64>().ok())
+            else {
+                summary.push(line.to_owned());
+                continue;
+            };
+            let Some(text) = fields.next() else {
+                summary.push(line.to_owned());
+                continue;
+            };
+            matches.push(SearchMatch {
+                file: file.to_owned(),
+                line: line_number,
+                text: text.to_owned(),
+            });
+        }
+        if matches.is_empty() {
+            return None;
+        }
+        matches.sort_by(|left, right| {
+            (&left.file, left.line, &left.text).cmp(&(&right.file, right.line, &right.text))
+        });
+        Some(Self { matches, summary })
+    }
+
+    /// Renders a deterministic, grouped, human-readable view.
+    #[must_use]
+    pub fn render_grouped(&self) -> Vec<u8> {
+        let mut grouped = BTreeMap::<&str, Vec<&SearchMatch>>::new();
+        for item in &self.matches {
+            grouped.entry(&item.file).or_default().push(item);
+        }
+        let mut rendered = String::from("[search results]\n");
+        for (file, matches) in grouped {
+            rendered.push_str(file);
+            rendered.push_str(":\n");
+            for item in matches {
+                rendered.push_str(&item.line.to_string());
+                rendered.push('\t');
+                rendered.push_str(&item.text.replace('\n', "\\n"));
+                rendered.push('\n');
+            }
+        }
+        rendered.into_bytes()
+    }
+}
+
+/// Canonical failure identity from a test runner result.
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub struct TestFailure {
+    /// Test identifier retained in memory only.
+    pub identifier: String,
+    /// Bounded failure message.
+    pub message: String,
+}
+
+/// Canonical metadata model for future test-result reduction.
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct TestResultModel {
+    /// Failure identities and messages.
+    pub failures: Vec<TestFailure>,
+    /// Runner summary lines, normalized but not exported.
+    pub summary: Vec<String>,
+}
+
+impl TestResultModel {
+    /// Extracts stable failure identities from bounded pytest-like output.
+    #[must_use]
+    pub fn parse(input: &[u8], limits: &CompressionLimits) -> Option<Self> {
+        if u64::try_from(input.len()).ok()? > limits.max_candidate_input_bytes {
+            return None;
+        }
+        let text = std::str::from_utf8(input).ok()?;
+        let mut failures = Vec::new();
+        let mut summary = Vec::new();
+        for line in text.lines() {
+            if let Some(rest) = line.strip_prefix("FAILED ") {
+                failures.push(TestFailure {
+                    identifier: rest.split(" - ").next().unwrap_or(rest).trim().to_owned(),
+                    message: rest
+                        .split_once(" - ")
+                        .map_or_else(String::new, |(_, message)| message.trim().to_owned()),
+                });
+            } else if line.contains(" passed")
+                || line.contains(" failed")
+                || line.contains(" error")
+                || line.contains(" skipped")
+            {
+                summary.push(line.trim().to_owned());
+            }
+        }
+        (!failures.is_empty() || !summary.is_empty()).then_some(Self { failures, summary })
+    }
+}
+
+/// Search-specific semantic projection.
+///
+/// It is enabled only when transient command/output classification identifies the search family;
+/// the reducer itself never persists command or result content.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct SearchResultReducer;
+
+impl ToolResultReducer for SearchResultReducer {
+    fn id(&self) -> &'static str {
+        "search.result_projection"
+    }
+
+    fn version(&self) -> u32 {
+        TOOL_AWARE_REDUCTION_VERSION
+    }
+
+    fn supports(&self, metadata: BlockMetadata) -> bool {
+        metadata.is_tool_result_plain_text()
+    }
+
+    fn policy(&self, metadata: BlockMetadata, input_bytes: u64) -> ReductionPolicyDecision {
+        if !self.supports(metadata) {
+            return ReductionPolicyDecision::Unsupported;
+        }
+        if input_bytes < 256 {
+            ReductionPolicyDecision::KeepFull
+        } else {
+            ReductionPolicyDecision::KeepFullWithCandidate
+        }
+    }
+
+    fn reduce(&self, input: &[u8], limits: &CompressionLimits) -> ReductionCandidate {
+        let started = std::time::Instant::now();
+        let input_bytes = u64::try_from(input.len()).unwrap_or(u64::MAX);
+        let original_fingerprint = digest(input);
+        let base = |status| ReductionCandidate {
+            metrics: ReductionMetrics {
+                reducer_id: self.id(),
+                reducer_version: self.version(),
+                status,
+                input_bytes,
+                visible_bytes: None,
+                gross_bytes_delta: None,
+                input_estimated_tokens: None,
+                visible_estimated_tokens: None,
+                gross_estimated_token_delta: None,
+                processing_us: elapsed_us(started),
+                omitted_fields: 0,
+                omitted_items: 0,
+                recovery_available: false,
+                recovery_verified: false,
+                deterministic: true,
+                recovery_id: None,
+                original_fingerprint,
+                visible_fingerprint: None,
+                first_modified_offset: None,
+                preserved_prefix_bytes: None,
+                provider_readability: "human_readable_structured",
+            },
+            visible: None,
+            original: None,
+        };
+        if input_bytes > limits.max_candidate_input_bytes
+            || input_bytes > limits.max_shadow_memory_bytes
+        {
+            return base(ReductionStatus::ResourceLimit);
+        }
+        let Some(model) = SearchResultModel::parse(input, limits) else {
+            return base(ReductionStatus::NotApplicable);
+        };
+        if model.matches.len() < 2 {
+            return base(ReductionStatus::NoImprovement);
+        }
+        let visible = model.render_grouped();
+        let visible_bytes = u64::try_from(visible.len()).unwrap_or(u64::MAX);
+        if visible_bytes >= input_bytes
+            || visible_bytes > limits.max_candidate_output_bytes
+            || visible_bytes.saturating_add(input_bytes) > limits.max_shadow_memory_bytes
+            || elapsed_us(started) > limits.max_shadow_wall_time_ms.get().saturating_mul(1_000)
+        {
+            return base(ReductionStatus::NoImprovement);
+        }
+        let visible_fingerprint = digest(&visible);
+        let preserved_prefix_bytes = common_prefix(input, &visible);
+        let recovered = input.to_vec().into_boxed_slice();
+        ReductionCandidate {
+            metrics: ReductionMetrics {
+                reducer_id: self.id(),
+                reducer_version: self.version(),
+                status: ReductionStatus::Applicable,
+                input_bytes,
+                visible_bytes: Some(visible_bytes),
+                gross_bytes_delta: Some(input_bytes.saturating_sub(visible_bytes)),
+                input_estimated_tokens: None,
+                visible_estimated_tokens: None,
+                gross_estimated_token_delta: None,
+                processing_us: elapsed_us(started),
+                omitted_fields: 0,
+                omitted_items: 0,
+                recovery_available: true,
+                recovery_verified: digest(&recovered) == original_fingerprint,
+                deterministic: true,
+                recovery_id: Some(opaque_recovery_id(original_fingerprint)),
+                original_fingerprint,
+                visible_fingerprint: Some(visible_fingerprint),
+                first_modified_offset: (preserved_prefix_bytes < input.len()
+                    || preserved_prefix_bytes < visible.len())
+                .then_some(u64::try_from(preserved_prefix_bytes).unwrap_or(u64::MAX)),
+                preserved_prefix_bytes: Some(
+                    u64::try_from(preserved_prefix_bytes).unwrap_or(u64::MAX),
+                ),
+                provider_readability: "human_readable_structured",
+            },
+            visible: Some(visible.into_boxed_slice()),
+            original: Some(recovered),
+        }
+    }
 }
 
 /// L1 shadow reducer: removes only structurally empty JSON object fields.
@@ -955,5 +1258,62 @@ mod tests {
             &CompressionLimits::default(),
         );
         assert_eq!(result.metrics().status, ReductionStatus::NotApplicable);
+    }
+
+    #[test]
+    fn search_model_groups_matches_and_preserves_canonical_set() {
+        let input = b"src/lib.rs:10:needle\nsrc/lib.rs:11:other\nsrc/main.rs:4:needle\n";
+        let model = SearchResultModel::parse(input, &CompressionLimits::default());
+        assert!(model.is_some());
+        let model = model.unwrap_or_default();
+        assert_eq!(model.matches.len(), 3);
+        assert_eq!(
+            model.matches.first().map(|item| item.file.as_str()),
+            Some("src/lib.rs")
+        );
+        assert!(String::from_utf8_lossy(&model.render_grouped()).contains("src/lib.rs:"));
+    }
+
+    #[test]
+    fn search_reducer_is_semantically_lossless_and_bounded() {
+        let input = b"src/lib.rs:10:needle\nsrc/lib.rs:11:other\nsrc/lib.rs:12:third\nsrc/main.rs:4:needle\n";
+        let reducer = SearchResultReducer;
+        let first = reducer.reduce(input, &CompressionLimits::default());
+        let second = reducer.reduce(input, &CompressionLimits::default());
+        assert_eq!(first.metrics().status, ReductionStatus::Applicable);
+        assert!(first.metrics().recovery_verified);
+        assert_eq!(
+            first.metrics().visible_fingerprint,
+            second.metrics().visible_fingerprint
+        );
+        assert_eq!(first.recover().as_deref(), Some(input.as_slice()));
+        let visible_model = SearchResultModel::parse(
+            first.visible().unwrap_or_default(),
+            &CompressionLimits::default(),
+        );
+        assert!(visible_model.is_some());
+        let visible_model = visible_model.unwrap_or_default();
+        let original_model = SearchResultModel::parse(input, &CompressionLimits::default());
+        assert!(original_model.is_some());
+        let original_model = original_model.unwrap_or_default();
+        assert_eq!(visible_model.matches, original_model.matches);
+    }
+
+    #[test]
+    fn test_result_model_keeps_failure_identity_and_summary() {
+        let model = TestResultModel::parse(
+            b"FAILED tests/test_cli.py::test_search - expected 2\n1 failed, 3 passed\n",
+            &CompressionLimits::default(),
+        );
+        assert!(model.is_some());
+        let model = model.unwrap_or_default();
+        assert_eq!(
+            model
+                .failures
+                .first()
+                .map(|failure| failure.identifier.as_str()),
+            Some("tests/test_cli.py::test_search")
+        );
+        assert_eq!(model.summary, vec!["1 failed, 3 passed"]);
     }
 }

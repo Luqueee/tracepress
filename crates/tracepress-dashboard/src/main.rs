@@ -830,7 +830,8 @@ fn render_compression_detail(
                 .iter()
                 .any(|compressor| compressor.compressor.starts_with("json.empty_noise_fields")
                     || compressor.compressor.starts_with("json.repeated_value_elision")
-                    || compressor.compressor.starts_with("shell.diagnostic_projection"))
+                    || compressor.compressor.starts_with("shell.diagnostic_projection")
+                    || compressor.compressor.starts_with("search.result_projection"))
             {
                 div { class: "spacer-top", Card { title: "Tool-Aware Reduction",
                     div { class: "compact-notice",
@@ -840,6 +841,16 @@ fn render_compression_detail(
                     }
                 } }
             }
+            div { class: "spacer-top", Card { title: "Tool Families", DataTable {
+                thead { tr { th { "Family" } th { "Candidate" } th { class: "numeric", "Addressable" } th { class: "numeric", "Effective ↓" } th { "Shadow gate" } } }
+                tbody { for compressor in &detail.compressors { tr {
+                    td { Badge { text: compressor.tool_family.clone(), tone: if compressor.tool_family == "generic_control" { "neutral" } else { "accent" } } }
+                    td { class: "mono", "{compressor.compressor}" }
+                    td { class: "numeric", "{format_basis_points(compressor.addressable_token_share_basis_points)}" }
+                    td { class: "numeric", "{format_basis_points(compressor.estimated_reduction_basis_points)}" }
+                    td { Badge { text: if compressor.applicable_blocks > 0 { "measured" } else { "no signal" }, tone: if compressor.applicable_blocks > 0 { "warning" } else { "neutral" } } }
+                } } }
+            } } }
             div { class: "spacer-top", Card { title: "Candidate comparison", DataTable {
                 thead { tr { th { "Candidate" } th { "Provider readability" } th { class: "numeric", "Addressable" } th { class: "numeric", "Applicable" } th { class: "numeric", "Median byte ↓" } th { class: "numeric", "Byte ↓" } th { class: "numeric", "Effective byte ↓" } th { class: "numeric", "Unique byte ↓" } th { class: "numeric", "Est. token ↓" } th { class: "numeric", "Recovery" } th { class: "numeric", "Deterministic" } th { class: "numeric", "P95" } } }
                 tbody { for compressor in &detail.compressors { tr {

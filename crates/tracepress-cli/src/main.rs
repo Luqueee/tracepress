@@ -38,9 +38,9 @@ use tracepress_compression::{
     DetectedKind as CompressionDetectedKind, JsonCompactRecords, JsonEmptyNoiseFieldReducer,
     JsonKeyElision, JsonMinify, JsonNoop, JsonReadableTable, JsonRepeatedSubtree,
     JsonRepeatedValueReducer, JsonTabular, ReductionMetrics, ReductionPolicyDecision,
-    ReductionStatus, ShadowCompressor, ShellDiagnosticProjectionReducer, TextLogPrefixFold,
-    TextNoop, TextReadableBlockFold, TextReadableLineFold, TextRepeatedLine, TextRepeatedRun,
-    ToolFamily, ToolResultReducer, evaluate_with_estimator,
+    ReductionStatus, SearchResultReducer, ShadowCompressor, ShellDiagnosticProjectionReducer,
+    ShellSemanticFamily, TextLogPrefixFold, TextNoop, TextReadableBlockFold, TextReadableLineFold,
+    TextRepeatedLine, TextRepeatedRun, ToolFamily, ToolResultReducer, evaluate_with_estimator,
 };
 use tracepress_context::{
     ContextAnalysisLimits, ContextAnalysisResult, ContextAnalysisStatus, ContextBlockKind,
@@ -2584,6 +2584,7 @@ impl ShadowCompressionWorker {
             ("json.empty_noise_fields", 1),
             ("json.repeated_value_elision", 1),
             ("shell.diagnostic_projection", 1),
+            ("search.result_projection", 1),
             ("text.noop", 1),
             ("text.repeated_line", 1),
             ("text.repeated_run", 1),
@@ -2774,16 +2775,23 @@ fn evaluate_shadow_job(
             continue;
         };
         let shape = classify_shadow_shape(&content, metadata.detected_kind);
-        let shell_family = block
+        let shell_generic = block
             .tool_name
             .as_ref()
-            .map(|name| ToolFamily::from_tool_name(Some(name.as_str())));
-        let reduction_reducers: [(&dyn ToolResultReducer, bool); 3] = [
+            .map(|name| ToolFamily::from_tool_name(Some(name.as_str())))
+            == Some(ToolFamily::ShellGeneric);
+        let shell_family = if shell_generic {
+            classify_shell_semantic_family(&job.analysis.blocks, block, job.body.as_ref())
+        } else {
+            ShellSemanticFamily::Unknown
+        };
+        let reduction_reducers: [(&dyn ToolResultReducer, bool); 4] = [
             (&JsonEmptyNoiseFieldReducer, true),
             (&JsonRepeatedValueReducer, true),
+            (&ShellDiagnosticProjectionReducer, shell_generic),
             (
-                &ShellDiagnosticProjectionReducer,
-                shell_family == Some(ToolFamily::ShellGeneric),
+                &SearchResultReducer,
+                shell_family == ShellSemanticFamily::Search,
             ),
         ];
         let max_candidates = usize::try_from(limits.max_candidates_per_block).unwrap_or(usize::MAX);
@@ -2829,70 +2837,88 @@ fn evaluate_shadow_job(
                 &shape,
             ));
         }
-        if metadata.is_tool_result_json() {
-            for (reduction_index, (reduction_reducer, enabled)) in
-                reduction_reducers.iter().enumerate()
-            {
-                if !enabled {
-                    continue;
-                }
-                let candidate_index = json_compressors.len().saturating_add(reduction_index);
-                if candidate_index >= max_candidates {
-                    counters.record_candidate_drop();
-                    continue;
-                }
-                if !matches!(
-                    reduction_reducer
-                        .policy(metadata, u64::try_from(content.len()).unwrap_or(u64::MAX)),
-                    ReductionPolicyDecision::Reduce
-                        | ReductionPolicyDecision::KeepFullWithCandidate
-                ) {
-                    continue;
-                }
-                // A reducer is evaluated twice for determinism. Reserve a conservative shared
-                // budget for both passes so the shadow worker can never outrun its job bound.
-                let work = u64::try_from(content.len())
-                    .unwrap_or(u64::MAX)
-                    .max(1)
-                    .saturating_mul(2);
-                let Some(remaining) = remaining_work.checked_sub(work) else {
-                    counters.record_candidate_drop();
-                    counters.record_drop(ShadowDropReason::WorkBudget);
-                    continue;
-                };
-                remaining_work = remaining;
-                counters.record_candidate_attempt();
-                let reduced = reduction_reducer.reduce(&content, &limits);
-                let repeat = reduction_reducer.reduce(&content, &limits);
-                let deterministic = reduced.metrics().visible_fingerprint
-                    == repeat.metrics().visible_fingerprint
-                    && reduced.metrics().status == repeat.metrics().status;
-                let visible_estimate = reduced.visible().and_then(|bytes| {
-                    estimator
-                        .estimate(&EstimationRequest {
-                            model: None,
-                            content: bytes,
-                            limits: context_limits,
-                        })
-                        .tokens()
-                });
-                let reduced = reduced
-                    .with_estimates(metadata.input_estimated_tokens, visible_estimate)
-                    .with_deterministic(deterministic);
-                counters.record_candidate_completed();
-                let metrics = reduced.metrics();
-                records.push(shadow_reduction_candidate_record(
-                    &generator,
-                    experiment_id,
-                    job.snapshot_id,
-                    u64::from(block.ordinal),
-                    metrics,
-                    &shape,
-                ));
+        for (reduction_index, (reduction_reducer, enabled)) in reduction_reducers.iter().enumerate()
+        {
+            if !enabled {
+                continue;
             }
+            let candidate_index = json_compressors.len().saturating_add(reduction_index);
+            if candidate_index >= max_candidates {
+                counters.record_candidate_drop();
+                continue;
+            }
+            if !matches!(
+                reduction_reducer
+                    .policy(metadata, u64::try_from(content.len()).unwrap_or(u64::MAX)),
+                ReductionPolicyDecision::Reduce | ReductionPolicyDecision::KeepFullWithCandidate
+            ) {
+                continue;
+            }
+            // A reducer is evaluated twice for determinism. Reserve a conservative shared
+            // budget for both passes so the shadow worker can never outrun its job bound.
+            let work = u64::try_from(content.len())
+                .unwrap_or(u64::MAX)
+                .max(1)
+                .saturating_mul(2);
+            let Some(remaining) = remaining_work.checked_sub(work) else {
+                counters.record_candidate_drop();
+                counters.record_drop(ShadowDropReason::WorkBudget);
+                continue;
+            };
+            remaining_work = remaining;
+            counters.record_candidate_attempt();
+            let reduced = reduction_reducer.reduce(&content, &limits);
+            let repeat = reduction_reducer.reduce(&content, &limits);
+            let deterministic = reduced.metrics().visible_fingerprint
+                == repeat.metrics().visible_fingerprint
+                && reduced.metrics().status == repeat.metrics().status;
+            let visible_estimate = reduced.visible().and_then(|bytes| {
+                estimator
+                    .estimate(&EstimationRequest {
+                        model: None,
+                        content: bytes,
+                        limits: context_limits,
+                    })
+                    .tokens()
+            });
+            let reduced = reduced
+                .with_estimates(metadata.input_estimated_tokens, visible_estimate)
+                .with_deterministic(deterministic);
+            counters.record_candidate_completed();
+            let metrics = reduced.metrics();
+            records.push(shadow_reduction_candidate_record(
+                &generator,
+                experiment_id,
+                job.snapshot_id,
+                u64::from(block.ordinal),
+                metrics,
+                &shape,
+            ));
         }
     }
     records
+}
+
+fn classify_shell_semantic_family(
+    blocks: &[tracepress_context::ContextBlockDraft],
+    result: &tracepress_context::ContextBlockDraft,
+    body: &[u8],
+) -> ShellSemanticFamily {
+    let command = result
+        .tool_call_id
+        .as_ref()
+        .and_then(|result_call_id| {
+            blocks.iter().find(|candidate| {
+                candidate.kind == ContextBlockKind::ToolCall
+                    && candidate
+                        .tool_call_id
+                        .as_ref()
+                        .is_some_and(|call_id| call_id.as_str() == result_call_id.as_str())
+            })
+        })
+        .and_then(|call| shadow_block_content(body, call));
+    let output = shadow_block_content(body, result);
+    ShellSemanticFamily::from_transient_signals(command.as_deref(), output.as_deref())
 }
 
 fn shadow_block_content(

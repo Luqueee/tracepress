@@ -1,0 +1,271 @@
+{
+  "candidate_evaluation_drops": 0,
+  "candidate_evaluations_attempted": 6,
+  "candidate_evaluations_completed": 6,
+  "cohort": {
+    "search_sessions": 6,
+    "tests_sessions": 6,
+    "total_sessions": 12
+  },
+  "experiment_id": "PUBLIC_TOOL_WORKLOADS_001",
+  "families": [
+    {
+      "active_eligible": true,
+      "candidate": {
+        "addressable_share": 1.0,
+        "applicable": 6,
+        "canonical_correctness": true,
+        "determinism": true,
+        "effective_reduction": 0.2974400152428651,
+        "eligible": 6,
+        "id": "search.result_projection",
+        "recovery": true
+      },
+      "estimated_tokens": 18371,
+      "exposure_share": 0.6894209479491125,
+      "family": "search",
+      "raw_bytes": 73477,
+      "size_p50": 1354,
+      "size_p95": 18774,
+      "tasks": 6,
+      "tool_results": 6
+    },
+    {
+      "active_eligible": false,
+      "candidate": {
+        "addressable_share": 0.0,
+        "applicable": 0,
+        "canonical_correctness": null,
+        "determinism": null,
+        "effective_reduction": 0.0,
+        "eligible": 0,
+        "id": null,
+        "recovery": null
+      },
+      "estimated_tokens": 8276,
+      "exposure_share": 0.31057905205088754,
+      "family": "tests",
+      "raw_bytes": 33096,
+      "size_p50": 3827,
+      "size_p95": 8154,
+      "tasks": 6,
+      "tool_results": 6
+    }
+  ],
+  "forwarding_mutations": 0,
+  "limitations": [
+    "Outputs and commands were transient only; no repository content was persisted.",
+    "The cohort is a bounded public command shadow, not an active provider experiment.",
+    "Session persistence and provider cache causality are unavailable in this offline harness."
+  ],
+  "repository_pins": [
+    {
+      "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "repository": "BurntSushi/ripgrep",
+      "toolchain": "rg from PATH",
+      "url": "https://github.com/BurntSushi/ripgrep"
+    },
+    {
+      "commit_sha": "de30d8417f3d93bc0c16fc0a64092e197c46e36a",
+      "repository": "pytest-dev/pytest",
+      "toolchain": "Python 3.13 + pytest 8.4.1 from isolated /tmp target",
+      "url": "https://github.com/pytest-dev/pytest"
+    }
+  ],
+  "shadow_job_drops": 0,
+  "shadow_jobs_admitted": 12,
+  "shadow_jobs_processed": 12,
+  "shadow_only": true,
+  "status": "completed",
+  "tasks": [
+    {
+      "candidate": {
+        "byte_reduction": 457,
+        "canonical_equal": true,
+        "deterministic": true,
+        "family": "search",
+        "input_bytes": 1197,
+        "output_bytes": 740,
+        "recovery_verified": true,
+        "reducer": "search.result_projection",
+        "status": "Applicable"
+      },
+      "estimated_tokens": 300,
+      "family": "search",
+      "raw_bytes": 1197,
+      "repository": "BurntSushi/ripgrep",
+      "return_code": 0,
+      "task_id": "search-01"
+    },
+    {
+      "candidate": {
+        "byte_reduction": 13632,
+        "canonical_equal": true,
+        "deterministic": true,
+        "family": "search",
+        "input_bytes": 48472,
+        "output_bytes": 34840,
+        "recovery_verified": true,
+        "reducer": "search.result_projection",
+        "status": "Applicable"
+      },
+      "estimated_tokens": 12118,
+      "family": "search",
+      "raw_bytes": 48472,
+      "repository": "BurntSushi/ripgrep",
+      "return_code": 0,
+      "task_id": "search-02"
+    },
+    {
+      "candidate": {
+        "byte_reduction": 52,
+        "canonical_equal": true,
+        "deterministic": true,
+        "family": "search",
+        "input_bytes": 1354,
+        "output_bytes": 1302,
+        "recovery_verified": true,
+        "reducer": "search.result_projection",
+        "status": "Applicable"
+      },
+      "estimated_tokens": 339,
+      "family": "search",
+      "raw_bytes": 1354,
+      "repository": "BurntSushi/ripgrep",
+      "return_code": 0,
+      "task_id": "search-03"
+    },
+    {
+      "candidate": {
+        "byte_reduction": 7081,
+        "canonical_equal": true,
+        "deterministic": true,
+        "family": "search",
+        "input_bytes": 18774,
+        "output_bytes": 11693,
+        "recovery_verified": true,
+        "reducer": "search.result_projection",
+        "status": "Applicable"
+      },
+      "estimated_tokens": 4694,
+      "family": "search",
+      "raw_bytes": 18774,
+      "repository": "BurntSushi/ripgrep",
+      "return_code": 0,
+      "task_id": "search-04"
+    },
+    {
+      "candidate": {
+        "byte_reduction": 625,
+        "canonical_equal": true,
+        "deterministic": true,
+        "family": "search",
+        "input_bytes": 3544,
+        "output_bytes": 2919,
+        "recovery_verified": true,
+        "reducer": "search.result_projection",
+        "status": "Applicable"
+      },
+      "estimated_tokens": 886,
+      "family": "search",
+      "raw_bytes": 3544,
+      "repository": "BurntSushi/ripgrep",
+      "return_code": 0,
+      "task_id": "search-05"
+    },
+    {
+      "candidate": {
+        "byte_reduction": 8,
+        "canonical_equal": true,
+        "deterministic": true,
+        "family": "search",
+        "input_bytes": 136,
+        "output_bytes": 128,
+        "recovery_verified": true,
+        "reducer": "search.result_projection",
+        "status": "Applicable"
+      },
+      "estimated_tokens": 34,
+      "family": "search",
+      "raw_bytes": 136,
+      "repository": "BurntSushi/ripgrep",
+      "return_code": 0,
+      "task_id": "search-06"
+    },
+    {
+      "candidate": null,
+      "estimated_tokens": 956,
+      "family": "tests",
+      "raw_bytes": 3823,
+      "repository": "pytest-dev/pytest",
+      "return_code": 1,
+      "task_id": "tests-01",
+      "test_counts": {
+        "failed": 8,
+        "passed": 48
+      }
+    },
+    {
+      "candidate": null,
+      "estimated_tokens": 2747,
+      "family": "tests",
+      "raw_bytes": 10988,
+      "repository": "pytest-dev/pytest",
+      "return_code": 1,
+      "task_id": "tests-02",
+      "test_counts": {
+        "failed": 8,
+        "passed": 48
+      }
+    },
+    {
+      "candidate": null,
+      "estimated_tokens": 29,
+      "family": "tests",
+      "raw_bytes": 113,
+      "repository": "pytest-dev/pytest",
+      "return_code": 0,
+      "task_id": "tests-03",
+      "test_counts": {
+        "passed": 48
+      }
+    },
+    {
+      "candidate": null,
+      "estimated_tokens": 1548,
+      "family": "tests",
+      "raw_bytes": 6191,
+      "repository": "pytest-dev/pytest",
+      "return_code": 0,
+      "task_id": "tests-04",
+      "test_counts": {
+        "passed": 48
+      }
+    },
+    {
+      "candidate": null,
+      "estimated_tokens": 957,
+      "family": "tests",
+      "raw_bytes": 3827,
+      "repository": "pytest-dev/pytest",
+      "return_code": 1,
+      "task_id": "tests-05",
+      "test_counts": {
+        "failed": 8
+      }
+    },
+    {
+      "candidate": null,
+      "estimated_tokens": 2039,
+      "family": "tests",
+      "raw_bytes": 8154,
+      "repository": "pytest-dev/pytest",
+      "return_code": 1,
+      "task_id": "tests-06",
+      "test_counts": {
+        "failed": 3,
+        "passed": 48
+      }
+    }
+  ]
+}

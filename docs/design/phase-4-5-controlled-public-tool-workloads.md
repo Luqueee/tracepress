@@ -74,3 +74,22 @@ provider-token savings, cache effects, cost claims, or agent-quality results.
 and is eligible for a future paired quality pilot. Active Control/Treatment is deliberately not
 started in Phase 4.5. The next experiment must use the same pinned repositories and task IDs,
 with objective outcomes, session-level assignment, fail-open behavior, and no Kena input.
+
+## Quality-pilot preparation
+
+The reproducible Search answer key and a planned Control/Treatment schedule are prepared by:
+
+```text
+scripts/prepare_public_search_quality_pilot_001.py
+```
+
+The metadata-only artifact is:
+
+```text
+reports/public-tool-workloads-001/TRACEPRESS_SEARCH_QUALITY_PILOT_PREPARATION_001.{json,md}
+```
+
+This preparation deliberately starts zero provider sessions and performs zero request rewrites.
+It stores only aggregate match/file counts, public repository provenance, evaluator metadata, and
+planned session assignments. The active quality pilot remains gated until the runner is reviewed
+for fail-open behavior, recovery isolation, and provider usage instrumentation.

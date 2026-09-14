@@ -1,0 +1,289 @@
+{
+  "active_started": false,
+  "assignment": {
+    "arms": [
+      "Control",
+      "Treatment"
+    ],
+    "paired_tasks": 6,
+    "planned_assignments": 12,
+    "probability_basis_points": 5000,
+    "unit": "session"
+  },
+  "assignments": [
+    {
+      "arm": "Control",
+      "assignment_probability_basis_points": 5000,
+      "experiment_id": "public-search-quality-pilot-001",
+      "planned_only": true,
+      "policy_version": "search-quality-policy-v1",
+      "reducer_id": null,
+      "reducer_version": null,
+      "seed": 10173968685149224751,
+      "session_id": "planned-public-search-quality-pilot-001-search-01-control",
+      "task_id": "search-01"
+    },
+    {
+      "arm": "Treatment",
+      "assignment_probability_basis_points": 5000,
+      "experiment_id": "public-search-quality-pilot-001",
+      "planned_only": true,
+      "policy_version": "search-quality-policy-v1",
+      "reducer_id": "search.result_projection",
+      "reducer_version": 1,
+      "seed": 1824593561771759299,
+      "session_id": "planned-public-search-quality-pilot-001-search-01-treatment",
+      "task_id": "search-01"
+    },
+    {
+      "arm": "Control",
+      "assignment_probability_basis_points": 5000,
+      "experiment_id": "public-search-quality-pilot-001",
+      "planned_only": true,
+      "policy_version": "search-quality-policy-v1",
+      "reducer_id": null,
+      "reducer_version": null,
+      "seed": 9629928822425994879,
+      "session_id": "planned-public-search-quality-pilot-001-search-02-control",
+      "task_id": "search-02"
+    },
+    {
+      "arm": "Treatment",
+      "assignment_probability_basis_points": 5000,
+      "experiment_id": "public-search-quality-pilot-001",
+      "planned_only": true,
+      "policy_version": "search-quality-policy-v1",
+      "reducer_id": "search.result_projection",
+      "reducer_version": 1,
+      "seed": 7045019737979864565,
+      "session_id": "planned-public-search-quality-pilot-001-search-02-treatment",
+      "task_id": "search-02"
+    },
+    {
+      "arm": "Control",
+      "assignment_probability_basis_points": 5000,
+      "experiment_id": "public-search-quality-pilot-001",
+      "planned_only": true,
+      "policy_version": "search-quality-policy-v1",
+      "reducer_id": null,
+      "reducer_version": null,
+      "seed": 6136287670189329048,
+      "session_id": "planned-public-search-quality-pilot-001-search-03-control",
+      "task_id": "search-03"
+    },
+    {
+      "arm": "Treatment",
+      "assignment_probability_basis_points": 5000,
+      "experiment_id": "public-search-quality-pilot-001",
+      "planned_only": true,
+      "policy_version": "search-quality-policy-v1",
+      "reducer_id": "search.result_projection",
+      "reducer_version": 1,
+      "seed": 197574138167449173,
+      "session_id": "planned-public-search-quality-pilot-001-search-03-treatment",
+      "task_id": "search-03"
+    },
+    {
+      "arm": "Control",
+      "assignment_probability_basis_points": 5000,
+      "experiment_id": "public-search-quality-pilot-001",
+      "planned_only": true,
+      "policy_version": "search-quality-policy-v1",
+      "reducer_id": null,
+      "reducer_version": null,
+      "seed": 10429738438322658056,
+      "session_id": "planned-public-search-quality-pilot-001-search-04-control",
+      "task_id": "search-04"
+    },
+    {
+      "arm": "Treatment",
+      "assignment_probability_basis_points": 5000,
+      "experiment_id": "public-search-quality-pilot-001",
+      "planned_only": true,
+      "policy_version": "search-quality-policy-v1",
+      "reducer_id": "search.result_projection",
+      "reducer_version": 1,
+      "seed": 15435702234459935439,
+      "session_id": "planned-public-search-quality-pilot-001-search-04-treatment",
+      "task_id": "search-04"
+    },
+    {
+      "arm": "Control",
+      "assignment_probability_basis_points": 5000,
+      "experiment_id": "public-search-quality-pilot-001",
+      "planned_only": true,
+      "policy_version": "search-quality-policy-v1",
+      "reducer_id": null,
+      "reducer_version": null,
+      "seed": 6711888453638241931,
+      "session_id": "planned-public-search-quality-pilot-001-search-05-control",
+      "task_id": "search-05"
+    },
+    {
+      "arm": "Treatment",
+      "assignment_probability_basis_points": 5000,
+      "experiment_id": "public-search-quality-pilot-001",
+      "planned_only": true,
+      "policy_version": "search-quality-policy-v1",
+      "reducer_id": "search.result_projection",
+      "reducer_version": 1,
+      "seed": 5548770565727895719,
+      "session_id": "planned-public-search-quality-pilot-001-search-05-treatment",
+      "task_id": "search-05"
+    },
+    {
+      "arm": "Control",
+      "assignment_probability_basis_points": 5000,
+      "experiment_id": "public-search-quality-pilot-001",
+      "planned_only": true,
+      "policy_version": "search-quality-policy-v1",
+      "reducer_id": null,
+      "reducer_version": null,
+      "seed": 13243632020606035305,
+      "session_id": "planned-public-search-quality-pilot-001-search-06-control",
+      "task_id": "search-06"
+    },
+    {
+      "arm": "Treatment",
+      "assignment_probability_basis_points": 5000,
+      "experiment_id": "public-search-quality-pilot-001",
+      "planned_only": true,
+      "policy_version": "search-quality-policy-v1",
+      "reducer_id": "search.result_projection",
+      "reducer_version": 1,
+      "seed": 6709268063707218954,
+      "session_id": "planned-public-search-quality-pilot-001-search-06-treatment",
+      "task_id": "search-06"
+    }
+  ],
+  "determinism_failures": 0,
+  "experiment_id": "public-search-quality-pilot-001",
+  "family": "Search",
+  "forwarding_mutations": 0,
+  "limitations": [
+    "This artifact prepares an objective answer key; no provider session was started.",
+    "Commands, arguments, paths, source, and ToolResult bytes remained transient only.",
+    "Provider usage, cache behavior, recovery frequency, and task quality are unmeasured.",
+    "The next run must use the same pinned tasks with fail-open treatment handling."
+  ],
+  "phase": "4.5",
+  "policy_version": "search-quality-policy-v1",
+  "provider_requests": 0,
+  "quality_evaluator_ready": true,
+  "recovery_failures": 0,
+  "reducer": {
+    "id": "search.result_projection",
+    "version": 1
+  },
+  "repository_pins": [
+    {
+      "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "repository": "BurntSushi/ripgrep",
+      "url": "https://github.com/BurntSushi/ripgrep"
+    }
+  ],
+  "sessions": 0,
+  "shadow_job_drops": 0,
+  "shadow_jobs_admitted": 0,
+  "shadow_jobs_processed": 0,
+  "shadow_only": true,
+  "status": "prepared_not_started",
+  "tasks": [
+    {
+      "answer_key": {
+        "expected_exit_code": 0,
+        "expected_match_count": 20,
+        "expected_unique_file_count": 7
+      },
+      "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "evaluator": "KnownAnswer",
+      "expected_artifact": "QueryResult",
+      "ground_truth_content_persisted": false,
+      "paired_order": "control_first",
+      "repository": "BurntSushi/ripgrep",
+      "task_id": "search-01",
+      "timeout_ms": 120000,
+      "workload_family": "search"
+    },
+    {
+      "answer_key": {
+        "expected_exit_code": 0,
+        "expected_match_count": 547,
+        "expected_unique_file_count": 56
+      },
+      "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "evaluator": "KnownAnswer",
+      "expected_artifact": "QueryResult",
+      "ground_truth_content_persisted": false,
+      "paired_order": "treatment_first",
+      "repository": "BurntSushi/ripgrep",
+      "task_id": "search-02",
+      "timeout_ms": 120000,
+      "workload_family": "search"
+    },
+    {
+      "answer_key": {
+        "expected_exit_code": 0,
+        "expected_match_count": 13,
+        "expected_unique_file_count": 10
+      },
+      "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "evaluator": "KnownAnswer",
+      "expected_artifact": "QueryResult",
+      "ground_truth_content_persisted": false,
+      "paired_order": "treatment_first",
+      "repository": "BurntSushi/ripgrep",
+      "task_id": "search-03",
+      "timeout_ms": 120000,
+      "workload_family": "search"
+    },
+    {
+      "answer_key": {
+        "expected_exit_code": 0,
+        "expected_match_count": 321,
+        "expected_unique_file_count": 57
+      },
+      "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "evaluator": "KnownAnswer",
+      "expected_artifact": "QueryResult",
+      "ground_truth_content_persisted": false,
+      "paired_order": "control_first",
+      "repository": "BurntSushi/ripgrep",
+      "task_id": "search-04",
+      "timeout_ms": 120000,
+      "workload_family": "search"
+    },
+    {
+      "answer_key": {
+        "expected_exit_code": 0,
+        "expected_match_count": 38,
+        "expected_unique_file_count": 13
+      },
+      "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "evaluator": "KnownAnswer",
+      "expected_artifact": "QueryResult",
+      "ground_truth_content_persisted": false,
+      "paired_order": "control_first",
+      "repository": "BurntSushi/ripgrep",
+      "task_id": "search-05",
+      "timeout_ms": 120000,
+      "workload_family": "search"
+    },
+    {
+      "answer_key": {
+        "expected_exit_code": 0,
+        "expected_match_count": 2,
+        "expected_unique_file_count": 1
+      },
+      "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+      "evaluator": "KnownAnswer",
+      "expected_artifact": "QueryResult",
+      "ground_truth_content_persisted": false,
+      "paired_order": "treatment_first",
+      "repository": "BurntSushi/ripgrep",
+      "task_id": "search-06",
+      "timeout_ms": 120000,
+      "workload_family": "search"
+    }
+  ]
+}

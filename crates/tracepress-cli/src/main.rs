@@ -7,6 +7,7 @@
     clippy::indexing_slicing,
     clippy::map_unwrap_or,
     clippy::print_stdout,
+    clippy::print_stderr,
     clippy::unused_async,
     clippy::significant_drop_tightening,
     reason = "CLI boundary formats user-facing output and validates bounded fixed-size state"
@@ -2620,19 +2621,58 @@ impl ShadowCompressionWorker {
         if candidates.is_empty() {
             return;
         }
-        for chunk in candidates.chunks(16) {
-            if control(
-                &self.config,
-                ControlRequest::RecordShadowCandidates {
-                    candidates: chunk.to_vec(),
-                },
-            )
-            .await
-            .is_err()
-            {
-                self.counters.record_drop(ShadowDropReason::Persistence);
+        self.persist_shadow_candidates(candidates).await;
+    }
+
+    async fn persist_shadow_candidates(&self, candidates: Vec<ShadowCandidateRecord>) {
+        let mut batch = Vec::new();
+        for candidate in candidates {
+            let mut proposed = batch.clone();
+            proposed.push(candidate.clone());
+            if shadow_candidate_batch_fits(&proposed) {
+                batch.push(candidate);
+                continue;
+            }
+
+            if !batch.is_empty() {
+                self.persist_shadow_candidate_batch(std::mem::take(&mut batch))
+                    .await;
+            }
+            if shadow_candidate_batch_fits(std::slice::from_ref(&candidate)) {
+                batch.push(candidate);
+            } else {
+                self.report_shadow_persistence_failure(1, "candidate exceeds IPC body limit");
             }
         }
+        if !batch.is_empty() {
+            self.persist_shadow_candidate_batch(batch).await;
+        }
+    }
+
+    async fn persist_shadow_candidate_batch(&self, candidates: Vec<ShadowCandidateRecord>) {
+        let batch_size = candidates.len();
+        let result = control(
+            &self.config,
+            ControlRequest::RecordShadowCandidates { candidates },
+        )
+        .await;
+        match result {
+            Ok(ControlResponse::Ok { .. }) => {}
+            Ok(ControlResponse::Error { message }) => {
+                self.report_shadow_persistence_failure(batch_size, &message);
+            }
+            Ok(ControlResponse::Context { .. } | ControlResponse::ContextStatus { .. }) => {
+                self.report_shadow_persistence_failure(batch_size, "unexpected daemon response");
+            }
+            Err(error) => self.report_shadow_persistence_failure(batch_size, &error),
+        }
+    }
+
+    fn report_shadow_persistence_failure(&self, batch_size: usize, error: &str) {
+        // Keep persistence diagnostics metadata-only. Candidate payloads are never logged because
+        // shadow inputs may originate from a private workspace.
+        eprintln!("shadow candidate persistence failed: batch_size={batch_size} error={error}");
+        self.counters.record_drop(ShadowDropReason::Persistence);
     }
 
     async fn flush_counters(&self) {
@@ -2667,6 +2707,17 @@ impl ShadowCompressionWorker {
         )
         .await;
     }
+}
+
+/// Returns whether a shadow-candidate control request stays below the conservative IPC body
+/// budget. `IpcRequest` embeds the body as a JSON byte array, so the quarter-frame bound leaves
+/// room for that expansion and the authenticated envelope.
+fn shadow_candidate_batch_fits(candidates: &[ShadowCandidateRecord]) -> bool {
+    let body_limit = usize::try_from(BODY_BYTES / 4).unwrap_or(0);
+    let request = ControlRequest::RecordShadowCandidates {
+        candidates: candidates.to_vec(),
+    };
+    serde_json::to_vec(&request).is_ok_and(|body| body.len() <= body_limit)
 }
 
 #[allow(
@@ -5375,19 +5426,70 @@ mod tests {
     };
 
     use super::{
-        AnalysisSequence, BackgroundTaskSpawner, CONTEXT_INGESTION_QUEUE_HARD_CAP, Config,
-        ContextAnalysisDropReason, ContextAnalysisInput, ContextCounters, ContextReceipt,
-        ContextSnapshotId, ContextSnapshotStatus, ControlRequest, CorrelationCounters,
-        CorrelationStatus, DeferredAnalysisMetrics, DurableEventIngress, ObservationRecord,
-        OperationId, PendingAnalysisEvidence, RECORDER_QUEUE_ITEMS, RequestId, RunRecorder,
-        SessionId, TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator,
-        bounded_record_provider_observation_request, configure_codex_subscription,
-        context_ingestion_queue_capacity, measurement_metadata_line,
-        reconcile_pending_context_with, scheduler_metrics_line,
+        AnalysisSequence, BackgroundTaskSpawner, CONTEXT_INGESTION_QUEUE_HARD_CAP,
+        CompressionCandidateId, Config, ContextAnalysisDropReason, ContextAnalysisInput,
+        ContextCounters, ContextReceipt, ContextSnapshotId, ContextSnapshotStatus, ControlRequest,
+        CorrelationCounters, CorrelationStatus, DeferredAnalysisMetrics, DurableEventIngress,
+        ObservationRecord, OperationId, PendingAnalysisEvidence, RECORDER_QUEUE_ITEMS, RequestId,
+        RunRecorder, SessionId, ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus,
+        TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator, bounded_record_provider_observation_request,
+        configure_codex_subscription, context_ingestion_queue_capacity, measurement_metadata_line,
+        reconcile_pending_context_with, scheduler_metrics_line, shadow_candidate_batch_fits,
     };
 
     use tracepress_provider::{ObservationInput, ObservationLimits, parse_request, parse_response};
     use tracepress_proxy::{ContextAnalysisOutcome, ForwardId};
+
+    fn synthetic_shadow_candidate(
+        generator: &UuidV7Generator,
+        provider_readability: String,
+    ) -> ShadowCandidateRecord {
+        ShadowCandidateRecord {
+            candidate_id: CompressionCandidateId::generate(generator),
+            experiment_id: "test-shadow-batching".to_owned(),
+            snapshot_id: ContextSnapshotId::generate(generator),
+            block_ordinal: 0,
+            compressor_id: "json.noop".to_owned(),
+            compressor_version: "1".to_owned(),
+            status: ShadowCandidateStatus::NoImprovement,
+            input_bytes: 128,
+            output_bytes: Some(128),
+            bytes_delta: Some(0),
+            input_estimated_tokens: Some(32),
+            output_estimated_tokens: Some(32),
+            estimated_token_delta: Some(0),
+            processing_us: 1,
+            reversible: true,
+            recovery_verified: true,
+            deterministic: true,
+            original_fingerprint: vec![0_u8; 32].into_boxed_slice(),
+            candidate_fingerprint: Some(vec![0_u8; 32].into_boxed_slice()),
+            recovered_fingerprint: Some(vec![0_u8; 32].into_boxed_slice()),
+            first_modified_offset: None,
+            preserved_prefix_bytes: Some(128),
+            preserved_prefix_ratio_basis_points: Some(10_000),
+            cache_risk: ShadowCacheRisk::Unknown,
+            provider_readability,
+            json_root_kind: None,
+            json_array_length_bucket: None,
+            json_object_key_count_bucket: None,
+            json_homogeneity_basis_points: None,
+            json_primitive_cell_ratio_basis_points: None,
+            json_nested_cell_ratio_basis_points: None,
+            text_shape: None,
+            verified_at_us: Some(1),
+        }
+    }
+
+    #[test]
+    fn shadow_candidate_batches_are_bounded_by_ipc_body_size() {
+        let generator = UuidV7Generator::new();
+        let candidate = synthetic_shadow_candidate(&generator, "r".repeat(1_000));
+        assert!(shadow_candidate_batch_fits(std::slice::from_ref(
+            &candidate
+        )));
+        assert!(!shadow_candidate_batch_fits(&vec![candidate; 16]));
+    }
 
     #[test]
     fn codex_subscription_overrides_follow_the_exec_subcommand() {

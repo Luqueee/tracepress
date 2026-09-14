@@ -1,0 +1,36 @@
+{
+  "experiment_id": "active-compression-provider-aa-003",
+  "phase": "4.2_infrastructure_gate",
+  "runtime_commit": "a2bcdd682634121d03d9dff0189e11cea0f82109",
+  "provider": "authenticated ChatGPT Codex subscription",
+  "model": "gpt-5.6-luna",
+  "workload": "spaced_tool_result_json_v1",
+  "scope": "one cardinality-matched invocation per arm, two zstd provider requests per arm",
+  "analysis": {
+    "control_provider_requests": 2,
+    "active_provider_requests": 2,
+    "control_context_complete": "2/2",
+    "active_context_complete": "2/2",
+    "content_encoding": "zstd",
+    "active_attempts": 2,
+    "active_rewrites": 0,
+    "no_improvement": 1,
+    "not_applicable": 1,
+    "evaluated_spans": 1,
+    "evaluated_input_bytes": 12286,
+    "evaluated_candidate_bytes": 12286,
+    "recovery_failures": 0,
+    "determinism_failures": 0,
+    "resource_limits": 0,
+    "internal_errors": 0,
+    "provider_errors": 0,
+    "forwarding_mutations": 0
+  },
+  "interpretation": "The targeted real-provider span produced an equal-size json.minify candidate; the never-worse guard correctly retained the original request.",
+  "limitations": [
+    "This is a one-sample diagnostic, not a powered provider efficacy experiment.",
+    "No request or candidate body is persisted.",
+    "Equal byte counts do not establish provider serialization internals or provider impact.",
+    "No provider-token, cache, cost, quality, or savings claim is made."
+  ]
+}

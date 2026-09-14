@@ -21,8 +21,25 @@ import time
 from typing import Any
 
 
-EXPERIMENT_ID = "active-compression-provider-aa-002"
-PROMPT_VARIANT = "directed_tool_result_json_v1"
+EXPERIMENT_IDS = {
+    "directed_tool_result_json_v1": "active-compression-provider-aa-002",
+    "spaced_tool_result_json_v1": "active-compression-provider-aa-003",
+}
+PROMPTS = {
+    "directed_tool_result_json_v1": (
+        "Use the shell exactly once. Run python3 -c 'import json; print(json.dumps(["
+        "{'id':i,'name':'item-%03d'%i,'status':'ok' if i%3 else 'warning',"
+        "'value':'distinct-value-%03d-abcdef'%i,'active':bool(i%2)} for i in range(100)], indent=2))'. "
+        "Then reply only DONE."
+    ),
+    "spaced_tool_result_json_v1": (
+        "You MUST use the shell tool exactly once. Run this exact command: "
+        "python3 -c 'import json; print(json.dumps({\"kind\":\"spaced-json\","
+        "\"rows\":[{\"id\":i,\"status\":\"ok\"} for i in range(100)],"
+        "\"padding\":\"x\"*4096}, indent=4))'. Do not simulate it. "
+        "After it completes, answer only DONE."
+    ),
+}
 COUNTER_RE = re.compile(r"([a-zA-Z0-9_]+)=([0-9]+)")
 
 
@@ -30,6 +47,7 @@ def args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--repo-root", type=Path, default=Path(__file__).resolve().parents[1])
     parser.add_argument("--samples", type=int, default=10)
+    parser.add_argument("--workload", choices=sorted(PROMPTS), default="directed_tool_result_json_v1")
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-md", type=Path, required=True)
     options = parser.parse_args()
@@ -101,7 +119,16 @@ def counters(stdout: str) -> dict[str, int]:
     return result
 
 
-def run_arm(repo: Path, cli: Path, daemon: Path, name: str, active: bool, samples: int) -> dict[str, Any]:
+def run_arm(
+    repo: Path,
+    cli: Path,
+    daemon: Path,
+    experiment_id: str,
+    name: str,
+    active: bool,
+    samples: int,
+    prompt: str,
+) -> dict[str, Any]:
     root = Path(tempfile.mkdtemp(prefix=f"tracepress-provider-aa-{name}-"))
     environment = os.environ.copy()
     environment.pop("TRACEPRESS_UPSTREAM", None)
@@ -111,7 +138,7 @@ def run_arm(repo: Path, cli: Path, daemon: Path, name: str, active: bool, sample
             "TRACEPRESS_CONTEXT_ANALYSIS": "shadow",
             "TRACEPRESS_SHADOW_COMPRESSION": "off",
             "TRACEPRESS_ACTIVE_COMPRESSION": "json.minify" if active else "off",
-            "TRACEPRESS_MEASUREMENT_RUN_ID": f"{EXPERIMENT_ID}-{name}",
+            "TRACEPRESS_MEASUREMENT_RUN_ID": f"{experiment_id}-{name}",
         }
     )
     process: subprocess.Popen[str] | None = None
@@ -164,12 +191,6 @@ def run_arm(repo: Path, cli: Path, daemon: Path, name: str, active: bool, sample
         else:
             raise RuntimeError(f"{name} daemon did not become ready")
 
-        prompt = (
-            "Use the shell exactly once. Run python3 -c 'import json; print(json.dumps(["
-            "{'id':i,'name':'item-%03d'%i,'status':'ok' if i%3 else 'warning',"
-            "'value':'distinct-value-%03d-abcdef'%i,'active':bool(i%2)} for i in range(100)], indent=2))'. "
-            "Then reply only DONE."
-        )
         runs: list[dict[str, Any]] = []
         previous_requests = 0
         previous_snapshots = 0
@@ -235,9 +256,11 @@ def report(options: argparse.Namespace) -> dict[str, Any]:
     runtime_commit = subprocess.run(
         ["git", "rev-parse", "HEAD"], cwd=repo, check=True, capture_output=True, text=True
     ).stdout.strip()
+    prompt = PROMPTS[options.workload]
+    experiment_id = EXPERIMENT_IDS[options.workload]
     arms = [
-        run_arm(repo, cli, daemon, "control", False, options.samples),
-        run_arm(repo, cli, daemon, "active", True, options.samples),
+        run_arm(repo, cli, daemon, experiment_id, "control", False, options.samples, prompt),
+        run_arm(repo, cli, daemon, experiment_id, "active", True, options.samples, prompt),
     ]
     control, active = arms
     control_counts = [run["provider_requests"] for run in control["runs"]]
@@ -260,12 +283,12 @@ def report(options: argparse.Namespace) -> dict[str, Any]:
         )
     }
     return {
-        "experiment_id": EXPERIMENT_ID,
+        "experiment_id": experiment_id,
         "phase": "4.2_infrastructure_gate",
         "runtime_commit": runtime_commit,
         "provider": "authenticated ChatGPT Codex subscription",
         "model": "gpt-5.6-luna",
-        "workload": PROMPT_VARIANT,
+        "workload": options.workload,
         "samples_per_arm": options.samples,
         "arms": arms,
         "gates": {
@@ -292,7 +315,7 @@ def markdown(document: dict[str, Any]) -> str:
     gates = document["gates"]
     return "\n".join(
         [
-            "# TRACEPRESS ACTIVE COMPRESSION PROVIDER A/A 002",
+            f"# TRACEPRESS ACTIVE COMPRESSION PROVIDER A/A {document['experiment_id'].rsplit('-', 1)[-1].upper()}",
             "",
             "Cardinality-matched authenticated infrastructure gate for the explicit `json.minify` arm.",
             "No prompt, tool-result, response, header, or URL content is persisted in this report.",

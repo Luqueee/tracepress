@@ -99,3 +99,11 @@ A metadata-only diagnostic is recorded in
 The one eligible real-provider span evaluated to 224 input bytes and a 224-byte candidate; the
 never-worse guard therefore correctly kept the original request. The result does not expose the
 span content or infer provider serialization behavior.
+
+A targeted follow-up, `TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_DIAGNOSTIC_002.{json,md}`, used a
+single cardinality-matched invocation per arm with a deliberately spaced JSON-producing shell
+workload. The eligible real-provider span was 12,286 bytes before and after `json.minify`, with
+zero rewrites, recovery failures, determinism failures, resource-limit failures, internal errors,
+or provider errors. The never-worse guard therefore retained the original bytes. This is a
+diagnostic result, not provider efficacy evidence; no ten-sample cohort is justified until a real
+provider representation produces material local reduction.

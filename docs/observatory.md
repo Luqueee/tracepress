@@ -174,6 +174,14 @@ provider-impact evidence. The follow-up diagnostic
 `TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_DIAGNOSTIC_001.{json,md}` records why: one eligible span
 was evaluated at 224 input bytes and 224 candidate bytes, so the never-worse guard kept it.
 
+The targeted spaced-JSON diagnostic
+`TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_DIAGNOSTIC_002.{json,md}` repeats that check with one
+cardinality-matched invocation per arm and an explicitly spaced JSON-producing shell workload. The
+eligible span was 12,286 bytes before and after `json.minify`; rewrites, recovery failures,
+determinism failures, resource-limit failures, internal errors, provider errors, and forwarding
+mutations were all zero. It remains a diagnostic only, with no provider-token, cache, cost, quality,
+or savings claim, and is not expanded to N=10 without material reduction evidence.
+
 Errors have a browser-safe shape:
 
 ```json

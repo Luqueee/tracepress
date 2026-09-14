@@ -887,6 +887,13 @@ fn compressor_summaries(
                 byte_reduction_basis_points: input_bytes
                     .zip(byte_reduction)
                     .and_then(|(total, reduction)| ratio_basis_points(reduction, total)),
+                median_byte_reduction_basis_points: compressor_reduction_percentile(
+                    connection,
+                    experiment_id,
+                    &row.get::<_, String>(0)?,
+                    "bytes_delta",
+                    50,
+                )?,
                 estimated_input_tokens,
                 estimated_output_tokens,
                 estimated_reduction,
@@ -895,6 +902,13 @@ fn compressor_summaries(
                 estimated_reduction_basis_points: estimated_input_tokens
                     .zip(estimated_reduction)
                     .and_then(|(total, reduction)| ratio_basis_points(reduction, total)),
+                median_estimated_reduction_basis_points: compressor_reduction_percentile(
+                    connection,
+                    experiment_id,
+                    &row.get::<_, String>(0)?,
+                    "estimated_token_delta",
+                    50,
+                )?,
                 recovery_basis_points: ratio_basis_points(
                     nonnegative(row.get::<_, Option<i64>>(10)?.unwrap_or(0)),
                     nonnegative(row.get(11)?),
@@ -985,6 +999,51 @@ fn compressor_percentile(
         )
         .optional()
         .map(|value| value.and_then(to_u64))
+}
+
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the percentile query keeps metric and experiment scope explicit"
+)]
+fn compressor_reduction_percentile(
+    connection: &Connection,
+    experiment_id: &str,
+    compressor: &str,
+    metric: &str,
+    percentile: u64,
+) -> Result<Option<u16>, rusqlite::Error> {
+    let expression = match metric {
+        "bytes_delta" => "m.bytes_delta",
+        "estimated_token_delta" => "m.estimated_token_delta",
+        _ => return Ok(None),
+    };
+    let sql = format!(
+        "SELECT CAST({expression} * 10000 / NULLIF(CASE WHEN '{metric}' = 'bytes_delta' THEN m.input_bytes ELSE m.input_estimated_tokens END, 0) AS INTEGER)
+         FROM compression_candidates c
+         JOIN compression_candidate_metrics m ON m.candidate_id = c.candidate_id
+         WHERE c.experiment_id = ?1 AND c.compressor_id = ?2 AND c.status = 'applicable'
+           AND {expression} IS NOT NULL
+         ORDER BY {expression}"
+    );
+    let values = connection
+        .prepare(&sql)?
+        .query_map(params![experiment_id, compressor], |row| {
+            row.get::<_, i64>(0)
+        })?
+        .collect::<Result<Vec<_>, _>>()?;
+    if values.is_empty() {
+        return Ok(None);
+    }
+    let index = usize::try_from(
+        (u64::try_from(values.len().saturating_sub(1)).unwrap_or(0) * percentile) / 100,
+    )
+    .unwrap_or(0)
+    .min(values.len().saturating_sub(1));
+    Ok(values
+        .get(index)
+        .copied()
+        .and_then(to_u64)
+        .and_then(|value| u16::try_from(value.min(10_000)).ok()))
 }
 
 fn compression_histogram(

@@ -31,7 +31,10 @@ The Observatory Compression Lab exposes addressable estimated-token share, appli
 reduction, recovery/determinism, latency, structural cache-risk evidence, and provider readability.
 `cache_risk` remains structural evidence, not a provider-cache prediction.
 
-Phase 4.3 remains blocked until a naturalistic N=10 shadow pilot records at least one human-readable
-candidate with material addressable exposure and reduction, 100% deterministic recovery, bounded
-resource use, and zero forwarding mutations. If no candidate passes, report an insufficient
-deterministic/reversible opportunity instead of promoting active A/B.
+Naturalistic Shadow Pilot 003 completed 10 sessions and 31 provider requests. It recorded 0
+forwarding mutations, 0 recovery failures, 0 determinism failures, and 0 Unknown transformations,
+but 24 bounded shadow drops. The human-readable candidates observed 0% addressable/effective
+reduction in this cohort; `json.minify` remained a no-improvement control. Phase 4.3 is therefore
+blocked and no active candidate is selected. The current conclusion is an insufficient
+deterministic/reversible opportunity for active compression; any lossy or selective strategy needs
+a separately designed quality phase.

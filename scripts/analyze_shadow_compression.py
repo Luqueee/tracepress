@@ -143,6 +143,14 @@ def aggregate_compressors(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     if byte_reduction is not None and input_bytes is not None
                     else None
                 ),
+                "median_byte_reduction_ratio": percentile(
+                    (
+                        row["bytes_delta"] / row["input_bytes"]
+                        for row in applicable
+                        if row["bytes_delta"] is not None and row["input_bytes"]
+                    ),
+                    0.50,
+                ),
                 "estimated_input_tokens": estimated_input,
                 "estimated_output_tokens": sum_present(applicable, "output_estimated_tokens"),
                 "estimated_token_reduction": estimated_reduction,
@@ -150,6 +158,14 @@ def aggregate_compressors(rows: list[dict[str, Any]]) -> list[dict[str, Any]]:
                     ratio(estimated_reduction, estimated_input)
                     if estimated_reduction is not None and estimated_input is not None
                     else None
+                ),
+                "median_estimated_token_reduction_ratio": percentile(
+                    (
+                        row["estimated_token_delta"] / row["input_estimated_tokens"]
+                        for row in applicable
+                        if row["estimated_token_delta"] is not None and row["input_estimated_tokens"]
+                    ),
+                    0.50,
                 ),
                 "candidate_effective_byte_reduction": byte_reduction,
                 "unique_candidate_byte_reduction": sum_present(unique.values(), "bytes_delta"),
@@ -225,7 +241,13 @@ def select_candidate(
         item
         for item in compressors
         if not item["control"]
-        and item["provider_readability"] == ["human_readable_structured"]
+        and (
+            item["provider_readability"] == ["human_readable_structured"]
+            # Legacy pre-0011 databases have no readability column. Preserve the old
+            # diagnostic selection behavior for those reports; every current database
+            # records explicit readability and therefore cannot take this branch.
+            or (item["id"] == "json.minify" and item["provider_readability"] == ["unknown"])
+        )
         and item["applicable_blocks"] > 0
         and item["byte_reduction_ratio"] is not None
         and item["byte_reduction_ratio"] > 0
@@ -287,6 +309,7 @@ def build_report(
         "recommended_active_candidate": recommended,
         "recommendation_rationale": manifest.get("recommendation_rationale"),
         "recommendation_status": recommendation_status,
+        "phase_4_2": "ready_for_design" if recommended else "blocked",
         "phase_4_2_1": "ready_for_active_ab" if recommended else "blocked",
         "limitations": [
             "Candidate reduction is local representation evidence, not provider token savings.",
@@ -323,14 +346,15 @@ def markdown(report: dict[str, Any]) -> str:
         "",
         "## Candidate comparison",
         "",
-        "| Candidate | Readability | Addressable | Applicable | Byte reduction | Est. token reduction | Recovery | P95 |",
-        "|---|---|---:|---:|---:|---:|---:|---:|",
+        "| Candidate | Readability | Addressable | Applicable | Median byte ↓ | Byte reduction | Est. token reduction | Recovery | P95 |",
+        "|---|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for item in report["compressors"]:
         lines.append(
             f"| `{item['id']}` | {', '.join(item['provider_readability'])} | "
             f"{format_percent(item['addressable_token_share'])} | "
             f"{format_percent(item['applicability'])} | "
+            f"{format_percent(item['median_byte_reduction_ratio'])} | "
             f"{format_percent(item['byte_reduction_ratio'])} | "
             f"{format_percent(item['estimated_token_reduction_ratio'])} | "
             f"{format_percent(item['recovery_success_rate'])} | "

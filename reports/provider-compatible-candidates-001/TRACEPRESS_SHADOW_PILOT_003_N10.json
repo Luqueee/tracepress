@@ -1,0 +1,238 @@
+{
+  "analysis_complete": 31,
+  "analysis_snapshots": 31,
+  "compressors": [
+    {
+      "addressable_token_share": 0.0,
+      "applicability": 0.0,
+      "applicable_blocks": 0,
+      "byte_reduction": 0,
+      "byte_reduction_ratio": null,
+      "determinism_success_rate": 1.0,
+      "eligible_blocks": 24,
+      "estimated_input_tokens": 0,
+      "estimated_token_reduction": 0,
+      "estimated_token_reduction_ratio": null,
+      "id": "json.compact_records",
+      "input_bytes": 0,
+      "processing_us": {
+        "p50": 432,
+        "p95": 5037
+      },
+      "provider_readability": [
+        "human_readable_structured"
+      ],
+      "recovery_success_rate": 1.0,
+      "shape_distribution": {
+        "array_object": 24
+      }
+    },
+    {
+      "addressable_token_share": 0.0,
+      "applicability": 0.0,
+      "applicable_blocks": 0,
+      "byte_reduction": 0,
+      "byte_reduction_ratio": null,
+      "determinism_success_rate": 1.0,
+      "eligible_blocks": 26,
+      "estimated_input_tokens": 0,
+      "estimated_token_reduction": 0,
+      "estimated_token_reduction_ratio": null,
+      "id": "json.key_elision",
+      "input_bytes": 0,
+      "processing_us": {
+        "p50": 403,
+        "p95": 5036
+      },
+      "provider_readability": [
+        "human_readable_structured"
+      ],
+      "recovery_success_rate": 1.0,
+      "shape_distribution": {
+        "array_object": 26
+      }
+    },
+    {
+      "addressable_token_share": 0.0,
+      "applicability": 0.0,
+      "applicable_blocks": 0,
+      "byte_reduction": 0,
+      "byte_reduction_ratio": null,
+      "determinism_success_rate": 1.0,
+      "eligible_blocks": 20,
+      "estimated_input_tokens": 0,
+      "estimated_token_reduction": 0,
+      "estimated_token_reduction_ratio": null,
+      "id": "json.minify",
+      "input_bytes": 0,
+      "processing_us": {
+        "p50": 288,
+        "p95": 1531
+      },
+      "provider_readability": [
+        "provider_compatible_control"
+      ],
+      "recovery_success_rate": 1.0,
+      "shape_distribution": {
+        "array_object": 20
+      }
+    },
+    {
+      "addressable_token_share": 0.0,
+      "applicability": 0.0,
+      "applicable_blocks": 0,
+      "byte_reduction": 0,
+      "byte_reduction_ratio": null,
+      "determinism_success_rate": 1.0,
+      "eligible_blocks": 18,
+      "estimated_input_tokens": 0,
+      "estimated_token_reduction": 0,
+      "estimated_token_reduction_ratio": null,
+      "id": "json.noop",
+      "input_bytes": 0,
+      "processing_us": {
+        "p50": 122,
+        "p95": 922
+      },
+      "provider_readability": [
+        "provider_compatible_control"
+      ],
+      "recovery_success_rate": 1.0,
+      "shape_distribution": {
+        "array_object": 18
+      }
+    },
+    {
+      "addressable_token_share": 0.0,
+      "applicability": 0.0,
+      "applicable_blocks": 0,
+      "byte_reduction": 0,
+      "byte_reduction_ratio": null,
+      "determinism_success_rate": 1.0,
+      "eligible_blocks": 24,
+      "estimated_input_tokens": 0,
+      "estimated_token_reduction": 0,
+      "estimated_token_reduction_ratio": null,
+      "id": "json.readable_table",
+      "input_bytes": 0,
+      "processing_us": {
+        "p50": 410,
+        "p95": 5316
+      },
+      "provider_readability": [
+        "human_readable_structured"
+      ],
+      "recovery_success_rate": 1.0,
+      "shape_distribution": {
+        "array_object": 24
+      }
+    },
+    {
+      "addressable_token_share": 0.0,
+      "applicability": 0.0,
+      "applicable_blocks": 0,
+      "byte_reduction": 0,
+      "byte_reduction_ratio": null,
+      "determinism_success_rate": null,
+      "eligible_blocks": 22,
+      "estimated_input_tokens": 0,
+      "estimated_token_reduction": 0,
+      "estimated_token_reduction_ratio": null,
+      "id": "json.repeated_subtree",
+      "input_bytes": 0,
+      "processing_us": {
+        "p50": 351,
+        "p95": 1401
+      },
+      "provider_readability": [
+        "opaque_custom_encoding"
+      ],
+      "recovery_success_rate": null,
+      "shape_distribution": {
+        "array_object": 22
+      }
+    },
+    {
+      "addressable_token_share": 0.0,
+      "applicability": 0.0,
+      "applicable_blocks": 0,
+      "byte_reduction": 0,
+      "byte_reduction_ratio": null,
+      "determinism_success_rate": 1.0,
+      "eligible_blocks": 22,
+      "estimated_input_tokens": 0,
+      "estimated_token_reduction": 0,
+      "estimated_token_reduction_ratio": null,
+      "id": "json.tabular",
+      "input_bytes": 0,
+      "processing_us": {
+        "p50": 394,
+        "p95": 1570
+      },
+      "provider_readability": [
+        "opaque_custom_encoding"
+      ],
+      "recovery_success_rate": 1.0,
+      "shape_distribution": {
+        "array_object": 22
+      }
+    }
+  ],
+  "experiment": {
+    "determinism_failures": 0,
+    "experiment_id": "shadow-pilot-003",
+    "forwarding_mutations": 0,
+    "recovery_failures": 0,
+    "shadow_drops": 24,
+    "status": "completed"
+  },
+  "invocations": [
+    {
+      "index": 1,
+      "returncode": 0
+    },
+    {
+      "index": 2,
+      "returncode": 0
+    },
+    {
+      "index": 3,
+      "returncode": 0
+    },
+    {
+      "index": 4,
+      "returncode": 0
+    },
+    {
+      "index": 5,
+      "returncode": 0
+    },
+    {
+      "index": 6,
+      "returncode": 0
+    },
+    {
+      "index": 7,
+      "returncode": 0
+    },
+    {
+      "index": 8,
+      "returncode": 0
+    },
+    {
+      "index": 9,
+      "returncode": 0
+    },
+    {
+      "index": 10,
+      "returncode": 0
+    }
+  ],
+  "privacy": "metadata_only",
+  "provider_requests": 31,
+  "report_id": "TRACEPRESS_SHADOW_PILOT_003_N10",
+  "sessions": 10,
+  "status": "completed_degraded",
+  "successful_invocations": 10,
+  "unknown_transformed": 0
+}

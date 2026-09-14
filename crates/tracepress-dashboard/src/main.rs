@@ -823,12 +823,13 @@ fn render_compression_detail(
         Some(Ok(detail)) => rsx! {
             ShadowQualityBanner { quality: detail.summary.quality.clone() }
             div { class: "spacer-top", Card { title: "Candidate comparison", DataTable {
-                thead { tr { th { "Candidate" } th { "Provider readability" } th { class: "numeric", "Addressable" } th { class: "numeric", "Applicable" } th { class: "numeric", "Byte ↓" } th { class: "numeric", "Effective byte ↓" } th { class: "numeric", "Unique byte ↓" } th { class: "numeric", "Est. token ↓" } th { class: "numeric", "Recovery" } th { class: "numeric", "Deterministic" } th { class: "numeric", "P95" } } }
+                thead { tr { th { "Candidate" } th { "Provider readability" } th { class: "numeric", "Addressable" } th { class: "numeric", "Applicable" } th { class: "numeric", "Median byte ↓" } th { class: "numeric", "Byte ↓" } th { class: "numeric", "Effective byte ↓" } th { class: "numeric", "Unique byte ↓" } th { class: "numeric", "Est. token ↓" } th { class: "numeric", "Recovery" } th { class: "numeric", "Deterministic" } th { class: "numeric", "P95" } } }
                 tbody { for compressor in &detail.compressors { tr {
                     td { class: "mono", "{compressor.compressor}" span { class: "muted", " v{compressor.version}" } }
                     td { Badge { text: compressor.provider_readability.clone(), tone: if compressor.provider_readability == "human_readable_structured" { "success" } else { "neutral" } } }
                     td { class: "numeric", "{format_basis_points(compressor.addressable_token_share_basis_points)}" }
                     td { class: "numeric", "{format_basis_points(compressor.applicability_basis_points)}" }
+                    td { class: "numeric", "{format_basis_points(compressor.median_byte_reduction_basis_points)}" }
                     td { class: "numeric", "{format_basis_points(compressor.byte_reduction_basis_points)}" }
                     td { class: "numeric mono", "{format_optional_u64(compressor.candidate_effective_byte_reduction)}" }
                     td { class: "numeric mono", "{format_optional_u64(compressor.unique_candidate_byte_reduction)}" }

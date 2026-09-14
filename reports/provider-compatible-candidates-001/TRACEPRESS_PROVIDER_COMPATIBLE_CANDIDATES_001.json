@@ -2,7 +2,7 @@
   "report_id": "TRACEPRESS_PROVIDER_COMPATIBLE_CANDIDATES_001",
   "report_version": 1,
   "phase": "4.2.1",
-  "status": "blocked_pending_naturalistic_pilot_003",
+  "status": "completed_no_material_provider_compatible_candidate",
   "frozen_phase_4_0_sha": "93ffe0c9c32a0f9a78027c6159e70236b2e6a598",
   "scope": {
     "targets": ["ToolGenerated/ToolResult/Json", "ToolGenerated/ToolResult/PlainText"],
@@ -12,12 +12,12 @@
   },
   "candidates": [
     {"id": "json.minify", "provider_readability": "provider_compatible_control", "active_candidate_status": "rejected_no_real_improvement"},
-    {"id": "json.readable_table", "provider_readability": "human_readable_structured", "status": "shadow_only_pending_real_applicability"},
-    {"id": "json.compact_records", "provider_readability": "human_readable_structured", "status": "shadow_only_pending_real_applicability"},
-    {"id": "json.key_elision", "provider_readability": "human_readable_structured", "status": "shadow_only_pending_real_applicability"},
-    {"id": "text.readable_line_fold", "provider_readability": "human_readable_structured", "status": "shadow_only_pending_real_applicability"},
-    {"id": "text.readable_block_fold", "provider_readability": "human_readable_structured", "status": "shadow_only_pending_real_applicability"},
-    {"id": "text.log_prefix_fold", "provider_readability": "human_readable_structured", "status": "shadow_only_pending_real_applicability"},
+    {"id": "json.readable_table", "provider_readability": "human_readable_structured", "status": "shadow_only_no_material_reduction_observed"},
+    {"id": "json.compact_records", "provider_readability": "human_readable_structured", "status": "shadow_only_no_material_reduction_observed"},
+    {"id": "json.key_elision", "provider_readability": "human_readable_structured", "status": "shadow_only_no_material_reduction_observed"},
+    {"id": "text.readable_line_fold", "provider_readability": "human_readable_structured", "status": "not_observed_in_cohort"},
+    {"id": "text.readable_block_fold", "provider_readability": "human_readable_structured", "status": "not_observed_in_cohort"},
+    {"id": "text.log_prefix_fold", "provider_readability": "human_readable_structured", "status": "not_observed_in_cohort"},
     {"id": "json.tabular", "provider_readability": "opaque_custom_encoding", "status": "research_upper_bound_shadow_only"}
   ],
   "probe_characterization": {
@@ -28,15 +28,15 @@
   },
   "gates": {
     "shape_characterization": "probe_only",
-    "naturalistic_shadow_pilot_003_n10": "pending",
-    "material_addressable_reduction": "pending",
+    "naturalistic_shadow_pilot_003_n10": "completed_degraded",
+    "material_addressable_reduction": "none_observed",
     "recovery": "unit_and_infrastructure_verified",
     "determinism": "unit_and_infrastructure_verified",
     "phase_4_3": "blocked"
   },
   "limitations": [
-    "The available probe is one session and is not a naturalistic N=10 cohort.",
-    "No provider-compatible candidate is selected for active A/B.",
+    "Naturalistic Shadow Pilot 003 completed ten sessions but recorded 24 bounded shadow drops.",
+    "No human-readable candidate produced a material applicable reduction; active A/B is not justified.",
     "Local representation reduction is not provider token, cache, cost, or quality evidence."
   ]
 }

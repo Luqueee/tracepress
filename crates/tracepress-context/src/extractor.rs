@@ -456,6 +456,31 @@ where
         state.mark_partial(ContextAnalysisReason::Malformed);
     }
 
+    // Responses tool results commonly carry only the call id. Reuse the bounded tool name from
+    // the matching call metadata so downstream family characterization can classify the result
+    // without inspecting its command, arguments, or output bytes.
+    let tool_names_by_call_id: HashMap<String, SpanNodeId> = state
+        .candidates
+        .iter()
+        .filter(|candidate| matches!(candidate.kind, ContextBlockKind::ToolCall))
+        .filter_map(|candidate| {
+            let call_id = candidate
+                .tool_call_id
+                .and_then(|node| index.node(node))
+                .and_then(|node| decode_json_string(request, node.span(), limits).ok())?;
+            Some((call_id, candidate.tool_name?))
+        })
+        .collect();
+    for candidate in &mut state.candidates {
+        if matches!(candidate.kind, ContextBlockKind::ToolResult) && candidate.tool_name.is_none() {
+            candidate.tool_name = candidate
+                .tool_call_id
+                .and_then(|node| index.node(node))
+                .and_then(|node| decode_json_string(request, node.span(), limits).ok())
+                .and_then(|call_id| tool_names_by_call_id.get(&call_id).copied());
+        }
+    }
+
     let mut model = None;
     if let Some(root) = root.filter(|node| node.kind() == JsonValueKind::Object) {
         if let Some(model_node) = first_named(index, request, root.id(), "model") {

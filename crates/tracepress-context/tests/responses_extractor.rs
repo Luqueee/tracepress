@@ -112,6 +112,10 @@ fn responses_blocks_keep_exact_original_spans_and_measure_safe_content() {
         br#"{"type":"function_call_output","call_id":"call_1","output":"result"}"#
     );
     assert_eq!(tool_result.origin, ContextOrigin::ToolGenerated);
+    assert_eq!(
+        tool_result.tool_name.as_ref().map(|value| value.as_str()),
+        Some("lookup")
+    );
     assert!(tool_result.semantic_fingerprint.is_some());
 
     let debug = format!("{analysis:?}");

@@ -1,0 +1,43 @@
+{
+  "report_id": "TRACEPRESS_TOOL_AWARE_SHADOW_001",
+  "experiment_id": "phase-4-4-shell-shadow-001",
+  "status": "completed",
+  "metadata_only": true,
+  "privacy": "aggregated_metadata_only",
+  "cohort": {
+    "sessions": 10,
+    "successful_invocations": 10,
+    "provider_requests": 21,
+    "analysis_complete": 21,
+    "tool_result_family": "shell_generic",
+    "detected_kind": "json",
+    "estimated_tokens": 18257,
+    "plain_text_blocks": 0
+  },
+  "shadow_integrity": {
+    "shadow_jobs_admitted": 21,
+    "shadow_jobs_processed": 21,
+    "shadow_job_drops": 0,
+    "candidate_evaluations_attempted": 117,
+    "candidate_evaluations_completed": 117,
+    "candidate_evaluation_drops": 0,
+    "forwarding_mutations": 0,
+    "recovery_failures": 0,
+    "determinism_failures": 0,
+    "unknown_transformed": 0
+  },
+  "reducer": {
+    "id": "shell.diagnostic_projection",
+    "eligible_blocks": 9,
+    "applicable_blocks": 0,
+    "addressable_token_share": 0.0,
+    "provider_readability": "human_readable_structured"
+  },
+  "decision": "no_material_shadow_reducer_opportunity",
+  "claims": {
+    "provider_token_savings": false,
+    "provider_cache_impact": false,
+    "economic_impact": false,
+    "quality_preservation": false
+  }
+}

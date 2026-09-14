@@ -31,11 +31,13 @@ pub use json::{
     JsonRepeatedSubtree, JsonTabular,
 };
 pub use quality::{
-    ExpectedArtifactKind, QualityEvaluatorKind, QualityOutcome, QualityOutcomeStatus, QualityTask,
+    ExpectedArtifactKind, QualityAssignment, QualityEvaluatorKind, QualityExperimentArm,
+    QualityOutcome, QualityOutcomeStatus, QualitySessionMetrics, QualityTask, ToolFamily,
 };
 pub use reduction::{
     JsonEmptyNoiseFieldReducer, JsonRepeatedValueReducer, ReductionCandidate, ReductionMetrics,
-    ReductionPolicyDecision, ReductionStatus, TOOL_AWARE_REDUCTION_VERSION, ToolResultReducer,
+    ReductionPolicyDecision, ReductionStatus, ShellDiagnosticProjectionReducer,
+    TOOL_AWARE_REDUCTION_VERSION, ToolResultReducer,
 };
 pub use text::{
     TextLogPrefixFold, TextNoop, TextReadableBlockFold, TextReadableLineFold, TextRepeatedLine,
@@ -186,9 +188,9 @@ impl Default for CompressionLimits {
         Self {
             max_candidate_input_bytes: 1_048_576,
             max_candidate_output_bytes: 1_048_576,
-            // The Phase 4.3 set contains seven JSON and six plain-text controls/candidates,
-            // plus the two bounded tool-aware JSON reducers.
-            max_candidates_per_block: 15,
+            // The Phase 4.4 set contains seven JSON and six plain-text controls/candidates,
+            // plus two generic and one family-specific shadow reducer.
+            max_candidates_per_block: 16,
             max_shadow_work_units: 2_000_000,
             max_shadow_wall_time_ms: NonZeroU64::new(100).unwrap_or(NonZeroU64::MIN),
             max_shadow_memory_bytes: 4_194_304,

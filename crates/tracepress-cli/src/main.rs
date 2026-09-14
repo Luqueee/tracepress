@@ -38,9 +38,9 @@ use tracepress_compression::{
     DetectedKind as CompressionDetectedKind, JsonCompactRecords, JsonEmptyNoiseFieldReducer,
     JsonKeyElision, JsonMinify, JsonNoop, JsonReadableTable, JsonRepeatedSubtree,
     JsonRepeatedValueReducer, JsonTabular, ReductionMetrics, ReductionPolicyDecision,
-    ReductionStatus, ShadowCompressor, TextLogPrefixFold, TextNoop, TextReadableBlockFold,
-    TextReadableLineFold, TextRepeatedLine, TextRepeatedRun, ToolResultReducer,
-    evaluate_with_estimator,
+    ReductionStatus, ShadowCompressor, ShellDiagnosticProjectionReducer, TextLogPrefixFold,
+    TextNoop, TextReadableBlockFold, TextReadableLineFold, TextRepeatedLine, TextRepeatedRun,
+    ToolFamily, ToolResultReducer, evaluate_with_estimator,
 };
 use tracepress_context::{
     ContextAnalysisLimits, ContextAnalysisResult, ContextAnalysisStatus, ContextBlockKind,
@@ -2583,6 +2583,7 @@ impl ShadowCompressionWorker {
             ("json.key_elision", 1),
             ("json.empty_noise_fields", 1),
             ("json.repeated_value_elision", 1),
+            ("shell.diagnostic_projection", 1),
             ("text.noop", 1),
             ("text.repeated_line", 1),
             ("text.repeated_run", 1),
@@ -2758,8 +2759,6 @@ fn evaluate_shadow_job(
         &TextReadableBlockFold,
         &TextLogPrefixFold,
     ];
-    let reduction_reducers: [&dyn ToolResultReducer; 2] =
-        [&JsonEmptyNoiseFieldReducer, &JsonRepeatedValueReducer];
     let mut records = Vec::new();
     let mut remaining_work = limits.max_shadow_work_units;
     for block in &job.analysis.blocks[..accepted] {
@@ -2775,6 +2774,18 @@ fn evaluate_shadow_job(
             continue;
         };
         let shape = classify_shadow_shape(&content, metadata.detected_kind);
+        let shell_family = block
+            .tool_name
+            .as_ref()
+            .map(|name| ToolFamily::from_tool_name(Some(name.as_str())));
+        let reduction_reducers: [(&dyn ToolResultReducer, bool); 3] = [
+            (&JsonEmptyNoiseFieldReducer, true),
+            (&JsonRepeatedValueReducer, true),
+            (
+                &ShellDiagnosticProjectionReducer,
+                shell_family == Some(ToolFamily::ShellGeneric),
+            ),
+        ];
         let max_candidates = usize::try_from(limits.max_candidates_per_block).unwrap_or(usize::MAX);
         for (candidate_index, compressor) in compressors.iter().enumerate() {
             if candidate_index >= max_candidates {
@@ -2819,7 +2830,12 @@ fn evaluate_shadow_job(
             ));
         }
         if metadata.is_tool_result_json() {
-            for (reduction_index, reduction_reducer) in reduction_reducers.iter().enumerate() {
+            for (reduction_index, (reduction_reducer, enabled)) in
+                reduction_reducers.iter().enumerate()
+            {
+                if !enabled {
+                    continue;
+                }
                 let candidate_index = json_compressors.len().saturating_add(reduction_index);
                 if candidate_index >= max_candidates {
                     counters.record_candidate_drop();

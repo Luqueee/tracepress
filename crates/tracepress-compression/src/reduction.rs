@@ -13,6 +13,8 @@ use crate::{BlockMetadata, CompressionLimits, TransformError, digest};
 
 /// Version of the Phase 4.3 reducer contract.
 pub const TOOL_AWARE_REDUCTION_VERSION: u32 = 1;
+const SHELL_HEAD_LINES: usize = 24;
+const SHELL_TAIL_LINES: usize = 24;
 
 /// Conservative decision made before a reducer is allowed to produce a shadow view.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, PartialEq, Serialize)]
@@ -507,6 +509,184 @@ impl ToolResultReducer for JsonRepeatedValueReducer {
     }
 }
 
+/// First family-specific Phase 4.4 reducer for shell-shaped JSON results.
+///
+/// It only considers an object carrying an explicit `stdout` or `output` string plus an execution
+/// status (`exit_code` or `status`). Long output is represented by a bounded head/tail view with an
+/// explicit omission marker. The original remains available only through the local recovery
+/// boundary; this reducer is shadow-only until objective task quality is measured.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct ShellDiagnosticProjectionReducer;
+
+impl ToolResultReducer for ShellDiagnosticProjectionReducer {
+    fn id(&self) -> &'static str {
+        "shell.diagnostic_projection"
+    }
+
+    fn version(&self) -> u32 {
+        TOOL_AWARE_REDUCTION_VERSION
+    }
+
+    fn supports(&self, metadata: BlockMetadata) -> bool {
+        metadata.is_tool_result_json()
+    }
+
+    fn policy(&self, metadata: BlockMetadata, input_bytes: u64) -> ReductionPolicyDecision {
+        if !self.supports(metadata) {
+            return ReductionPolicyDecision::Unsupported;
+        }
+        if input_bytes < 256 {
+            ReductionPolicyDecision::KeepFull
+        } else {
+            ReductionPolicyDecision::KeepFullWithCandidate
+        }
+    }
+
+    #[allow(
+        clippy::too_many_lines,
+        reason = "the family reducer keeps strict shape checks, bounded projection, and metadata accounting together"
+    )]
+    fn reduce(&self, input: &[u8], limits: &CompressionLimits) -> ReductionCandidate {
+        let started = std::time::Instant::now();
+        let input_bytes = u64::try_from(input.len()).unwrap_or(u64::MAX);
+        let original_fingerprint = digest(input);
+        let base = |status| ReductionCandidate {
+            metrics: ReductionMetrics {
+                reducer_id: self.id(),
+                reducer_version: self.version(),
+                status,
+                input_bytes,
+                visible_bytes: None,
+                gross_bytes_delta: None,
+                input_estimated_tokens: None,
+                visible_estimated_tokens: None,
+                gross_estimated_token_delta: None,
+                processing_us: elapsed_us(started),
+                omitted_fields: 0,
+                omitted_items: 0,
+                recovery_available: false,
+                recovery_verified: false,
+                deterministic: true,
+                recovery_id: None,
+                original_fingerprint,
+                visible_fingerprint: None,
+                first_modified_offset: None,
+                preserved_prefix_bytes: None,
+                provider_readability: "human_readable_structured",
+            },
+            visible: None,
+            original: None,
+        };
+        if input_bytes > limits.max_candidate_input_bytes
+            || input_bytes > limits.max_shadow_memory_bytes
+        {
+            return base(ReductionStatus::ResourceLimit);
+        }
+        match crate::json::validate_json(input, limits) {
+            Ok(()) => {}
+            Err(TransformError::NotApplicable) => return base(ReductionStatus::NotApplicable),
+            Err(TransformError::ResourceLimit) => return base(ReductionStatus::ResourceLimit),
+            Err(TransformError::InvalidInput) => return base(ReductionStatus::InvalidInput),
+            Err(_) => return base(ReductionStatus::InternalError),
+        }
+        let Ok(Value::Object(mut object)) = serde_json::from_slice::<Value>(input) else {
+            return base(ReductionStatus::NotApplicable);
+        };
+        if !object.contains_key("exit_code") && !object.contains_key("status") {
+            return base(ReductionStatus::NotApplicable);
+        }
+        let output_key = ["stdout", "output"].into_iter().find(|key| {
+            object
+                .get(*key)
+                .and_then(Value::as_str)
+                .is_some_and(|value| value.contains('\n'))
+        });
+        let Some(output_key) = output_key else {
+            return base(ReductionStatus::NotApplicable);
+        };
+        let Some(output) = object.get(output_key).and_then(Value::as_str) else {
+            return base(ReductionStatus::NotApplicable);
+        };
+        let lines: Vec<&str> = output.split('\n').collect();
+        if lines.len()
+            <= SHELL_HEAD_LINES
+                .saturating_add(SHELL_TAIL_LINES)
+                .saturating_add(1)
+        {
+            return base(ReductionStatus::NoImprovement);
+        }
+        let omitted_items = lines
+            .len()
+            .saturating_sub(SHELL_HEAD_LINES.saturating_add(SHELL_TAIL_LINES));
+        let work = u64::try_from(lines.len())
+            .unwrap_or(u64::MAX)
+            .saturating_add(input_bytes);
+        if work > limits.max_shadow_work_units {
+            return base(ReductionStatus::ResourceLimit);
+        }
+        let Some(head) = lines.get(..SHELL_HEAD_LINES) else {
+            return base(ReductionStatus::InternalError);
+        };
+        let tail_start = lines.len().saturating_sub(SHELL_TAIL_LINES);
+        let Some(tail) = lines.get(tail_start..) else {
+            return base(ReductionStatus::InternalError);
+        };
+        let mut projected = head.join("\n");
+        projected.push_str("\n[Tracepress omitted ");
+        projected.push_str(&omitted_items.to_string());
+        projected.push_str(" output lines; local recovery is available]\n");
+        projected.push_str(&tail.join("\n"));
+        let _previous = object.insert(output_key.to_owned(), Value::String(projected));
+        let Ok(visible) = serde_json::to_vec(&Value::Object(object)) else {
+            return base(ReductionStatus::InternalError);
+        };
+        let visible_bytes = u64::try_from(visible.len()).unwrap_or(u64::MAX);
+        if visible_bytes > limits.max_candidate_output_bytes
+            || visible_bytes.saturating_add(input_bytes) > limits.max_shadow_memory_bytes
+            || elapsed_us(started) > limits.max_shadow_wall_time_ms.get().saturating_mul(1_000)
+        {
+            return base(ReductionStatus::ResourceLimit);
+        }
+        if visible_bytes >= input_bytes {
+            return base(ReductionStatus::NoImprovement);
+        }
+        let visible_fingerprint = digest(&visible);
+        let preserved_prefix_bytes = common_prefix(input, &visible);
+        let recovered = input.to_vec().into_boxed_slice();
+        ReductionCandidate {
+            metrics: ReductionMetrics {
+                reducer_id: self.id(),
+                reducer_version: self.version(),
+                status: ReductionStatus::Applicable,
+                input_bytes,
+                visible_bytes: Some(visible_bytes),
+                gross_bytes_delta: Some(input_bytes.saturating_sub(visible_bytes)),
+                input_estimated_tokens: None,
+                visible_estimated_tokens: None,
+                gross_estimated_token_delta: None,
+                processing_us: elapsed_us(started),
+                omitted_fields: 0,
+                omitted_items: u64::try_from(omitted_items).unwrap_or(u64::MAX),
+                recovery_available: true,
+                recovery_verified: digest(&recovered) == original_fingerprint,
+                deterministic: true,
+                recovery_id: Some(opaque_recovery_id(original_fingerprint)),
+                original_fingerprint,
+                visible_fingerprint: Some(visible_fingerprint),
+                first_modified_offset: (preserved_prefix_bytes < input.len()
+                    || preserved_prefix_bytes < visible.len())
+                .then_some(u64::try_from(preserved_prefix_bytes).unwrap_or(u64::MAX)),
+                preserved_prefix_bytes: Some(
+                    u64::try_from(preserved_prefix_bytes).unwrap_or(u64::MAX),
+                ),
+                provider_readability: "human_readable_structured",
+            },
+            visible: Some(visible.into_boxed_slice()),
+            original: Some(recovered),
+        }
+    }
+}
+
 const fn is_json_scalar(value: &Value) -> bool {
     matches!(
         value,
@@ -737,6 +917,41 @@ mod tests {
         let reducer = JsonRepeatedValueReducer;
         let result = reducer.reduce(
             br#"[{"name":"a","status":"ok"},{"name":"b","status":"error"}]"#,
+            &CompressionLimits::default(),
+        );
+        assert_eq!(result.metrics().status, ReductionStatus::NotApplicable);
+    }
+
+    #[test]
+    fn shell_projection_is_bounded_human_readable_and_recoverable() {
+        let output = (0..100)
+            .map(|index| format!("diagnostic-{index}"))
+            .collect::<Vec<_>>()
+            .join("\n");
+        let input = serde_json::json!({
+            "exit_code": 0,
+            "stdout": output,
+            "stderr": "",
+        });
+        let input = serde_json::to_vec(&input).unwrap_or_default();
+        let reducer = ShellDiagnosticProjectionReducer;
+        let result = reducer.reduce(&input, &CompressionLimits::default());
+
+        assert_eq!(result.metrics().status, ReductionStatus::Applicable);
+        assert_eq!(result.metrics().omitted_items, 52);
+        assert!(result.metrics().recovery_verified);
+        assert_eq!(result.recover().as_deref(), Some(input.as_slice()));
+        let visible = String::from_utf8_lossy(result.visible().unwrap_or_default());
+        assert!(visible.contains("Tracepress omitted 52 output lines"));
+        assert!(visible.contains("diagnostic-0"));
+        assert!(visible.contains("diagnostic-99"));
+    }
+
+    #[test]
+    fn shell_projection_rejects_json_without_execution_status() {
+        let reducer = ShellDiagnosticProjectionReducer;
+        let result = reducer.reduce(
+            br#"{"stdout":"line 1\nline 2\nline 3"}"#,
             &CompressionLimits::default(),
         );
         assert_eq!(result.metrics().status, ReductionStatus::NotApplicable);

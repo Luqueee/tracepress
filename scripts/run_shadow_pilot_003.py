@@ -20,6 +20,8 @@ import tempfile
 import time
 from typing import Any
 
+from characterize_provider_shapes import percentile, tool_family
+
 
 PROMPTS = [
     "Use one read-only shell command to list the top-level Tracepress directories, then summarize what each is for. Do not modify files.",
@@ -148,6 +150,70 @@ def aggregate(database: Path, experiment_id: str) -> dict[str, Any]:
         }
         for row in family_rows
     ]
+    tool_rows = connection.execute(
+        """SELECT origin, kind, COALESCE(detected_kind, 'unavailable') AS detected_kind,
+                  raw_bytes, estimated_tokens, exact_fingerprint, tool_name,
+                  json_item_count, json_depth
+           FROM context_block_occurrences
+          WHERE origin = 'tool_generated' AND kind = 'tool_result'"""
+    ).fetchall()
+    family_samples: dict[str, dict[str, Any]] = {}
+    for row in tool_rows:
+        family = tool_family(row["tool_name"])
+        key = f"{family}|{row['detected_kind']}"
+        sample = family_samples.setdefault(
+            key,
+            {
+                "family": family,
+                "detected_kind": row["detected_kind"],
+                "blocks": 0,
+                "estimated_tokens": 0,
+                "raw_bytes": 0,
+                "sizes": [],
+                "fingerprints": Counter(),
+                "shapes": Counter(),
+            },
+        )
+        sample["blocks"] += 1
+        sample["estimated_tokens"] += row["estimated_tokens"] or 0
+        sample["raw_bytes"] += row["raw_bytes"] or 0
+        sample["sizes"].append(row["raw_bytes"] or 0)
+        if row["detected_kind"] == "json":
+            if row["json_item_count"] is None:
+                shape = "object_or_scalar"
+            elif row["json_depth"] and row["json_depth"] > 1:
+                shape = "nested_array_or_object"
+            else:
+                shape = "array_or_object"
+            sample["shapes"][shape] += 1
+        fingerprint = row["exact_fingerprint"]
+        if fingerprint is not None:
+            sample["fingerprints"][bytes(fingerprint)] += 1
+    tool_result_tokens = sum(sample["estimated_tokens"] for sample in family_samples.values())
+    tool_family_characterization = []
+    for key in sorted(family_samples):
+        sample = family_samples[key]
+        fingerprints = sample["fingerprints"]
+        repeated_blocks = sum(count for count in fingerprints.values() if count > 1)
+        tool_family_characterization.append(
+            {
+                "family": sample["family"],
+                "detected_kind": sample["detected_kind"],
+                "blocks": sample["blocks"],
+                "estimated_tokens": sample["estimated_tokens"],
+                "raw_bytes": sample["raw_bytes"],
+                "exposure_share": (sample["estimated_tokens"] / tool_result_tokens)
+                if tool_result_tokens
+                else None,
+                "raw_bytes_p50": percentile(sample["sizes"], 0.50),
+                "raw_bytes_p90": percentile(sample["sizes"], 0.90),
+                "raw_bytes_p95": percentile(sample["sizes"], 0.95),
+                "raw_bytes_p99": percentile(sample["sizes"], 0.99),
+                "unique_exact_fingerprints": len(fingerprints),
+                "exact_repeated_blocks": repeated_blocks,
+                "shape_distribution": dict(sorted(sample["shapes"].items())),
+            }
+        )
     result = {
         "experiment": dict(experiment) if experiment else None,
         "sessions": connection.execute("SELECT COUNT(*) FROM sessions").fetchone()[0],
@@ -160,6 +226,7 @@ def aggregate(database: Path, experiment_id: str) -> dict[str, Any]:
         ).fetchone()[0],
         "candidate_coverage_by_size_and_kind": coverage,
         "tool_result_families": tool_result_families,
+        "tool_family_characterization": tool_family_characterization,
         "candidate_evaluation_accounting": {
             "persisted_candidate_rows": len(rows),
             "counter_completed": (dict(experiment).get("candidate_evaluations_completed", 0) if experiment else 0),
@@ -231,6 +298,10 @@ def main() -> int:
         lines = [f"# {args.report_id}", "", f"Naturalistic N=10 shadow cohort; experiment `{args.experiment_id}`; metadata-only aggregation. Status: **{result['status']}**.", "", f"Successful invocations: {result['successful_invocations']}/10", f"Sessions: {result['sessions']}", f"Provider requests: {result['provider_requests']}", f"Analysis complete: {result['analysis_complete']}/{result['analysis_snapshots']}", f"Unknown transformed: {result['unknown_transformed']}", "", "## ToolResult characterization", "", "| Origin | Kind | Detected kind | Blocks | Raw bytes | Estimated tokens |", "|---|---|---|---:|---:|---:|"]
         for family in result["tool_result_families"]:
             lines.append(f"| `{family['origin']}` | `{family['kind']}` | `{family['detected_kind']}` | {family['block_count']} | {family['raw_bytes']} | {family['estimated_tokens'] if family['estimated_tokens'] is not None else '—'} |")
+        lines += ["", "### Tool-family ranking", "", "| Family | Detected | Blocks | Estimated tokens | Exposure | P50 bytes | P95 bytes | P99 bytes | Repeated blocks |", "|---|---|---:|---:|---:|---:|---:|---:|---:|"]
+        for family in result["tool_family_characterization"]:
+            share = "—" if family["exposure_share"] is None else f"{family['exposure_share'] * 100:.2f}%"
+            lines.append(f"| `{family['family']}` | `{family['detected_kind']}` | {family['blocks']} | {family['estimated_tokens']} | {share} | {family['raw_bytes_p50'] if family['raw_bytes_p50'] is not None else '—'} | {family['raw_bytes_p95'] if family['raw_bytes_p95'] is not None else '—'} | {family['raw_bytes_p99'] if family['raw_bytes_p99'] is not None else '—'} | {family['exact_repeated_blocks']} |")
         lines += ["", "## Shadow accounting", "", f"Jobs admitted/processed/dropped: **{experiment_row.get('shadow_jobs_admitted', 0)} / {experiment_row.get('shadow_jobs_processed', 0)} / {experiment_row.get('shadow_job_drops', 0)}**", f"Candidate evaluations attempted/completed/dropped: **{accounting['counter_attempted']} / {accounting['counter_completed']} / {accounting['counter_drops']}**", f"Persisted candidate rows: **{accounting['persisted_candidate_rows']}**", "", "| Candidate | Readability | Addressable | Reduction | Recovery | Determinism |", "|---|---|---:|---:|---:|---:|"]
         for candidate in result["compressors"]:
             def percent(value: float | None) -> str:

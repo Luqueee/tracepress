@@ -829,12 +829,13 @@ fn render_compression_detail(
                 .compressors
                 .iter()
                 .any(|compressor| compressor.compressor.starts_with("json.empty_noise_fields")
-                    || compressor.compressor.starts_with("json.repeated_value_elision"))
+                    || compressor.compressor.starts_with("json.repeated_value_elision")
+                    || compressor.compressor.starts_with("shell.diagnostic_projection"))
             {
                 div { class: "spacer-top", Card { title: "Tool-Aware Reduction",
                     div { class: "compact-notice",
                         Badge { text: "SHADOW ONLY", tone: "warning" }
-                        span { class: "spacer-inline", "Tool-aware reducers evaluate conservative JSON projections for ToolResult blocks. " }
+                        span { class: "spacer-inline", "Tool-aware reducers evaluate conservative ToolResult projections. " }
                         span { class: "muted", "The provider request remains byte-exact; no active reduction or quality claim is enabled." }
                     }
                 } }

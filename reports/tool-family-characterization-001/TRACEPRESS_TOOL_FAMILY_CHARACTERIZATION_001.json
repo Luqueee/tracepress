@@ -1,0 +1,53 @@
+{
+  "report_id": "TRACEPRESS_TOOL_FAMILY_CHARACTERIZATION_001",
+  "experiment_id": "phase-4-4-characterization-003",
+  "status": "completed",
+  "metadata_only": true,
+  "privacy": "aggregated_metadata_only",
+  "cohort": {
+    "sessions": 10,
+    "successful_invocations": 10,
+    "provider_requests": 20,
+    "analysis_complete": 20,
+    "unknown_transformed": 0
+  },
+  "shadow_integrity": {
+    "shadow_jobs_admitted": 20,
+    "shadow_jobs_processed": 20,
+    "shadow_job_drops": 0,
+    "candidate_evaluations_attempted": 90,
+    "candidate_evaluations_completed": 90,
+    "candidate_evaluation_drops": 0,
+    "forwarding_mutations": 0,
+    "recovery_failures": 0,
+    "determinism_failures": 0
+  },
+  "tool_family_characterization": [
+    {
+      "family": "shell_generic",
+      "detected_kind": "json",
+      "blocks": 10,
+      "estimated_tokens": 27566,
+      "raw_bytes": 74766,
+      "exposure_share": 1.0,
+      "raw_bytes_p50": 1101,
+      "raw_bytes_p90": 18503,
+      "raw_bytes_p95": 18503,
+      "raw_bytes_p99": 18503,
+      "shape_distribution": {
+        "nested_array_or_object": 10
+      },
+      "exact_repeated_blocks": 0,
+      "unique_exact_fingerprints": 10
+    }
+  ],
+  "tool_result_plain_text_blocks": 0,
+  "decision": "select_shell_generic_for_deeper_shadow_characterization",
+  "active_reducer_selected": false,
+  "claims": {
+    "provider_token_savings": false,
+    "provider_cache_impact": false,
+    "economic_impact": false,
+    "quality_preservation": false
+  }
+}

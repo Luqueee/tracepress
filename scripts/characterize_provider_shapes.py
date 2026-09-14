@@ -32,19 +32,38 @@ def bucket(value: int | None) -> str:
 
 
 def tool_family(tool_name: str | None) -> str:
-    """Map a tool name to an allowlisted family without exporting the name."""
+    """Map a tool name to an allowlisted Phase 4.4 family without exporting the name."""
     if not tool_name:
         return "unknown"
-    normalized = tool_name.lower()
-    if any(marker in normalized for marker in ("search", "grep", "rg", "find")):
+    normalized = tool_name.lower().replace("-", "_")
+    if any(marker in normalized for marker in ("git", "hg", "svn", "version_control", "diff")):
+        return "version_control"
+    if any(marker in normalized for marker in ("search", "grep", "rg", "ripgrep", "find")):
         return "search"
-    if any(marker in normalized for marker in ("test", "pytest", "vitest", "jest")):
+    if any(marker in normalized for marker in ("test", "pytest", "vitest", "jest", "cargo_nextest")):
         return "tests"
-    if any(marker in normalized for marker in ("build", "compile", "check", "lint")):
+    if any(marker in normalized for marker in ("lint", "clippy", "eslint", "ruff", "mypy")):
+        return "lint"
+    if any(marker in normalized for marker in ("build", "compile", "cargo_check", "make")):
         return "build"
+    if any(marker in normalized for marker in ("dependenc", "package", "npm", "pnpm", "cargo_tree", "resolver")):
+        return "dependency"
+    if any(marker in normalized for marker in ("file", "filesystem", "directory", "ls", "tree", "glob")):
+        return "filesystem"
+    if any(marker in normalized for marker in ("json", "structured", "csv", "jq")):
+        return "structured_data"
     if any(marker in normalized for marker in ("shell", "exec", "command", "run")):
-        return "shell"
+        return "shell_generic"
     return "unknown"
+
+
+def percentile(values: list[int], fraction: float) -> int | None:
+    """Return a nearest-rank percentile without exposing the underlying samples."""
+    if not values:
+        return None
+    ordered = sorted(values)
+    index = min(len(ordered) - 1, max(0, int((len(ordered) - 1) * fraction)))
+    return ordered[index]
 
 
 def characterize(database: Path, session_limit: int) -> dict:
@@ -115,11 +134,30 @@ def characterize(database: Path, session_limit: int) -> dict:
     json_shapes: dict[str, dict[str, int]] = {}
     text_shapes: dict[str, dict[str, int]] = {}
     tool_families: Counter[str] = Counter()
+    family_samples: dict[str, dict[str, object]] = {}
     total_json_tokens = 0
     total_text_tokens = 0
     for detected, raw_bytes, estimated_tokens, line_count, duplicate_ratio, item_count, depth, _, _, tool_name in rows:
         tokens = int(estimated_tokens or 0)
-        tool_families[f"{tool_family(tool_name)}|{detected or 'unavailable'}"] += tokens
+        family = tool_family(tool_name)
+        detected_label = detected or "unavailable"
+        family_key = f"{family}|{detected_label}"
+        tool_families[family_key] += tokens
+        stats = family_samples.setdefault(
+            family_key,
+            {
+                "family": family,
+                "detected_kind": detected_label,
+                "blocks": 0,
+                "estimated_tokens": 0,
+                "raw_bytes": 0,
+                "sizes": [],
+            },
+        )
+        stats["blocks"] = int(stats["blocks"]) + 1
+        stats["estimated_tokens"] = int(stats["estimated_tokens"]) + tokens
+        stats["raw_bytes"] = int(stats["raw_bytes"]) + int(raw_bytes or 0)
+        stats["sizes"].append(int(raw_bytes or 0))
         if detected == "json":
             if item_count is None:
                 shape = "object_or_scalar"
@@ -165,12 +203,32 @@ def characterize(database: Path, session_limit: int) -> dict:
                 "applicable_estimated_tokens": int(applicable_tokens or 0),
             }
     connection.close()
+    total_tool_result_tokens = sum(int(value["estimated_tokens"]) for value in family_samples.values())
+    family_characterization = []
+    for key in sorted(family_samples):
+        value = family_samples[key]
+        sizes = value["sizes"]
+        family_characterization.append({
+            "family": value["family"],
+            "detected_kind": value["detected_kind"],
+            "blocks": value["blocks"],
+            "estimated_tokens": value["estimated_tokens"],
+            "raw_bytes": value["raw_bytes"],
+            "exposure_share": (value["estimated_tokens"] / total_tool_result_tokens)
+            if total_tool_result_tokens
+            else None,
+            "raw_bytes_p50": percentile(sizes, 0.50),
+            "raw_bytes_p90": percentile(sizes, 0.90),
+            "raw_bytes_p95": percentile(sizes, 0.95),
+            "raw_bytes_p99": percentile(sizes, 0.99),
+        })
     return {
         "sessions": len(session_ids),
         "blocks": len(rows),
         "json": {"total_estimated_tokens": total_json_tokens, "shapes": json_shapes},
         "plain_text": {"total_estimated_tokens": total_text_tokens, "shapes": text_shapes},
         "tool_families": dict(sorted(tool_families.items())),
+        "tool_family_characterization": family_characterization,
         "key_frequency": {
             "status": "unavailable_without_raw_content",
             "privacy": "raw_tool_results_are_not_selected_or_persisted",
@@ -206,9 +264,10 @@ def main() -> None:
     lines += ["", "## Plain-text shapes", ""]
     for name, values in result["plain_text"]["shapes"].items():
         lines.append(f"- `{name}`: {values['blocks']} blocks, {values['estimated_tokens']} estimated tokens")
-    lines += ["", "## Tool families", ""]
-    for name, tokens in result["tool_families"].items():
-        lines.append(f"- `{name}`: {tokens} estimated tokens")
+    lines += ["", "## Tool families", "", "| Family | Detected | Blocks | Estimated tokens | Exposure | P50 bytes | P95 bytes | P99 bytes |", "|---|---|---:|---:|---:|---:|---:|"]
+    for value in result["tool_family_characterization"]:
+        share = "—" if value["exposure_share"] is None else f"{value['exposure_share'] * 100:.2f}%"
+        lines.append(f"| `{value['family']}` | `{value['detected_kind']}` | {value['blocks']} | {value['estimated_tokens']} | {share} | {value['raw_bytes_p50'] if value['raw_bytes_p50'] is not None else '—'} | {value['raw_bytes_p95'] if value['raw_bytes_p95'] is not None else '—'} | {value['raw_bytes_p99'] if value['raw_bytes_p99'] is not None else '—'} |")
     lines += [
         "",
         "Key-frequency analysis is unavailable without selecting raw ToolResult content; this is intentional.",

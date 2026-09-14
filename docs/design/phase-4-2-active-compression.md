@@ -93,3 +93,9 @@ request cardinality. The subsequent cardinality-matched cohort is recorded in
 invocations per arm and 20 provider requests per arm, all with complete analysis and zero errors.
 It accepted no active rewrite (ten `NoImprovement` and ten `NotApplicable` attempts), so
 provider-token, cache, cost, and quality impact remain unvalidated.
+
+A metadata-only diagnostic is recorded in
+`reports/active-compression-001/TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_DIAGNOSTIC_001.{json,md}`.
+The one eligible real-provider span evaluated to 224 input bytes and a 224-byte candidate; the
+never-worse guard therefore correctly kept the original request. The result does not expose the
+span content or infer provider serialization behavior.

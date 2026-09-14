@@ -1,0 +1,30 @@
+{
+  "experiment_id": "active-compression-provider-diagnostic-001",
+  "phase": "4.2_infrastructure_gate",
+  "runtime_commit": "31abb4d79764e67914aac48a17820a41c7b140ed",
+  "provider": "authenticated ChatGPT Codex subscription",
+  "model": "gpt-5.6-luna",
+  "scope": "one active invocation, two zstd provider requests",
+  "analysis": {
+    "provider_requests": 2,
+    "context_snapshots": 2,
+    "context_complete": 2,
+    "content_encoding": "zstd",
+    "active_attempts": 2,
+    "active_rewrites": 0,
+    "no_improvement": 1,
+    "not_applicable": 1,
+    "evaluated_spans": 1,
+    "evaluated_input_bytes": 224,
+    "evaluated_candidate_bytes": 224,
+    "recovery_failures": 0,
+    "determinism_failures": 0,
+    "provider_errors": 0
+  },
+  "interpretation": "The eligible span produced an equal-size candidate; this run provides no material local reduction evidence for the real provider representation.",
+  "limitations": [
+    "No request or candidate body is persisted.",
+    "Equal byte counts do not establish provider serialization internals or provider impact.",
+    "No provider-token, cache, cost, quality, or savings claim is made."
+  ]
+}

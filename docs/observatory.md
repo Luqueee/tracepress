@@ -170,7 +170,9 @@ attempt because active and control request cardinality was not matched. The card
 cohort `TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_AA_002.{json,md}` runs ten invocations per arm
 (20 provider requests each), with complete analysis and zero request, recovery, or determinism
 failures. It accepted no active rewrite, so it remains infrastructure evidence rather than
-provider-impact evidence.
+provider-impact evidence. The follow-up diagnostic
+`TRACEPRESS_ACTIVE_COMPRESSION_PROVIDER_DIAGNOSTIC_001.{json,md}` records why: one eligible span
+was evaluated at 224 input bytes and 224 candidate bytes, so the never-worse guard kept it.
 
 Errors have a browser-safe shape:
 

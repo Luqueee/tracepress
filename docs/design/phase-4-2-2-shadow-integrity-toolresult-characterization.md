@@ -76,7 +76,9 @@ while the ToolResult PlainText target remained empty.
 ## Decision gate
 
 Run a directed naturalistic cohort only if the matrix shows material ToolResult
-PlainText exposure. A deterministic provider-compatible candidate remains
+PlainText exposure. The v12 N=10 naturalistic pilot completed with 20 jobs and
+70 candidate evaluations, all admitted/completed with zero drops, but found no
+applicable human-readable candidate blocks. A deterministic provider-compatible candidate remains
 eligible for Active A/B only when real traffic demonstrates approximately:
 
 ```text
@@ -85,15 +87,18 @@ median reduction >= 10%
 or effective context reduction >= 2–3%
 ```
 
-These are triage thresholds, not provider-token or cost claims. If no current
-candidate crosses them after an integrity-clean cohort, the reversible path is
-closed as a valid negative result and Phase 4.3 becomes a separate, quality-led
-Tool-Aware Context Reduction phase.
+These are triage thresholds, not provider-token or cost claims. No current
+candidate crossed them in the integrity-clean cohort, so the reversible path is
+closed as a valid negative result for the current candidate set. Phase 4.3 is a
+separate, quality-led Tool-Aware Context Reduction phase and remains blocked as
+a release gate.
 
 ## Artifacts
 
 - `reports/provider-compatible-candidates-001/TRACEPRESS_PROVIDER_COMPATIBLE_CHARACTERIZATION_PROBE_002.json`
 - `reports/provider-compatible-candidates-001/TRACEPRESS_PROVIDER_COMPATIBLE_CHARACTERIZATION_PROBE_002.md`
+- `reports/provider-compatible-candidates-001/TRACEPRESS_SHADOW_PILOT_003_N10_PHASE_4_2_2.json`
+- `reports/provider-compatible-candidates-001/TRACEPRESS_SHADOW_PILOT_003_N10_PHASE_4_2_2.md`
 
 The probe is a one-session metadata-only characterization of an existing local
 fixture/probe database, not a replacement for the required N=10 directed cohort.

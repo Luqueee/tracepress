@@ -26,10 +26,13 @@ bounded local path; it is not an efficacy claim.
 
 ## Naturalistic and PlainText status
 
-The previous N=10 Pilot 003 remains `completed_degraded`: 31 requests, 24
-aggregate shadow drops, and no material J5/J6/J7 reduction. That result predates
-the v12 job/evaluation counters and is retained as evidence, not reused as an
-integrity-clean gate.
+The regenerated v12 N=10 Pilot 003 is integrity-clean: 10 sessions, 20 provider
+requests, 20 jobs admitted/processed, 70 candidate evaluations attempted and
+completed, zero job/evaluation drops, zero forwarding mutations, zero recovery
+failures, zero determinism failures, and zero Unknown transformations. It still
+found zero applicable blocks for the human-readable JSON candidates and no
+material reduction. The earlier 31-request / 24-drop run is retained only as a
+pre-v12 degraded observation.
 
 The available metadata-only characterization probe found 23,060 global
 PlainText estimated tokens in `human_authored` blocks, but zero
@@ -39,7 +42,9 @@ not justified by this probe alone.
 
 ## Decision
 
-Phase 4.3 remains blocked. Before another candidate efficacy decision, run a
-clean N=10 naturalistic cohort with the new counters, or a directed real
-ToolResult cohort if the Origin × Kind matrix shows material safe exposure. Do
-not infer provider savings, cache preservation, or quality from this report.
+The current deterministic provider-compatible path is closed as a valid negative
+result for the candidates evaluated. No active candidate is selected and Phase
+4.3 remains blocked as a release gate. If resumed, it must be a separately
+designed quality-led Tool-Aware Context Reduction phase, not another sequence of
+opaque JSON encodings. Do not infer provider savings, cache preservation, or
+quality from this report.

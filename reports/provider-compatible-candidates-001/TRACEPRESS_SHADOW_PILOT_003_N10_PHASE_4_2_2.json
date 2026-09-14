@@ -1,0 +1,336 @@
+{
+  "analysis_complete": 20,
+  "analysis_snapshots": 20,
+  "candidate_coverage_by_size_and_kind": [
+    {
+      "compressor_id": "json.compact_records",
+      "detected_kind": "json",
+      "persisted_evaluations": 4,
+      "size_bucket": "1KiB-1MiB"
+    },
+    {
+      "compressor_id": "json.compact_records",
+      "detected_kind": "json",
+      "persisted_evaluations": 6,
+      "size_bucket": "<1KiB"
+    },
+    {
+      "compressor_id": "json.key_elision",
+      "detected_kind": "json",
+      "persisted_evaluations": 4,
+      "size_bucket": "1KiB-1MiB"
+    },
+    {
+      "compressor_id": "json.key_elision",
+      "detected_kind": "json",
+      "persisted_evaluations": 6,
+      "size_bucket": "<1KiB"
+    },
+    {
+      "compressor_id": "json.minify",
+      "detected_kind": "json",
+      "persisted_evaluations": 4,
+      "size_bucket": "1KiB-1MiB"
+    },
+    {
+      "compressor_id": "json.minify",
+      "detected_kind": "json",
+      "persisted_evaluations": 6,
+      "size_bucket": "<1KiB"
+    },
+    {
+      "compressor_id": "json.noop",
+      "detected_kind": "json",
+      "persisted_evaluations": 4,
+      "size_bucket": "1KiB-1MiB"
+    },
+    {
+      "compressor_id": "json.noop",
+      "detected_kind": "json",
+      "persisted_evaluations": 6,
+      "size_bucket": "<1KiB"
+    },
+    {
+      "compressor_id": "json.readable_table",
+      "detected_kind": "json",
+      "persisted_evaluations": 4,
+      "size_bucket": "1KiB-1MiB"
+    },
+    {
+      "compressor_id": "json.readable_table",
+      "detected_kind": "json",
+      "persisted_evaluations": 6,
+      "size_bucket": "<1KiB"
+    },
+    {
+      "compressor_id": "json.repeated_subtree",
+      "detected_kind": "json",
+      "persisted_evaluations": 4,
+      "size_bucket": "1KiB-1MiB"
+    },
+    {
+      "compressor_id": "json.repeated_subtree",
+      "detected_kind": "json",
+      "persisted_evaluations": 6,
+      "size_bucket": "<1KiB"
+    },
+    {
+      "compressor_id": "json.tabular",
+      "detected_kind": "json",
+      "persisted_evaluations": 4,
+      "size_bucket": "1KiB-1MiB"
+    },
+    {
+      "compressor_id": "json.tabular",
+      "detected_kind": "json",
+      "persisted_evaluations": 6,
+      "size_bucket": "<1KiB"
+    }
+  ],
+  "candidate_evaluation_accounting": {
+    "counter_attempted": 70,
+    "counter_completed": 70,
+    "counter_drops": 0,
+    "persisted_candidate_rows": 70
+  },
+  "compressors": [
+    {
+      "addressable_token_share": 0.0,
+      "applicability": 0.0,
+      "applicable_blocks": 0,
+      "byte_reduction": 0,
+      "byte_reduction_ratio": null,
+      "determinism_success_rate": 1.0,
+      "eligible_blocks": 10,
+      "estimated_input_tokens": 0,
+      "estimated_token_reduction": 0,
+      "estimated_token_reduction_ratio": null,
+      "id": "json.compact_records",
+      "input_bytes": 0,
+      "processing_us": {
+        "p50": 105,
+        "p95": 4373
+      },
+      "provider_readability": [
+        "human_readable_structured"
+      ],
+      "recovery_success_rate": 1.0,
+      "shape_distribution": {
+        "array_object": 10
+      }
+    },
+    {
+      "addressable_token_share": 0.0,
+      "applicability": 0.0,
+      "applicable_blocks": 0,
+      "byte_reduction": 0,
+      "byte_reduction_ratio": null,
+      "determinism_success_rate": 1.0,
+      "eligible_blocks": 10,
+      "estimated_input_tokens": 0,
+      "estimated_token_reduction": 0,
+      "estimated_token_reduction_ratio": null,
+      "id": "json.key_elision",
+      "input_bytes": 0,
+      "processing_us": {
+        "p50": 104,
+        "p95": 3759
+      },
+      "provider_readability": [
+        "human_readable_structured"
+      ],
+      "recovery_success_rate": 1.0,
+      "shape_distribution": {
+        "array_object": 10
+      }
+    },
+    {
+      "addressable_token_share": 0.0,
+      "applicability": 0.0,
+      "applicable_blocks": 0,
+      "byte_reduction": 0,
+      "byte_reduction_ratio": null,
+      "determinism_success_rate": 1.0,
+      "eligible_blocks": 10,
+      "estimated_input_tokens": 0,
+      "estimated_token_reduction": 0,
+      "estimated_token_reduction_ratio": null,
+      "id": "json.minify",
+      "input_bytes": 0,
+      "processing_us": {
+        "p50": 127,
+        "p95": 3947
+      },
+      "provider_readability": [
+        "provider_compatible_control"
+      ],
+      "recovery_success_rate": 1.0,
+      "shape_distribution": {
+        "array_object": 10
+      }
+    },
+    {
+      "addressable_token_share": 0.0,
+      "applicability": 0.0,
+      "applicable_blocks": 0,
+      "byte_reduction": 0,
+      "byte_reduction_ratio": null,
+      "determinism_success_rate": 1.0,
+      "eligible_blocks": 10,
+      "estimated_input_tokens": 0,
+      "estimated_token_reduction": 0,
+      "estimated_token_reduction_ratio": null,
+      "id": "json.noop",
+      "input_bytes": 0,
+      "processing_us": {
+        "p50": 74,
+        "p95": 2359
+      },
+      "provider_readability": [
+        "provider_compatible_control"
+      ],
+      "recovery_success_rate": 1.0,
+      "shape_distribution": {
+        "array_object": 10
+      }
+    },
+    {
+      "addressable_token_share": 0.0,
+      "applicability": 0.0,
+      "applicable_blocks": 0,
+      "byte_reduction": 0,
+      "byte_reduction_ratio": null,
+      "determinism_success_rate": 1.0,
+      "eligible_blocks": 10,
+      "estimated_input_tokens": 0,
+      "estimated_token_reduction": 0,
+      "estimated_token_reduction_ratio": null,
+      "id": "json.readable_table",
+      "input_bytes": 0,
+      "processing_us": {
+        "p50": 110,
+        "p95": 4231
+      },
+      "provider_readability": [
+        "human_readable_structured"
+      ],
+      "recovery_success_rate": 1.0,
+      "shape_distribution": {
+        "array_object": 10
+      }
+    },
+    {
+      "addressable_token_share": 0.0,
+      "applicability": 0.0,
+      "applicable_blocks": 0,
+      "byte_reduction": 0,
+      "byte_reduction_ratio": null,
+      "determinism_success_rate": null,
+      "eligible_blocks": 10,
+      "estimated_input_tokens": 0,
+      "estimated_token_reduction": 0,
+      "estimated_token_reduction_ratio": null,
+      "id": "json.repeated_subtree",
+      "input_bytes": 0,
+      "processing_us": {
+        "p50": 97,
+        "p95": 3837
+      },
+      "provider_readability": [
+        "opaque_custom_encoding"
+      ],
+      "recovery_success_rate": null,
+      "shape_distribution": {
+        "array_object": 10
+      }
+    },
+    {
+      "addressable_token_share": 0.0,
+      "applicability": 0.0,
+      "applicable_blocks": 0,
+      "byte_reduction": 0,
+      "byte_reduction_ratio": null,
+      "determinism_success_rate": 1.0,
+      "eligible_blocks": 10,
+      "estimated_input_tokens": 0,
+      "estimated_token_reduction": 0,
+      "estimated_token_reduction_ratio": null,
+      "id": "json.tabular",
+      "input_bytes": 0,
+      "processing_us": {
+        "p50": 129,
+        "p95": 4391
+      },
+      "provider_readability": [
+        "opaque_custom_encoding"
+      ],
+      "recovery_success_rate": 1.0,
+      "shape_distribution": {
+        "array_object": 10
+      }
+    }
+  ],
+  "experiment": {
+    "candidate_evaluation_drops": 0,
+    "candidate_evaluations_attempted": 70,
+    "candidate_evaluations_completed": 70,
+    "determinism_failures": 0,
+    "experiment_id": "shadow-pilot-003",
+    "forwarding_mutations": 0,
+    "recovery_failures": 0,
+    "shadow_drops": 0,
+    "shadow_job_drops": 0,
+    "shadow_jobs_admitted": 20,
+    "shadow_jobs_processed": 20,
+    "status": "completed"
+  },
+  "invocations": [
+    {
+      "index": 1,
+      "returncode": 0
+    },
+    {
+      "index": 2,
+      "returncode": 0
+    },
+    {
+      "index": 3,
+      "returncode": 0
+    },
+    {
+      "index": 4,
+      "returncode": 0
+    },
+    {
+      "index": 5,
+      "returncode": 0
+    },
+    {
+      "index": 6,
+      "returncode": 0
+    },
+    {
+      "index": 7,
+      "returncode": 0
+    },
+    {
+      "index": 8,
+      "returncode": 0
+    },
+    {
+      "index": 9,
+      "returncode": 0
+    },
+    {
+      "index": 10,
+      "returncode": 0
+    }
+  ],
+  "privacy": "metadata_only",
+  "provider_requests": 20,
+  "report_id": "TRACEPRESS_SHADOW_PILOT_003_N10",
+  "sessions": 10,
+  "status": "completed",
+  "successful_invocations": 10,
+  "unknown_transformed": 0
+}

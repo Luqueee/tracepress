@@ -1,7 +1,7 @@
 {
   "report_id": "TRACEPRESS_SHADOW_INTEGRITY_001",
   "phase": "4.2.2",
-  "status": "integrity_instrumented_target_characterization_complete",
+  "status": "integrity_clean_naturalistic_negative_result",
   "forwarding_mutations": 0,
   "scheduler": {
     "job_granularity": "one_shadow_job_per_finalized_context_analysis",
@@ -35,10 +35,30 @@
     "global_plain_text_origin": "human_authored",
     "privacy": "metadata_only"
   },
+  "naturalistic_pilot_003_v12": {
+    "report": "TRACEPRESS_SHADOW_PILOT_003_N10_PHASE_4_2_2",
+    "status": "completed",
+    "sessions": 10,
+    "provider_requests": 20,
+    "analysis_complete": "20/20",
+    "shadow_jobs_admitted": 20,
+    "shadow_jobs_processed": 20,
+    "shadow_job_drops": 0,
+    "candidate_evaluations_attempted": 70,
+    "candidate_evaluations_completed": 70,
+    "candidate_evaluation_drops": 0,
+    "forwarding_mutations": 0,
+    "recovery_failures": 0,
+    "determinism_failures": 0,
+    "unknown_transformed": 0,
+    "human_readable_candidates_with_material_reduction": 0,
+    "human_readable_candidate_applicable_blocks": 0
+  },
   "decision": {
     "naturalistic_plain_text_cohort": "not_started_target_exposure_not_observed",
     "active_candidate": null,
+    "deterministic_provider_compatible_path": "closed_for_current_candidates",
     "phase_4_3": "blocked",
-    "reason": "The integrity instrumentation is clean in controlled smoke, but the existing N=10 naturalistic pilot remains degraded and the available probe places PlainText outside the safe ToolResult target. A clean directed cohort is required before closing or advancing the deterministic gate."
+    "reason": "The v12 N=10 naturalistic cohort is integrity-clean but produced zero applicable human-readable candidate blocks and zero material reduction. PlainText remains unobserved in the safe ToolResult target. Phase 4.3 may be designed as a separate quality-led Tool-Aware Context Reduction phase, but it is not started by this result."
   }
 }

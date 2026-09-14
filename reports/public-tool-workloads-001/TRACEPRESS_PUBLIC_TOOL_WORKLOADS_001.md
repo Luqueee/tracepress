@@ -11,10 +11,10 @@ Cohort: **6 Search + 6 Tests = 12 bounded tasks**. Forwarding mutations: **0**. 
 
 ## Family results
 
-| Family | ToolResults | Estimated tokens | Exposure | P50 bytes | P95 bytes | Candidate | Applicable | Effective reduction | Canonical correctness | Active eligible |
-|---|---:|---:|---:|---:|---:|---|---:|---:|---|---|
-| `search` | 6 | 18371 | 68.94% | 1354 | 18774 | `search.result_projection` | 6 | 29.74% | True | True |
-| `tests` | 6 | 8276 | 31.06% | 3827 | 8154 | `—` | 0 | 0.00% | — | False |
+| Family | ToolResults | Estimated tokens | Exposure | P50 bytes | P95 bytes | Candidate | Applicable | Effective reduction | Est. token reduction | Canonical correctness | Active eligible |
+|---|---:|---:|---:|---:|---:|---|---:|---:|---:|---|---|
+| `search` | 6 | 18371 | 68.94% | 1354 | 18774 | `search.result_projection` | 6 | 29.74% | 29.74% | True | True |
+| `tests` | 6 | 8276 | 31.06% | 3827 | 8154 | `—` | 0 | 0.00% | — | — | False |
 
 ## Decision
 

@@ -22,6 +22,9 @@ struct ShadowOutput {
     input_bytes: u64,
     output_bytes: Option<u64>,
     byte_reduction: Option<u64>,
+    input_estimated_tokens: Option<u64>,
+    output_estimated_tokens: Option<u64>,
+    estimated_token_reduction: Option<u64>,
     recovery_verified: bool,
     deterministic: bool,
     canonical_equal: Option<bool>,
@@ -66,6 +69,11 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         Some(original.matches == projected.matches)
     });
     let metrics = first.with_deterministic(deterministic).metrics().clone();
+    let input_estimated_tokens_value = (metrics.input_bytes.saturating_add(3)) / 4;
+    let input_estimated_tokens = Some(input_estimated_tokens_value);
+    let output_estimated_tokens = metrics
+        .visible_bytes
+        .map(|bytes| (bytes.saturating_add(3)) / 4);
     let result = ShadowOutput {
         family: ShellSemanticFamily::Search.as_str(),
         reducer: metrics.reducer_id,
@@ -73,6 +81,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         input_bytes: metrics.input_bytes,
         output_bytes: metrics.visible_bytes,
         byte_reduction: metrics.gross_bytes_delta,
+        input_estimated_tokens,
+        output_estimated_tokens,
+        estimated_token_reduction: output_estimated_tokens
+            .map(|output| input_estimated_tokens_value.saturating_sub(output)),
         recovery_verified: metrics.recovery_verified,
         deterministic: metrics.deterministic,
         canonical_equal,

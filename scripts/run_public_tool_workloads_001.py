@@ -191,6 +191,8 @@ def main() -> int:
         applicable = [candidate for candidate in candidates if candidate["status"] == "Applicable"]
         reduction = sum(candidate.get("byte_reduction") or 0 for candidate in applicable)
         input_bytes = sum(candidate.get("input_bytes") or 0 for candidate in applicable)
+        estimated_reduction = sum(candidate.get("estimated_token_reduction") or 0 for candidate in applicable)
+        estimated_input = sum(candidate.get("input_estimated_tokens") or 0 for candidate in applicable)
         active_eligible = (
             family == "search"
             and (input_bytes / bytes_total if bytes_total else 0) >= 0.05
@@ -215,6 +217,8 @@ def main() -> int:
                 "applicable": len(applicable),
                 "addressable_share": input_bytes / bytes_total if bytes_total else None,
                 "effective_reduction": reduction / bytes_total if bytes_total else None,
+                "estimated_token_reduction": estimated_reduction,
+                "estimated_token_reduction_ratio": estimated_reduction / estimated_input if estimated_input else None,
                 "recovery": all(candidate.get("recovery_verified") for candidate in applicable) if applicable else None,
                 "determinism": all(candidate.get("deterministic") for candidate in applicable) if applicable else None,
                 "canonical_correctness": all(candidate.get("canonical_equal") is True for candidate in applicable) if applicable else None,
@@ -262,14 +266,14 @@ def main() -> int:
         "",
         "## Family results",
         "",
-        "| Family | ToolResults | Estimated tokens | Exposure | P50 bytes | P95 bytes | Candidate | Applicable | Effective reduction | Canonical correctness | Active eligible |",
-        "|---|---:|---:|---:|---:|---:|---|---:|---:|---|---|",
+        "| Family | ToolResults | Estimated tokens | Exposure | P50 bytes | P95 bytes | Candidate | Applicable | Effective reduction | Est. token reduction | Canonical correctness | Active eligible |",
+        "|---|---:|---:|---:|---:|---:|---|---:|---:|---:|---|---|",
     ]
     for row in family_rows:
         candidate = row["candidate"]
         percent = lambda value: "—" if value is None else f"{value * 100:.2f}%"
         lines.append(
-            f"| `{row['family']}` | {row['tool_results']} | {row['estimated_tokens']} | {percent(row['exposure_share'])} | {row['size_p50']} | {row['size_p95']} | `{candidate['id'] or '—'}` | {candidate['applicable']} | {percent(candidate['effective_reduction'])} | {candidate['canonical_correctness'] if candidate['canonical_correctness'] is not None else '—'} | {row['active_eligible']} |"
+            f"| `{row['family']}` | {row['tool_results']} | {row['estimated_tokens']} | {percent(row['exposure_share'])} | {row['size_p50']} | {row['size_p95']} | `{candidate['id'] or '—'}` | {candidate['applicable']} | {percent(candidate['effective_reduction'])} | {percent(candidate['estimated_token_reduction_ratio'])} | {candidate['canonical_correctness'] if candidate['canonical_correctness'] is not None else '—'} | {row['active_eligible']} |"
         )
     lines += [
         "",

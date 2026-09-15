@@ -4385,6 +4385,54 @@ struct Config {
     ready: PathBuf,
 }
 
+/// Session-owned Codex hook home. It is removed once the child process exits.
+#[derive(Debug)]
+struct TemporaryCodexHookHome(PathBuf);
+
+fn temporary_codex_hook_home(
+    config: &Config,
+    session_id: SessionId,
+) -> Result<TemporaryCodexHookHome, String> {
+    let source_root = std::env::var_os("CODEX_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("HOME").map(|home| PathBuf::from(home).join(".codex")))
+        .ok_or_else(|| {
+            "cannot locate Codex home for temporary session authentication".to_owned()
+        })?;
+    let auth = source_root.join("auth.json");
+    let root = config
+        .root
+        .join("codex-hook-sessions")
+        .join(session_id.to_string());
+    std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))
+        .map_err(|error| error.to_string())?;
+    let _copied = std::fs::copy(&auth, root.join("auth.json"))
+        .map_err(|error| format!("cannot copy temporary Codex session authentication: {error}"))?;
+    #[cfg(unix)]
+    std::fs::set_permissions(
+        root.join("auth.json"),
+        std::fs::Permissions::from_mode(0o600),
+    )
+    .map_err(|error| error.to_string())?;
+    let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let command = format!("{} hook codex", executable.display());
+    let hooks = serde_json::json!({"hooks":{"PreToolUse":[{"matcher":"^Bash$","hooks":[{"type":"command","command":command,"timeout":5}]}]}});
+    std::fs::write(
+        root.join("hooks.json"),
+        serde_json::to_vec_pretty(&hooks).map_err(|error| error.to_string())?,
+    )
+    .map_err(|error| error.to_string())?;
+    Ok(TemporaryCodexHookHome(root))
+}
+
+impl TemporaryCodexHookHome {
+    fn cleanup(self) {
+        let _removed = std::fs::remove_dir_all(self.0);
+    }
+}
+
 impl Config {
     fn load() -> Result<Self, String> {
         let root = std::env::var_os("TRACEPRESS_HOME")
@@ -4901,6 +4949,17 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
     if matches!(transport, ProviderTransport::ChatGptCodexSubscription) && is_codex_agent(&agent) {
         configure_codex_subscription(&mut args, proxy_address);
     }
+    let hook_home = (is_codex_agent(&agent)
+        && std::env::var("TRACEPRESS_SOURCE_HOOK").ok().as_deref() == Some("codex"))
+    .then(|| temporary_codex_hook_home(config, session.session_id))
+    .transpose()?;
+    if let Some(home) = hook_home.as_ref() {
+        let _home = command.env("CODEX_HOME", &home.0);
+        let _binary = command.env(
+            "TRACEPRESS_TOOL_BIN",
+            std::env::current_exe().map_err(|error| error.to_string())?,
+        );
+    }
     let status_result = command
         .args(args)
         .env("TRACEPRESS_SESSION_ID", session.session_id.to_string())
@@ -4915,6 +4974,9 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         )
         .status()
         .await;
+    if let Some(home) = hook_home {
+        home.cleanup();
+    }
     proxy_task.abort();
     let _proxy_result = proxy_task.await;
     let (recorded, drain_timed_out) = match tokio::time::timeout(RECORDER_DRAIN_TIMEOUT, async {

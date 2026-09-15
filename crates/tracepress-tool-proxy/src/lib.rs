@@ -33,11 +33,24 @@ pub fn codex_pre_tool_use_rewrite(input: &[u8]) -> Option<Vec<u8>> {
         .ok()
         .filter(|value| !value.is_empty() && !value.contains([' ', '\'', '"', '$', '`', '\\']))
         .unwrap_or_else(|| "tracepress".to_owned());
+    let session = payload
+        .get("session_id")
+        .or_else(|| payload.get("turn_id"))
+        .and_then(serde_json::Value::as_str)
+        .filter(|value| {
+            value.len() <= 128
+                && value
+                    .bytes()
+                    .all(|byte| byte.is_ascii_alphanumeric() || byte == b'-')
+        });
+    let session_prefix = session.map_or_else(String::new, |value| {
+        format!("TRACEPRESS_SOURCE_SESSION_ID={value} ")
+    });
     serde_json::to_vec(&serde_json::json!({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
             "permissionDecision": "allow",
-            "updatedInput": { "command": format!("{executable} tool {command}") }
+            "updatedInput": { "command": format!("{session_prefix}{executable} tool {command}") }
         }
     }))
     .ok()

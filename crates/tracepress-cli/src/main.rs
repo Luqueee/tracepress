@@ -5551,7 +5551,7 @@ async fn main() -> Result<(), String> {
         }
         CommandKind::Run { agent, args } => run_agent(&config, agent, args).await,
         CommandKind::Proxy => proxy().await,
-        CommandKind::Tool { args } => tool(args),
+        CommandKind::Tool { args } => tool(&config, args),
         CommandKind::Hook { agent } => hook(agent),
     }
 }
@@ -5574,7 +5574,7 @@ fn hook(agent: String) -> Result<(), String> {
     Ok(())
 }
 
-fn tool(args: Vec<String>) -> Result<(), String> {
+fn tool(config: &Config, args: Vec<String>) -> Result<(), String> {
     let command = args.join(" ");
     let ids = UuidV7Generator::new();
     let (stdout, stderr, metadata) = execute_passthrough(&command, &ids)
@@ -5586,6 +5586,7 @@ fn tool(args: Vec<String>) -> Result<(), String> {
     std::io::stderr()
         .write_all(&stderr)
         .map_err(|error| error.to_string())?;
+    let _recorded = record_source_execution(config, &metadata);
     if let Some(signal) = metadata.termination_signal {
         #[cfg(unix)]
         {
@@ -5604,6 +5605,44 @@ fn tool(args: Vec<String>) -> Result<(), String> {
         std::process::exit(code);
     }
     Ok(())
+}
+
+fn record_source_execution(
+    config: &Config,
+    metadata: &tracepress_tool_proxy::SourceExecutionMetadata,
+) -> Result<(), String> {
+    config.ensure_root()?;
+    let session_id = std::env::var("TRACEPRESS_SOURCE_SESSION_ID").ok();
+    let exit_status_class = if metadata.termination_signal.is_some() {
+        "signal"
+    } else if metadata.exit_code == Some(0) {
+        "success"
+    } else {
+        "nonzero"
+    };
+    let record = serde_json::json!({
+        "source_execution_id": metadata.source_execution_id,
+        "session_id": session_id,
+        "command_family": "cargo_test",
+        "reducer_id": "passthrough",
+        "reducer_version": "v1",
+        "output_contract": "agent_readable",
+        "raw_stdout_bytes": metadata.raw_stdout_bytes,
+        "raw_stderr_bytes": metadata.raw_stderr_bytes,
+        "emitted_bytes": metadata.emitted_bytes,
+        "exit_status_class": exit_status_class,
+        "duration_us": u64::try_from(metadata.duration.as_micros()).unwrap_or(u64::MAX),
+        "recovery_available": false,
+    });
+    let path = config.root.join("source-executions.jsonl");
+    let mut options = std::fs::OpenOptions::new();
+    let _options = options.create(true).append(true);
+    #[cfg(unix)]
+    let _mode = options.mode(0o600);
+    use std::io::Write as _;
+    let mut output = options.open(path).map_err(|error| error.to_string())?;
+    serde_json::to_writer(&mut output, &record).map_err(|error| error.to_string())?;
+    output.write_all(b"\n").map_err(|error| error.to_string())
 }
 
 async fn dashboard(config: &Config, options: DashboardOptions) -> Result<(), String> {

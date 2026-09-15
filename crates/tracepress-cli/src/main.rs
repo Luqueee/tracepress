@@ -4978,6 +4978,9 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
     .then(|| temporary_codex_hook_home(config, session.session_id))
     .transpose()?;
     if let Some(home) = hook_home.as_ref() {
+        // This applies only to the Tracepress-generated, session-owned hook home. It does not
+        // alter sandbox or approval policy; Codex still evaluates the rewritten command normally.
+        args.insert(0, "--dangerously-bypass-hook-trust".to_owned());
         let _home = command.env("CODEX_HOME", &home.0);
         let _binary = command.env(
             "TRACEPRESS_TOOL_BIN",

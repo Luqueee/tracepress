@@ -21,6 +21,7 @@ from typing import Any
 
 
 EXPERIMENT_ID = "public-provider-native-search-shape-001"
+SHADOW_EXPERIMENT_ID = "public-provider-native-search-envelope-shadow-001"
 RIPGREP_URL = "https://github.com/BurntSushi/ripgrep"
 RIPGREP_SHA = "3fce3b5bb0236da2df6d99672afb8a719642eca7"
 MODEL = "gpt-5.6-luna"
@@ -32,6 +33,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-md", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=90)
+    parser.add_argument(
+        "--shadow-compression",
+        action="store_true",
+        help="evaluate bounded shadow candidates without mutating forwarding",
+    )
     return parser.parse_args()
 
 
@@ -39,7 +45,7 @@ def scalar(connection: sqlite3.Connection, query: str) -> int:
     return int(connection.execute(query).fetchone()[0] or 0)
 
 
-def characterize(database: Path) -> dict[str, Any]:
+def characterize(database: Path, shadow_experiment_id: str | None) -> dict[str, Any]:
     uri = f"file:{database}?mode=ro"
     with sqlite3.connect(uri, uri=True) as connection:
         connection.execute("PRAGMA query_only=ON")
@@ -84,10 +90,45 @@ def characterize(database: Path) -> dict[str, Any]:
                 for group in groups
                 if group["origin"] == "tool_generated"
                 and group["block_kind"] == "tool_result"
-                and group["detected_content_kind"] in {"plain_text", "search_results"}
+                and group["detected_content_kind"] in {"plain_text", "search_results", "json"}
             ),
             None,
         )
+        shadow_candidates: list[dict[str, Any]] = []
+        if shadow_experiment_id is not None:
+            candidate_rows = connection.execute(
+                """SELECT c.compressor_id, c.status, COUNT(*),
+                          SUM(m.input_bytes), SUM(m.output_bytes), SUM(m.bytes_delta),
+                          SUM(m.recovery_verified), SUM(m.deterministic)
+                   FROM compression_candidates c
+                   JOIN compression_candidate_metrics m ON m.candidate_id = c.candidate_id
+                   WHERE c.experiment_id = ?
+                   GROUP BY c.compressor_id, c.status
+                   ORDER BY c.compressor_id, c.status""",
+                (shadow_experiment_id,),
+            ).fetchall()
+            shadow_candidates = [
+                {
+                    "candidate": candidate,
+                    "status": status,
+                    "evaluations": int(evaluations),
+                    "input_bytes": int(input_bytes or 0),
+                    "output_bytes": None if output_bytes is None else int(output_bytes),
+                    "bytes_delta": None if bytes_delta is None else int(bytes_delta),
+                    "recovery_verified": int(recovery_verified or 0),
+                    "deterministic": int(deterministic or 0),
+                }
+                for (
+                    candidate,
+                    status,
+                    evaluations,
+                    input_bytes,
+                    output_bytes,
+                    bytes_delta,
+                    recovery_verified,
+                    deterministic,
+                ) in candidate_rows
+            ]
         return {
             "provider_requests": scalar(connection, "SELECT COUNT(*) FROM provider_requests"),
             "provider_errors": scalar(
@@ -102,6 +143,7 @@ def characterize(database: Path) -> dict[str, Any]:
             "groups": groups,
             "search_projection_target_observed": candidate_target is not None,
             "search_projection_target_metadata": candidate_target,
+            "shadow_candidates": shadow_candidates,
         }
 
 
@@ -149,11 +191,13 @@ def main() -> int:
             {
                 "TRACEPRESS_HOME": str(state_root),
                 "TRACEPRESS_CONTEXT_ANALYSIS": "shadow",
-                "TRACEPRESS_SHADOW_COMPRESSION": "off",
+                "TRACEPRESS_SHADOW_COMPRESSION": "on" if options.shadow_compression else "off",
                 "TRACEPRESS_ACTIVE_COMPRESSION": "off",
                 "TRACEPRESS_MEASUREMENT_RUN_ID": EXPERIMENT_ID,
             }
         )
+        if options.shadow_compression:
+            environment["TRACEPRESS_SHADOW_EXPERIMENT_ID"] = SHADOW_EXPERIMENT_ID
         daemon_environment = dict(environment)
         daemon_environment.update(
             {
@@ -197,17 +241,28 @@ def main() -> int:
         except subprocess.TimeoutExpired:
             execution = subprocess.CompletedProcess([], 124, "", "")
             timed_out = True
-        # Allow the independent analysis worker a bounded completion window.
+        # Context Analysis and shadow evaluation are independent. Do not interpret a partially
+        # flushed candidate set merely because snapshots are complete.
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
             with sqlite3.connect(f"file:{state_root / 'tracepress.sqlite3'}?mode=ro", uri=True) as connection:
                 pending = scalar(connection, "SELECT COUNT(*) FROM context_snapshots WHERE status <> 'complete'")
-            if pending == 0:
+                shadow_complete = not options.shadow_compression
+                if options.shadow_compression:
+                    row = connection.execute(
+                        "SELECT status, completed_at FROM compression_experiments WHERE experiment_id = ?",
+                        (SHADOW_EXPERIMENT_ID,),
+                    ).fetchone()
+                    shadow_complete = row is not None and row[0] == "completed" and row[1] is not None
+            if pending == 0 and shadow_complete:
                 break
             time.sleep(0.2)
-        observed = characterize(state_root / "tracepress.sqlite3")
+        observed = characterize(
+            state_root / "tracepress.sqlite3",
+            SHADOW_EXPERIMENT_ID if options.shadow_compression else None,
+        )
         report = {
-            "experiment_id": EXPERIMENT_ID,
+            "experiment_id": SHADOW_EXPERIMENT_ID if options.shadow_compression else EXPERIMENT_ID,
             "status": "completed" if not timed_out else "completed_evaluator_unavailable",
             "phase": "4.5",
             "workspace_class": "public_controlled",
@@ -215,6 +270,7 @@ def main() -> int:
             "model": MODEL,
             "forwarding_mutations": 0,
             "active_compression": "off",
+            "shadow_compression": options.shadow_compression,
             "execution": {"return_code": execution.returncode, "timed_out": timed_out},
             "observed": observed,
             "privacy": {
@@ -247,6 +303,20 @@ def main() -> int:
             summary.append(
                 f"| `{group['origin']}` | `{group['block_kind']}` | `{group['role']}` | `{group['detected_content_kind']}` | {group['block_count']} | {group['raw_bytes']} | {tokens} |"
             )
+        if options.shadow_compression:
+            summary.extend([
+                "",
+                "| Candidate | Status | Evaluations | Input bytes | Output bytes | Byte reduction | Recovery verified | Deterministic |",
+                "|---|---|---:|---:|---:|---:|---:|---:|",
+            ])
+            for candidate in observed["shadow_candidates"]:
+                output = candidate["output_bytes"] if candidate["output_bytes"] is not None else "—"
+                reduction = candidate["bytes_delta"] if candidate["bytes_delta"] is not None else "—"
+                summary.append(
+                    f"| `{candidate['candidate']}` | `{candidate['status']}` | {candidate['evaluations']} | "
+                    f"{candidate['input_bytes']} | {output} | {reduction} | "
+                    f"{candidate['recovery_verified']} | {candidate['deterministic']} |"
+                )
         summary.extend([
             "",
             "Privacy: aggregate allowlist only; no prompt, command, path, source, ToolResult, response, or fingerprint is in this report.",

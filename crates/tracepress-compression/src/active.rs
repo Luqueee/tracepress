@@ -45,10 +45,11 @@ impl ActiveJsonSpan {
     }
 }
 
-/// One bounded plain-text `ToolResult` span in a Responses request.
+/// One bounded `ToolResult` span in a Responses request.
 ///
 /// `encoded_string` is true for a Responses `function_call_output.output` string: the reducer
-/// sees decoded text bytes while the replacement is encoded as one JSON string again.
+/// sees decoded bytes while the replacement is encoded as one JSON string again. The bytes may
+/// be raw Search output or a JSON envelope containing exactly one Search-output string.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub struct ActiveTextSpan {
     /// First byte of the JSON value, including quotes for an encoded string.
@@ -492,7 +493,6 @@ pub fn rewrite_search_projection(
     let mut all_recovery_verified = true;
     let mut evaluated_input_bytes = 0_u64;
     let mut evaluated_candidate_bytes = 0_u64;
-    let reducer = SearchResultReducer;
 
     for span in ordered {
         if span.start < previous_end {
@@ -523,21 +523,21 @@ pub fn rewrite_search_projection(
             terminal = Some(ActiveRewriteStatus::ResourceLimit);
             continue;
         }
-        let first = reducer.reduce(&content, limits);
-        let second = reducer.reduce(&content, limits);
-        let first_visible = first.visible().map(ToOwned::to_owned);
-        let second_visible = second.visible().map(ToOwned::to_owned);
-        let first_recovered = first.recover();
-        let second_recovered = second.recover();
+        let first = reduce_search_content(&content, limits);
+        let second = reduce_search_content(&content, limits);
+        let first_visible = first.visible.clone();
+        let second_visible = second.visible.clone();
+        let first_recovered = first.recovered.clone();
+        let second_recovered = second.recovered.clone();
         if first_visible != second_visible || first_recovered != second_recovered {
             all_deterministic = false;
             terminal = Some(ActiveRewriteStatus::InternalError);
             continue;
         }
         evaluated_spans = evaluated_spans.saturating_add(1);
-        evaluated_input_bytes = evaluated_input_bytes
-            .saturating_add(u64::try_from(raw.len()).unwrap_or(u64::MAX));
-        let status = first.metrics().status;
+        evaluated_input_bytes =
+            evaluated_input_bytes.saturating_add(u64::try_from(raw.len()).unwrap_or(u64::MAX));
+        let status = first.status;
         if !matches!(status, ReductionStatus::Applicable) {
             terminal = Some(match status {
                 ReductionStatus::NotApplicable => ActiveRewriteStatus::NotApplicable,
@@ -560,7 +560,7 @@ pub fn rewrite_search_projection(
             terminal = Some(ActiveRewriteStatus::RecoveryFailed);
             continue;
         };
-        if digest(&recovered) != digest(&content) || !first.metrics().recovery_verified {
+        if digest(&recovered) != digest(&content) || !first.recovery_verified {
             all_recovery_verified = false;
             terminal = Some(ActiveRewriteStatus::RecoveryFailed);
             continue;
@@ -580,8 +580,7 @@ pub fn rewrite_search_projection(
         };
         evaluated_candidate_bytes = evaluated_candidate_bytes
             .saturating_add(u64::try_from(replacement.len()).unwrap_or(u64::MAX));
-        if u64::try_from(replacement.len()).unwrap_or(u64::MAX)
-            > limits.max_candidate_output_bytes
+        if u64::try_from(replacement.len()).unwrap_or(u64::MAX) > limits.max_candidate_output_bytes
         {
             terminal = Some(ActiveRewriteStatus::ResourceLimit);
             continue;
@@ -660,6 +659,178 @@ pub fn rewrite_search_projection(
         },
         body: Some(body.into_boxed_slice()),
     }
+}
+
+/// Transient result of evaluating either raw Search text or a provider-native JSON envelope.
+/// It intentionally has no serialization boundary.
+struct SearchContentProjection {
+    status: ReductionStatus,
+    visible: Option<Vec<u8>>,
+    recovered: Option<Box<[u8]>>,
+    recovery_verified: bool,
+}
+
+fn reduce_search_content(input: &[u8], limits: &CompressionLimits) -> SearchContentProjection {
+    let reducer = SearchResultReducer;
+    let direct = reducer.reduce(input, limits);
+    let direct_result = SearchContentProjection {
+        status: direct.metrics().status,
+        visible: direct.visible().map(ToOwned::to_owned),
+        recovered: direct.recover(),
+        recovery_verified: direct.metrics().recovery_verified,
+    };
+    if !matches!(direct_result.status, ReductionStatus::NotApplicable) {
+        return direct_result;
+    }
+    reduce_search_json_envelope(input, limits).unwrap_or(direct_result)
+}
+
+/// Finds one provider-readable Search payload inside a valid JSON envelope and replaces only its
+/// JSON string token. The envelope formatting and all non-Search fields remain byte-exact.
+fn reduce_search_json_envelope(
+    input: &[u8],
+    limits: &CompressionLimits,
+) -> Option<SearchContentProjection> {
+    if u64::try_from(input.len()).ok()? > limits.max_candidate_input_bytes
+        || u64::try_from(input.len()).ok()? > limits.max_shadow_memory_bytes
+    {
+        return Some(SearchContentProjection {
+            status: ReductionStatus::ResourceLimit,
+            visible: None,
+            recovered: None,
+            recovery_verified: false,
+        });
+    }
+    let ranges = match json_string_token_ranges(input, limits.max_candidates_per_block) {
+        Ok(ranges) => ranges,
+        Err(status) => {
+            return Some(SearchContentProjection {
+                status,
+                visible: None,
+                recovered: None,
+                recovery_verified: false,
+            });
+        }
+    };
+    let reducer = SearchResultReducer;
+    let mut applicable = None;
+    for (start, end) in ranges {
+        let raw = input.get(start..end)?;
+        let decoded = serde_json::from_slice::<String>(raw).ok()?;
+        let candidate = reducer.reduce(decoded.as_bytes(), limits);
+        if !matches!(candidate.metrics().status, ReductionStatus::Applicable) {
+            continue;
+        }
+        // More than one Search-like string is ambiguous. Fail closed rather than rewriting an
+        // envelope whose semantic ownership we cannot prove from metadata alone.
+        if applicable.is_some() {
+            return Some(SearchContentProjection {
+                status: ReductionStatus::NotApplicable,
+                visible: None,
+                recovered: None,
+                recovery_verified: false,
+            });
+        }
+        let visible = candidate.visible()?.to_vec();
+        let recovered = candidate.recover()?;
+        if digest(&recovered) != digest(decoded.as_bytes())
+            || !candidate.metrics().recovery_verified
+        {
+            return Some(SearchContentProjection {
+                status: ReductionStatus::InternalError,
+                visible: None,
+                recovered: None,
+                recovery_verified: false,
+            });
+        }
+        let rendered = std::str::from_utf8(&visible).ok()?;
+        let encoded = serde_json::to_vec(rendered).ok()?;
+        applicable = Some((start, end, encoded));
+    }
+    let Some((start, end, encoded)) = applicable else {
+        return Some(SearchContentProjection {
+            status: ReductionStatus::NotApplicable,
+            visible: None,
+            recovered: None,
+            recovery_verified: false,
+        });
+    };
+    if encoded.len() >= end.saturating_sub(start) {
+        return Some(SearchContentProjection {
+            status: ReductionStatus::NoImprovement,
+            visible: None,
+            recovered: None,
+            recovery_verified: false,
+        });
+    }
+    let mut visible = Vec::with_capacity(
+        input
+            .len()
+            .saturating_sub(end.saturating_sub(start))
+            .saturating_add(encoded.len()),
+    );
+    visible.extend_from_slice(input.get(..start)?);
+    visible.extend_from_slice(&encoded);
+    visible.extend_from_slice(input.get(end..)?);
+    let visible_bytes = u64::try_from(visible.len()).ok()?;
+    if visible_bytes > limits.max_candidate_output_bytes
+        || visible_bytes.saturating_add(u64::try_from(input.len()).ok()?)
+            > limits.max_shadow_memory_bytes
+    {
+        return Some(SearchContentProjection {
+            status: ReductionStatus::ResourceLimit,
+            visible: None,
+            recovered: None,
+            recovery_verified: false,
+        });
+    }
+    Some(SearchContentProjection {
+        status: ReductionStatus::Applicable,
+        visible: Some(visible),
+        recovered: Some(input.to_vec().into_boxed_slice()),
+        recovery_verified: true,
+    })
+}
+
+/// Returns byte ranges for every JSON string token after validating the complete document.
+/// This is deliberately lexical: the original JSON envelope is retained byte-for-byte except
+/// for the one selected value token, so serializing a `Value` can never normalize its shape.
+fn json_string_token_ranges(
+    input: &[u8],
+    maximum: u32,
+) -> Result<Vec<(usize, usize)>, ReductionStatus> {
+    if serde_json::from_slice::<serde_json::Value>(input).is_err() {
+        return Err(ReductionStatus::InvalidInput);
+    }
+    let mut ranges = Vec::new();
+    let mut index = 0_usize;
+    while index < input.len() {
+        if input.get(index).copied() != Some(b'"') {
+            index = index.saturating_add(1);
+            continue;
+        }
+        let start = index;
+        index = index.saturating_add(1);
+        let mut escaped = false;
+        loop {
+            let Some(byte) = input.get(index).copied() else {
+                return Err(ReductionStatus::InvalidInput);
+            };
+            index = index.saturating_add(1);
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                ranges.push((start, index));
+                if u32::try_from(ranges.len()).unwrap_or(u32::MAX) > maximum {
+                    return Err(ReductionStatus::ResourceLimit);
+                }
+                break;
+            }
+        }
+    }
+    Ok(ranges)
 }
 
 const fn status_for_transform(error: TransformError) -> ActiveRewriteStatus {
@@ -751,8 +922,8 @@ mod tests {
     fn search_projection_rewrites_grouped_matches_and_recovers_exact_text() {
         let request = br#"{"input":[{"type":"function_call_output","output":"src/a.rs:10:foo\nsrc/a.rs:11:bar\nsrc/a.rs:12:baz\nsrc/b.rs:2:foo\nsrc/b.rs:3:bar\nsrc/b.rs:4:baz\n"}]}"#;
         let span = output_span(request);
-        let text_span = ActiveTextSpan::new(span.start, span.end, span.encoded_string)
-            .expect("text span");
+        let text_span =
+            ActiveTextSpan::new(span.start, span.end, span.encoded_string).expect("text span");
         let result = rewrite_search_projection(request, &[text_span], &limits());
         assert_eq!(result.metrics().status, ActiveRewriteStatus::Rewritten);
         assert!(result.metrics().recovery_verified);
@@ -765,6 +936,46 @@ mod tests {
             .expect("projected search text");
         assert!(projected.starts_with("[search results]\nsrc/a.rs:\n"));
         assert!(projected.contains("src/b.rs:\n"));
+    }
+
+    #[test]
+    fn search_projection_rewrites_one_search_string_inside_json_envelope() {
+        let request = br#"{"input":[{"type":"function_call_output","output":"{\"kind\":\"shell_result\",\"output\":\"src/a.rs:10:foo\\nsrc/a.rs:11:bar\\nsrc/a.rs:12:baz\\nsrc/a.rs:13:qux\\nsrc/a.rs:14:quux\\nsrc/b.rs:2:foo\\nsrc/b.rs:3:bar\\nsrc/b.rs:4:baz\\nsrc/b.rs:5:qux\\nsrc/b.rs:6:quux\\n\",\"meta\":\"unchanged\"}"}]}"#;
+        let span = output_span(request);
+        let text_span =
+            ActiveTextSpan::new(span.start, span.end, span.encoded_string).expect("text span");
+        let result = rewrite_search_projection(request, &[text_span], &limits());
+        assert_eq!(result.metrics().status, ActiveRewriteStatus::Rewritten);
+        assert!(result.metrics().recovery_verified);
+        assert!(result.metrics().deterministic);
+        assert_eq!(result.metrics().evaluated_spans, 1);
+        let body = result.body().expect("rewritten body");
+        let value: serde_json::Value = serde_json::from_slice(body).expect("rewritten request");
+        let envelope: serde_json::Value = serde_json::from_str(
+            value["input"][0]["output"]
+                .as_str()
+                .expect("encoded envelope"),
+        )
+        .expect("rewritten envelope");
+        assert_eq!(envelope["kind"], "shell_result");
+        assert_eq!(envelope["meta"], "unchanged");
+        assert!(
+            envelope["output"]
+                .as_str()
+                .is_some_and(|value| value.starts_with("[search results]\nsrc/a.rs:\n"))
+        );
+    }
+
+    #[test]
+    fn search_projection_fails_open_for_ambiguous_json_envelope() {
+        let request = br#"{"input":[{"type":"function_call_output","output":"{\"first\":\"src/a.rs:10:foo\\nsrc/a.rs:11:bar\\n\",\"second\":\"src/b.rs:2:foo\\nsrc/b.rs:3:bar\\n\"}"}]}"#;
+        let span = output_span(request);
+        let text_span =
+            ActiveTextSpan::new(span.start, span.end, span.encoded_string).expect("text span");
+        let result = rewrite_search_projection(request, &[text_span], &limits());
+        assert_eq!(result.metrics().status, ActiveRewriteStatus::NotApplicable);
+        assert!(result.body().is_none());
+        assert_eq!(result.metrics().evaluated_spans, 1);
     }
 
     #[test]

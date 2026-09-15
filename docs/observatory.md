@@ -71,6 +71,11 @@ python3 scripts/characterize_public_provider_native_search_001.py \
 It uses one temporary, pinned public checkout and deletes all temporary state afterward. The
 report contains aggregate Context Analysis labels and sizes only.
 
+Pass `--shadow-compression` to validate the same native shape against bounded shadow candidates;
+active compression remains disabled in both modes. A provider-native Search envelope is only
+eligible when it contains one unambiguous canonical Search payload and exceeds the reducer's
+conservative minimum-size policy.
+
 ## Architecture
 
 ```text

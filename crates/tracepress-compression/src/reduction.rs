@@ -316,6 +316,87 @@ impl SearchResultModel {
     }
 }
 
+/// Builds a grouped Search view while preserving a provider-native JSON envelope byte-for-byte
+/// outside the one uniquely identified Search-output string. Nothing is selected when the
+/// envelope contains zero or more than one Search-like value.
+fn search_json_envelope_view(
+    input: &[u8],
+    limits: &CompressionLimits,
+) -> Option<(SearchResultModel, Vec<u8>)> {
+    let ranges = json_string_token_ranges(input, limits.max_candidates_per_block).ok()?;
+    let mut candidate = None;
+    for (start, end) in ranges {
+        let decoded = serde_json::from_slice::<String>(input.get(start..end)?).ok()?;
+        let Some(model) = SearchResultModel::parse(decoded.as_bytes(), limits) else {
+            continue;
+        };
+        if model.matches.is_empty() {
+            continue;
+        }
+        if candidate.is_some() {
+            return None;
+        }
+        candidate = Some((start, end, model));
+    }
+    let (start, end, model) = candidate?;
+    let rendered = model.render_grouped();
+    let rendered = std::str::from_utf8(&rendered).ok()?;
+    let replacement = serde_json::to_vec(rendered).ok()?;
+    if replacement.len() >= end.saturating_sub(start) {
+        return None;
+    }
+    let mut visible = Vec::with_capacity(
+        input
+            .len()
+            .saturating_sub(end.saturating_sub(start))
+            .saturating_add(replacement.len()),
+    );
+    visible.extend_from_slice(input.get(..start)?);
+    visible.extend_from_slice(&replacement);
+    visible.extend_from_slice(input.get(end..)?);
+    Some((model, visible))
+}
+
+/// Returns raw JSON string-token ranges after full-document validation. The scanner is lexical
+/// so reducer output can leave the enclosing provider representation unchanged.
+fn json_string_token_ranges(
+    input: &[u8],
+    maximum: u32,
+) -> Result<Vec<(usize, usize)>, ReductionStatus> {
+    if serde_json::from_slice::<Value>(input).is_err() {
+        return Err(ReductionStatus::InvalidInput);
+    }
+    let mut ranges = Vec::new();
+    let mut index = 0_usize;
+    while index < input.len() {
+        if input.get(index).copied() != Some(b'"') {
+            index = index.saturating_add(1);
+            continue;
+        }
+        let start = index;
+        index = index.saturating_add(1);
+        let mut escaped = false;
+        loop {
+            let Some(byte) = input.get(index).copied() else {
+                return Err(ReductionStatus::InvalidInput);
+            };
+            index = index.saturating_add(1);
+            if escaped {
+                escaped = false;
+            } else if byte == b'\\' {
+                escaped = true;
+            } else if byte == b'"' {
+                ranges.push((start, index));
+                if u32::try_from(ranges.len()).unwrap_or(u32::MAX) > maximum {
+                    return Err(ReductionStatus::ResourceLimit);
+                }
+                break;
+            }
+        }
+    }
+    Ok(ranges)
+}
+
 /// Canonical failure identity from a test runner result.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TestFailure {
@@ -381,7 +462,7 @@ impl ToolResultReducer for SearchResultReducer {
     }
 
     fn supports(&self, metadata: BlockMetadata) -> bool {
-        metadata.is_tool_result_plain_text()
+        metadata.is_tool_result_plain_text() || metadata.is_tool_result_json()
     }
 
     fn policy(&self, metadata: BlockMetadata, input_bytes: u64) -> ReductionPolicyDecision {
@@ -431,13 +512,19 @@ impl ToolResultReducer for SearchResultReducer {
         {
             return base(ReductionStatus::ResourceLimit);
         }
-        let Some(model) = SearchResultModel::parse(input, limits) else {
+        let direct = SearchResultModel::parse(input, limits)
+            .filter(|model| !model.matches.is_empty())
+            .map(|model| {
+                let visible = model.render_grouped();
+                (model, visible)
+            });
+        let Some((model, visible)) = direct.or_else(|| search_json_envelope_view(input, limits))
+        else {
             return base(ReductionStatus::NotApplicable);
         };
         if model.matches.len() < 2 {
             return base(ReductionStatus::NoImprovement);
         }
-        let visible = model.render_grouped();
         let visible_bytes = u64::try_from(visible.len()).unwrap_or(u64::MAX);
         if visible_bytes >= input_bytes
             || visible_bytes > limits.max_candidate_output_bytes
@@ -1297,6 +1384,43 @@ mod tests {
         assert!(original_model.is_some());
         let original_model = original_model.unwrap_or_default();
         assert_eq!(visible_model.matches, original_model.matches);
+    }
+
+    #[test]
+    fn search_reducer_preserves_provider_json_envelope() {
+        let input = br#"{"kind":"shell_result","output":"src/a.rs:10:needle\nsrc/a.rs:11:other\nsrc/a.rs:12:third\nsrc/a.rs:13:fourth\nsrc/b.rs:4:needle\nsrc/b.rs:5:other\nsrc/b.rs:6:third\nsrc/b.rs:7:fourth\n","meta":"unchanged"}"#;
+        let reducer = SearchResultReducer;
+        let result = reducer.reduce(input, &CompressionLimits::default());
+        assert_eq!(result.metrics().status, ReductionStatus::Applicable);
+        assert_eq!(result.recover().as_deref(), Some(input.as_slice()));
+        let envelope: Value = result
+            .visible()
+            .and_then(|visible| serde_json::from_slice(visible).ok())
+            .unwrap_or(Value::Null);
+        assert_eq!(
+            envelope.get("kind"),
+            Some(&Value::String("shell_result".to_owned()))
+        );
+        assert_eq!(
+            envelope.get("meta"),
+            Some(&Value::String("unchanged".to_owned()))
+        );
+        let model = envelope
+            .get("output")
+            .and_then(Value::as_str)
+            .and_then(|output| {
+                SearchResultModel::parse(output.as_bytes(), &CompressionLimits::default())
+            })
+            .unwrap_or_default();
+        assert_eq!(model.matches.len(), 8);
+    }
+
+    #[test]
+    fn search_reducer_rejects_ambiguous_provider_json_envelope() {
+        let input = br#"{"one":"src/a.rs:1:one\nsrc/a.rs:2:two\n","two":"src/b.rs:1:one\nsrc/b.rs:2:two\n"}"#;
+        let reduced = SearchResultReducer.reduce(input, &CompressionLimits::default());
+        assert_eq!(reduced.metrics().status, ReductionStatus::NotApplicable);
+        assert!(reduced.visible().is_none());
     }
 
     #[test]

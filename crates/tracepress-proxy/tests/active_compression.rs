@@ -270,11 +270,11 @@ async fn explicit_search_mode_rewrites_only_search_tool_result_text() -> TestRes
     let active = sink.active.lock().map_err(|_| "active capture poisoned")?;
     assert_eq!(active.len(), 1);
     let metrics = &active[0].metrics;
+    assert_eq!(metrics.compressor_id, "search.result_projection".to_owned());
     assert_eq!(
-        metrics.compressor_id,
-        "search.result_projection".to_owned()
+        metrics.status,
+        tracepress_compression::ActiveRewriteStatus::Rewritten
     );
-    assert_eq!(metrics.status, tracepress_compression::ActiveRewriteStatus::Rewritten);
     assert!(metrics.recovery_verified);
     assert!(metrics.deterministic);
     drop(active);

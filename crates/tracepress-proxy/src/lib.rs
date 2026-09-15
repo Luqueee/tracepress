@@ -1510,7 +1510,9 @@ fn active_forward_body(
                 && block.detection_result.as_ref().is_some_and(|result| {
                     matches!(
                         result.kind,
-                        DetectedContentKind::PlainText | DetectedContentKind::SearchResults
+                        DetectedContentKind::PlainText
+                            | DetectedContentKind::SearchResults
+                            | DetectedContentKind::Json
                     )
                 })
         })

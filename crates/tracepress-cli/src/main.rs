@@ -2780,18 +2780,23 @@ fn evaluate_shadow_job(
             .as_ref()
             .map(|name| ToolFamily::from_tool_name(Some(name.as_str())))
             == Some(ToolFamily::ShellGeneric);
-        let shell_family = if shell_generic {
-            classify_shell_semantic_family(&job.analysis.blocks, block, job.body.as_ref())
-        } else {
-            ShellSemanticFamily::Unknown
-        };
+        // Search eligibility is proved by the transient ToolCall/ToolResult pair, not by the
+        // provider's tool-name label alone. Native providers may call the shell surface by a
+        // different name while still carrying an unambiguous bounded `rg` command. The command
+        // and output are discarded after this in-memory classification.
+        let shell_family =
+            classify_shell_semantic_family(&job.analysis.blocks, block, job.body.as_ref());
         let reduction_reducers: [(&dyn ToolResultReducer, bool); 4] = [
             (&JsonEmptyNoiseFieldReducer, true),
             (&JsonRepeatedValueReducer, true),
             (&ShellDiagnosticProjectionReducer, shell_generic),
             (
                 &SearchResultReducer,
-                shell_family == ShellSemanticFamily::Search,
+                // Provider-native shell labels and call-id correlation can be absent even when
+                // the ToolResult is a JSON envelope. The reducer itself requires one canonical
+                // Search payload, so evaluating JSON ToolResults in shadow is still fail-closed
+                // and gives an explicit `not_applicable` record instead of silent missingness.
+                shell_family == ShellSemanticFamily::Search || metadata.is_tool_result_json(),
             ),
         ];
         let max_candidates = usize::try_from(limits.max_candidates_per_block).unwrap_or(usize::MAX);

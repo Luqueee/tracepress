@@ -131,6 +131,21 @@ The metadata-only artifact is:
 reports/public-tool-workloads-001/TRACEPRESS_PUBLIC_PROVIDER_NATIVE_SEARCH_SHAPE_001.{json,md}
 ```
 
-This resolves the active-pilot diagnostic but does not justify a quality claim or an automatic
-rewrite. Any future adapter must first preserve the envelope's canonical Search model in local
-tests, then repeat a shadow integrity check before another active session-level pilot.
+The adapter now preserves a valid envelope byte-for-byte except for one uniquely identified,
+canonical Search-output string. It is deterministic, has exact in-memory recovery, rejects
+ambiguous envelopes, and is covered by local canonical-model tests. Shadow scheduling evaluates
+JSON ToolResults through that strict parser even when a provider's transient tool-name label does
+not identify a shell surface; this replaces silent missingness with an explicit terminal state.
+
+The follow-up metadata-only shadow run is:
+
+```text
+reports/public-tool-workloads-001/TRACEPRESS_PUBLIC_PROVIDER_NATIVE_SEARCH_ENVELOPE_SHADOW_001.{json,md}
+```
+
+It observed a native JSON ToolResult, but its decoded representation was only 123 bytes (63
+locally estimated tokens). The Search reducer's conservative 256-byte policy therefore kept it
+full and produced no Search candidate evaluation. This is neither a shadow drop nor a candidate
+failure: the provider-native result is below the minimum size where an active rewrite could be
+material. No further active quality session is justified for this task without evidence of larger
+native Search ToolResults.

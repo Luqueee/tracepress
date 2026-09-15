@@ -111,3 +111,26 @@ The diagnostic artifact is:
 ```text
 reports/public-tool-workloads-001/TRACEPRESS_SEARCH_QUALITY_ACTIVE_PILOT_001.{json,md}
 ```
+
+## Provider-native shape diagnostic
+
+`scripts/characterize_public_provider_native_search_001.py` runs one additional public,
+read-only session with active compression disabled. It records only aggregate Context Analysis
+labels and sizes; prompts, commands, paths, source, ToolResult bytes, responses, and fingerprints
+remain transient and are deleted with its `/tmp` state.
+
+The diagnostic recorded two completed provider/context observations and one native ToolResult.
+That ToolResult was classified as `tool_generated / tool_result / json` (386 bytes; 63 locally
+estimated tokens), rather than `plain_text` or `search_results`. Consequently the active selector
+correctly produced zero evaluated spans: the current reducer accepts raw ripgrep text, while the
+provider-native result is a JSON envelope.
+
+The metadata-only artifact is:
+
+```text
+reports/public-tool-workloads-001/TRACEPRESS_PUBLIC_PROVIDER_NATIVE_SEARCH_SHAPE_001.{json,md}
+```
+
+This resolves the active-pilot diagnostic but does not justify a quality claim or an automatic
+rewrite. Any future adapter must first preserve the envelope's canonical Search model in local
+tests, then repeat a shadow integrity check before another active session-level pilot.

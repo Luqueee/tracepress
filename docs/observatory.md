@@ -60,6 +60,17 @@ python3 scripts/run_public_tool_workloads_001.py \
 Command and ToolResult bytes remain transient and are never included in reports. This remains
 shadow-only; it cannot rewrite provider requests or establish provider/cache/quality claims.
 
+To characterize a provider-native public Search ToolResult without enabling a reducer:
+
+```bash
+python3 scripts/characterize_public_provider_native_search_001.py \
+  --output-json reports/public-tool-workloads-001/TRACEPRESS_PUBLIC_PROVIDER_NATIVE_SEARCH_SHAPE_001.json \
+  --output-md reports/public-tool-workloads-001/TRACEPRESS_PUBLIC_PROVIDER_NATIVE_SEARCH_SHAPE_001.md
+```
+
+It uses one temporary, pinned public checkout and deletes all temporary state afterward. The
+report contains aggregate Context Analysis labels and sizes only.
+
 ## Architecture
 
 ```text

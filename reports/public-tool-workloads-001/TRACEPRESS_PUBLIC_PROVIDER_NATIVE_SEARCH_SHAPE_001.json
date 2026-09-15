@@ -1,0 +1,195 @@
+{
+  "active_compression": "off",
+  "execution": {
+    "return_code": 0,
+    "timed_out": false
+  },
+  "experiment_id": "public-provider-native-search-shape-001",
+  "forwarding_mutations": 0,
+  "limitations": [
+    "One bounded public session characterizes provider-native metadata only.",
+    "No efficacy, quality, cache-causality, or provider-savings conclusion follows from this diagnostic."
+  ],
+  "model": "gpt-5.6-luna",
+  "observed": {
+    "context_blocks": 35,
+    "context_snapshots": 2,
+    "context_snapshots_complete": 2,
+    "groups": [
+      {
+        "block_count": 6,
+        "block_kind": "text",
+        "detected_content_kind": "plain_text",
+        "estimated_tokens": 23060,
+        "origin": "human_authored",
+        "raw_bytes": 71926,
+        "raw_bytes_max": 17947,
+        "raw_bytes_min": 1026,
+        "role": "developer",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 6,
+        "block_kind": "text",
+        "detected_content_kind": "unknown",
+        "estimated_tokens": 8740,
+        "origin": "human_authored",
+        "raw_bytes": 25570,
+        "raw_bytes_max": 11785,
+        "raw_bytes_min": 346,
+        "role": "developer",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 4,
+        "block_kind": "text",
+        "detected_content_kind": "unknown",
+        "estimated_tokens": 2728,
+        "origin": "human_authored",
+        "raw_bytes": 7498,
+        "raw_bytes_max": 3236,
+        "raw_bytes_min": 513,
+        "role": "user",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 2,
+        "block_kind": "text",
+        "detected_content_kind": "source_code",
+        "estimated_tokens": 166,
+        "origin": "human_authored",
+        "raw_bytes": 404,
+        "raw_bytes_max": 202,
+        "raw_bytes_min": 202,
+        "role": "user",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 1,
+        "block_kind": "tool_call",
+        "detected_content_kind": "unknown",
+        "estimated_tokens": 137,
+        "origin": "agent_generated",
+        "raw_bytes": 616,
+        "raw_bytes_max": 616,
+        "raw_bytes_min": 616,
+        "role": "tool",
+        "tool_identity_present_count": 1
+      },
+      {
+        "block_count": 2,
+        "block_kind": "text",
+        "detected_content_kind": "plain_text",
+        "estimated_tokens": 126,
+        "origin": "human_authored",
+        "raw_bytes": 438,
+        "raw_bytes_max": 219,
+        "raw_bytes_min": 219,
+        "role": "user",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 1,
+        "block_kind": "tool_result",
+        "detected_content_kind": "json",
+        "estimated_tokens": 63,
+        "origin": "tool_generated",
+        "raw_bytes": 386,
+        "raw_bytes_max": 386,
+        "raw_bytes_min": 386,
+        "role": "tool",
+        "tool_identity_present_count": 1
+      },
+      {
+        "block_count": 1,
+        "block_kind": "text",
+        "detected_content_kind": "plain_text",
+        "estimated_tokens": 29,
+        "origin": "agent_generated",
+        "raw_bytes": 97,
+        "raw_bytes_max": 97,
+        "raw_bytes_min": 97,
+        "role": "assistant",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 4,
+        "block_kind": "message",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "human_authored",
+        "raw_bytes": 98992,
+        "raw_bytes_max": 31326,
+        "raw_bytes_min": 18170,
+        "role": "developer",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 4,
+        "block_kind": "message",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "human_authored",
+        "raw_bytes": 9748,
+        "raw_bytes_max": 4371,
+        "raw_bytes_min": 503,
+        "role": "user",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 2,
+        "block_kind": "unknown",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "unknown",
+        "raw_bytes": 61762,
+        "raw_bytes_max": 30881,
+        "raw_bytes_min": 30881,
+        "role": "developer",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 1,
+        "block_kind": "message",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "agent_generated",
+        "raw_bytes": 421,
+        "raw_bytes_max": 421,
+        "raw_bytes_min": 421,
+        "role": "assistant",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 1,
+        "block_kind": "opaque_reasoning",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "provider_managed",
+        "raw_bytes": 3405,
+        "raw_bytes_max": 3405,
+        "raw_bytes_min": 3405,
+        "role": "assistant",
+        "tool_identity_present_count": 0
+      }
+    ],
+    "provider_errors": 0,
+    "provider_requests": 2,
+    "search_projection_target_metadata": null,
+    "search_projection_target_observed": false
+  },
+  "phase": "4.5",
+  "privacy": {
+    "commands_persisted": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false,
+    "report_contract": "aggregate_allowlist_only",
+    "responses_persisted": false
+  },
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "status": "completed",
+  "workspace_class": "public_controlled"
+}

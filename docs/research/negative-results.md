@@ -12,6 +12,8 @@ and intentionally do not include prompts, paths, tool arguments, raw results, or
 | `json.empty_noise_fields` | ToolResult JSON | 0 applicable blocks in the naturalistic reducers cohorts | Shadow only |
 | `json.repeated_value_elision` | ToolResult JSON | 2.49% addressable share and 0.68% estimated reduction in the final pilot | Below materiality gate |
 | `json.tabular` | ToolResult JSON | Small structural upper bound; opaque custom representation | Shadow-only upper bound |
+| `search.result_projection` over provider-native envelope | Controlled public Search workload | Native envelopes were below the material reduction threshold | Closed for current candidates |
+| `toolresult.lifetime` historical eviction | Public multi-request shadow cohort | 3.04% historical exposure; best net total-context reduction 2.76%, below Phase 4.6 gates | Closed without recovery or active eviction |
 
 The evidence is workload-scoped. It closes generic deterministic/provider-readable expansion for
 the current cohorts; it does not claim that every future tool-family policy is impossible.

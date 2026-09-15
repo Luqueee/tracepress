@@ -1,0 +1,404 @@
+{
+  "age_buckets": [
+    {
+      "age_at_least": 1,
+      "estimated_exposure": 64198,
+      "share_of_total_context": 0.030376946113309537
+    },
+    {
+      "age_at_least": 2,
+      "estimated_exposure": 39404,
+      "share_of_total_context": 0.01864502297032383
+    },
+    {
+      "age_at_least": 3,
+      "estimated_exposure": 15345,
+      "share_of_total_context": 0.007260884110232949
+    },
+    {
+      "age_at_least": 5,
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0
+    },
+    {
+      "age_at_least": 10,
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0
+    }
+  ],
+  "cache_risk_proxy": {
+    "classification": {
+      "High": "<50%",
+      "Low": "preserved prefix >= 90%",
+      "Medium": "50%-<90%",
+      "Unknown": "no raw offset"
+    },
+    "structural_only": true
+  },
+  "compaction_interaction": {
+    "available": false,
+    "compaction_snapshots": 0,
+    "note": "A compaction boundary is a measured request-kind marker, not an assumed safe cache reset."
+  },
+  "dataset": {
+    "blocks": 1131,
+    "estimated_total_context": 2113379,
+    "lineage_coverage_exclusions": {},
+    "snapshots": 50
+  },
+  "generated_at_utc": "2026-09-15T09:33:42.357695+00:00",
+  "limitations": [
+    "Local token estimates are heuristic, not provider usage.",
+    "Cache risk is a structural prefix proxy, not provider cache behavior.",
+    "Lineages without call association or exact fingerprints fail closed and are excluded.",
+    "No forwarding request was read or modified."
+  ],
+  "lineages": {
+    "count": 40,
+    "historical_toolresult_share": 0.030376946113309537,
+    "lifetime_distributions": [
+      {
+        "content_kind": "all",
+        "lifetime": {
+          "count": 40,
+          "max": 3,
+          "p50": 1.5,
+          "p75": 2.25,
+          "p90": 3.0,
+          "p95": 3.0,
+          "p99": 3.0
+        },
+        "lineages": 40,
+        "tool_family": "all",
+        "workload": "public_lifetime_chain"
+      },
+      {
+        "content_kind": "all",
+        "lifetime": {
+          "count": 40,
+          "max": 3,
+          "p50": 1.5,
+          "p75": 2.25,
+          "p90": 3.0,
+          "p95": 3.0,
+          "p99": 3.0
+        },
+        "lineages": 40,
+        "tool_family": "exec",
+        "workload": "all"
+      },
+      {
+        "content_kind": "json",
+        "lifetime": {
+          "count": 40,
+          "max": 3,
+          "p50": 1.5,
+          "p75": 2.25,
+          "p90": 3.0,
+          "p95": 3.0,
+          "p99": 3.0
+        },
+        "lineages": 40,
+        "tool_family": "all",
+        "workload": "all"
+      },
+      {
+        "content_kind": "json",
+        "lifetime": {
+          "count": 40,
+          "max": 3,
+          "p50": 1.5,
+          "p75": 2.25,
+          "p90": 3.0,
+          "p95": 3.0,
+          "p99": 3.0
+        },
+        "lineages": 40,
+        "tool_family": "exec",
+        "workload": "all"
+      }
+    ],
+    "retained_token_exposure": 64198
+  },
+  "offline_gate": {
+    "best_policy": "E1",
+    "best_shadow_net_total_context_reduction": 0.027613598885954674,
+    "decision": "close_phase_4_6_without_runtime_eviction",
+    "historical_exposure_threshold": 0.1,
+    "historical_toolresult_share": 0.030376946113309537,
+    "lineages_with_follow_up_observation": 30,
+    "passed": false,
+    "shadow_net_total_context_reduction_threshold": 0.05
+  },
+  "phase": "4.6_offline",
+  "policy_simulations": [
+    {
+      "cache_risk_distribution": {},
+      "description": "keep everything",
+      "eligible_historical_occurrences": 0,
+      "gross_eviction_reduction": 0,
+      "policy_id": "E0",
+      "recovery_tool_schema_overhead": 0,
+      "shadow_net_eviction_reduction": 0,
+      "shadow_net_total_context_reduction": 0.0,
+      "stub_overhead": 0
+    },
+    {
+      "cache_risk_distribution": {
+        "Medium": 60
+      },
+      "description": "age >= 1",
+      "eligible_historical_occurrences": 60,
+      "gross_eviction_reduction": 64198,
+      "policy_id": "E1",
+      "recovery_tool_schema_overhead": 4400,
+      "shadow_net_eviction_reduction": 58358,
+      "shadow_net_total_context_reduction": 0.027613598885954674,
+      "stub_overhead": 1440
+    },
+    {
+      "cache_risk_distribution": {
+        "Medium": 30
+      },
+      "description": "age >= 2",
+      "eligible_historical_occurrences": 30,
+      "gross_eviction_reduction": 39404,
+      "policy_id": "E2",
+      "recovery_tool_schema_overhead": 4400,
+      "shadow_net_eviction_reduction": 34284,
+      "shadow_net_total_context_reduction": 0.01622236238743737,
+      "stub_overhead": 720
+    },
+    {
+      "cache_risk_distribution": {
+        "Medium": 10
+      },
+      "description": "age >= 3",
+      "eligible_historical_occurrences": 10,
+      "gross_eviction_reduction": 15345,
+      "policy_id": "E3",
+      "recovery_tool_schema_overhead": 4400,
+      "shadow_net_eviction_reduction": 10705,
+      "shadow_net_total_context_reduction": 0.005065347956992096,
+      "stub_overhead": 240
+    },
+    {
+      "cache_risk_distribution": {
+        "Medium": 19
+      },
+      "description": "age >= 2 and size >= 512 estimated tokens",
+      "eligible_historical_occurrences": 19,
+      "gross_eviction_reduction": 38690,
+      "policy_id": "E4",
+      "recovery_tool_schema_overhead": 3080,
+      "shadow_net_eviction_reduction": 35154,
+      "shadow_net_total_context_reduction": 0.01663402541617003,
+      "stub_overhead": 456
+    },
+    {
+      "cache_risk_distribution": {
+        "Medium": 6
+      },
+      "description": "age >= 2 and size >= 2048 estimated tokens",
+      "eligible_historical_occurrences": 6,
+      "gross_eviction_reduction": 21342,
+      "policy_id": "E5",
+      "recovery_tool_schema_overhead": 1320,
+      "shadow_net_eviction_reduction": 19878,
+      "shadow_net_total_context_reduction": 0.009405790442698635,
+      "stub_overhead": 144
+    }
+  ],
+  "privacy": {
+    "metadata_only": true,
+    "raw_content_persisted": false
+  },
+  "recovery_stub": {
+    "recovery_tool_schema_bytes": 351,
+    "recovery_tool_schema_estimated_tokens": 88,
+    "stub_bytes": 94,
+    "stub_estimated_tokens": 24,
+    "template": "opaque recovery reference"
+  },
+  "report_version": 1,
+  "size_age_matrix": [
+    {
+      "age": "1",
+      "estimated_exposure": 1899,
+      "share_of_total_context": 0.0008985610247854265,
+      "size": "<256",
+      "toolresults": 28
+    },
+    {
+      "age": "2",
+      "estimated_exposure": 714,
+      "share_of_total_context": 0.0003378475890978381,
+      "size": "<256",
+      "toolresults": 11
+    },
+    {
+      "age": "3",
+      "estimated_exposure": 264,
+      "share_of_total_context": 0.000124918436305083,
+      "size": "<256",
+      "toolresults": 4
+    },
+    {
+      "age": "5",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": "<256",
+      "toolresults": 0
+    },
+    {
+      "age": "10+",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": "<256",
+      "toolresults": 0
+    },
+    {
+      "age": "1",
+      "estimated_exposure": 7136,
+      "share_of_total_context": 0.003376583187398001,
+      "size": "256-1K",
+      "toolresults": 8
+    },
+    {
+      "age": "2",
+      "estimated_exposure": 3568,
+      "share_of_total_context": 0.0016882915936990005,
+      "size": "256-1K",
+      "toolresults": 4
+    },
+    {
+      "age": "3",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": "256-1K",
+      "toolresults": 0
+    },
+    {
+      "age": "5",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": "256-1K",
+      "toolresults": 0
+    },
+    {
+      "age": "10+",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": "256-1K",
+      "toolresults": 0
+    },
+    {
+      "age": "1",
+      "estimated_exposure": 55163,
+      "share_of_total_context": 0.026101801901126112,
+      "size": "1K-4K",
+      "toolresults": 24
+    },
+    {
+      "age": "2",
+      "estimated_exposure": 35122,
+      "share_of_total_context": 0.01661888378752699,
+      "size": "1K-4K",
+      "toolresults": 15
+    },
+    {
+      "age": "3",
+      "estimated_exposure": 15081,
+      "share_of_total_context": 0.007135965673927866,
+      "size": "1K-4K",
+      "toolresults": 6
+    },
+    {
+      "age": "5",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": "1K-4K",
+      "toolresults": 0
+    },
+    {
+      "age": "10+",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": "1K-4K",
+      "toolresults": 0
+    },
+    {
+      "age": "1",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": "4K-16K",
+      "toolresults": 0
+    },
+    {
+      "age": "2",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": "4K-16K",
+      "toolresults": 0
+    },
+    {
+      "age": "3",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": "4K-16K",
+      "toolresults": 0
+    },
+    {
+      "age": "5",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": "4K-16K",
+      "toolresults": 0
+    },
+    {
+      "age": "10+",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": "4K-16K",
+      "toolresults": 0
+    },
+    {
+      "age": "1",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": ">16K",
+      "toolresults": 0
+    },
+    {
+      "age": "2",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": ">16K",
+      "toolresults": 0
+    },
+    {
+      "age": "3",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": ">16K",
+      "toolresults": 0
+    },
+    {
+      "age": "5",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": ">16K",
+      "toolresults": 0
+    },
+    {
+      "age": "10+",
+      "estimated_exposure": 0,
+      "share_of_total_context": 0.0,
+      "size": ">16K",
+      "toolresults": 0
+    }
+  ],
+  "sources": [
+    "tracepress-shadow-eviction-cohort.sqlite"
+  ]
+}

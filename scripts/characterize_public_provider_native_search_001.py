@@ -46,6 +46,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-md", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=90)
     parser.add_argument(
+        "--metadata-database-output",
+        type=Path,
+        help="optional local-only copy of the metadata database for a follow-on offline analysis",
+    )
+    parser.add_argument(
+        "--lifetime-chain",
+        action="store_true",
+        help="run multi-tool-call public sessions suitable for offline ToolResult lifetime observation",
+    )
+    parser.add_argument(
         "--sessions",
         type=int,
         default=1,
@@ -176,6 +186,17 @@ def prompt(pattern: str) -> str:
     )
 
 
+def lifetime_prompt() -> str:
+    # Public execution input only. It intentionally never crosses the report boundary.
+    return (
+        "Inspect this public repository without modifying it. Use the shell exactly four times, "
+        "one command at a time, before answering: first count Rust definitions with ripgrep; "
+        "second count implementations with ripgrep; third inspect the repository's current commit; "
+        "fourth inspect the working-tree status. Then answer only with four aggregate facts. "
+        "Do not combine commands, do not use any write command, and do not stop after an earlier result."
+    )
+
+
 def main() -> int:
     options = parse_args()
     repo_root = options.repo_root.resolve()
@@ -251,11 +272,14 @@ def main() -> int:
         else:
             raise RuntimeError("daemon did not become ready")
         executions: list[tuple[int, bool]] = []
-        for pattern in SEARCH_PATTERNS[:options.sessions]:
+        requests = (lifetime_prompt(),) * options.sessions if options.lifetime_chain else tuple(
+            prompt(pattern) for pattern in SEARCH_PATTERNS[:options.sessions]
+        )
+        for request_prompt in requests:
             try:
                 execution = subprocess.run(
                     [str(cli), "run", "codex", "exec", "-m", MODEL, "-s", "read-only",
-                     "--skip-git-repo-check", prompt(pattern)],
+                     "--skip-git-repo-check", request_prompt],
                     cwd=public_repo, env=environment, capture_output=True, text=True,
                     timeout=options.timeout,
                 )
@@ -282,16 +306,26 @@ def main() -> int:
             state_root / "tracepress.sqlite3",
             SHADOW_EXPERIMENT_ID if options.shadow_compression else None,
         )
+        if options.metadata_database_output is not None:
+            options.metadata_database_output.parent.mkdir(parents=True, exist_ok=True)
+            # The daemon uses WAL mode. A filesystem copy while it is running can omit the
+            # newest committed pages, so use SQLite's consistent online-backup API instead.
+            if options.metadata_database_output.exists():
+                options.metadata_database_output.unlink()
+            with sqlite3.connect(state_root / "tracepress.sqlite3") as source:
+                with sqlite3.connect(options.metadata_database_output) as destination:
+                    source.backup(destination)
         report = {
             "experiment_id": SHADOW_EXPERIMENT_ID if options.shadow_compression else EXPERIMENT_ID,
             "status": "completed" if not any(timed_out for _, timed_out in executions) else "completed_with_timeouts",
-            "phase": "4.5",
+            "phase": "4.6" if options.lifetime_chain else "4.5",
             "workspace_class": "public_controlled",
             "repository_pin": {"repository": "BurntSushi/ripgrep", "commit_sha": RIPGREP_SHA},
             "model": MODEL,
             "forwarding_mutations": 0,
             "active_compression": "off",
             "shadow_compression": options.shadow_compression,
+            "lifetime_chain": options.lifetime_chain,
             "execution": {
                 "sessions_requested": options.sessions,
                 "sessions_completed": len(executions),
@@ -306,20 +340,27 @@ def main() -> int:
                 "paths_persisted": False,
                 "commands_persisted": False,
                 "responses_persisted": False,
+                # The database is intentionally local-only; never serialize its path into a
+                # report that claims paths are not persisted.
+                "metadata_database_copied": options.metadata_database_output is not None,
             },
             "limitations": [
-            "Bounded sequential public sessions characterize provider-native metadata only.",
+                "Bounded sequential public sessions characterize provider-native metadata only.",
+                "Lifetime-chain sessions require several read-only tool calls before completion."
+                if options.lifetime_chain else "Each session requests one bounded Search tool call.",
                 "No efficacy, quality, cache-causality, or provider-savings conclusion follows from this diagnostic.",
             ],
         }
         options.output_json.parent.mkdir(parents=True, exist_ok=True)
         options.output_json.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
         summary = [
-            "# TRACEPRESS_PUBLIC_PROVIDER_NATIVE_SEARCH_SHAPE_001",
+            "# TRACEPRESS_PUBLIC_TOOLRESULT_LIFETIME_SOURCE_001"
+            if options.lifetime_chain else "# TRACEPRESS_PUBLIC_PROVIDER_NATIVE_SEARCH_SHAPE_001",
             "",
             "Bounded public metadata-only characterization of provider-native Search ToolResult shapes.",
             "",
             f"Sessions: **{options.sessions}**. Provider requests: **{observed['provider_requests']}**. Context snapshots complete: **{observed['context_snapshots_complete']}/{observed['context_snapshots']}**.",
+            f"Lifetime chain: **{str(options.lifetime_chain).lower()}**.",
             f"Search-projection target observed: **{str(observed['search_projection_target_observed']).lower()}**.",
             "",
             "| Origin | Block kind | Role | Detected content kind | Blocks | Raw bytes | Estimated tokens |",

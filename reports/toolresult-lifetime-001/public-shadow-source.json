@@ -1,0 +1,202 @@
+{
+  "active_compression": "off",
+  "execution": {
+    "sessions_completed": 1,
+    "sessions_requested": 1,
+    "sessions_return_code_nonzero": 0,
+    "sessions_return_code_zero": 1,
+    "sessions_timed_out": 0
+  },
+  "experiment_id": "public-provider-native-search-shape-001",
+  "forwarding_mutations": 0,
+  "lifetime_chain": true,
+  "limitations": [
+    "Bounded sequential public sessions characterize provider-native metadata only.",
+    "Lifetime-chain sessions require several read-only tool calls before completion.",
+    "No efficacy, quality, cache-causality, or provider-savings conclusion follows from this diagnostic."
+  ],
+  "model": "gpt-5.6-luna",
+  "observed": {
+    "context_blocks": 113,
+    "context_snapshots": 5,
+    "context_snapshots_complete": 5,
+    "groups": [
+      {
+        "block_count": 15,
+        "block_kind": "text",
+        "detected_content_kind": "plain_text",
+        "estimated_tokens": 57650,
+        "origin": "human_authored",
+        "raw_bytes": 179815,
+        "raw_bytes_max": 17947,
+        "raw_bytes_min": 1026,
+        "role": "developer",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 15,
+        "block_kind": "text",
+        "detected_content_kind": "unknown",
+        "estimated_tokens": 21850,
+        "origin": "human_authored",
+        "raw_bytes": 63925,
+        "raw_bytes_max": 11785,
+        "raw_bytes_min": 346,
+        "role": "developer",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 15,
+        "block_kind": "text",
+        "detected_content_kind": "unknown",
+        "estimated_tokens": 7465,
+        "origin": "human_authored",
+        "raw_bytes": 20955,
+        "raw_bytes_max": 3236,
+        "raw_bytes_min": 442,
+        "role": "user",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 10,
+        "block_kind": "tool_call",
+        "detected_content_kind": "unknown",
+        "estimated_tokens": 1388,
+        "origin": "agent_generated",
+        "raw_bytes": 5847,
+        "raw_bytes_max": 636,
+        "raw_bytes_min": 499,
+        "role": "tool",
+        "tool_identity_present_count": 10
+      },
+      {
+        "block_count": 10,
+        "block_kind": "tool_result",
+        "detected_content_kind": "json",
+        "estimated_tokens": 616,
+        "origin": "tool_generated",
+        "raw_bytes": 3881,
+        "raw_bytes_max": 421,
+        "raw_bytes_min": 347,
+        "role": "tool",
+        "tool_identity_present_count": 10
+      },
+      {
+        "block_count": 5,
+        "block_kind": "text",
+        "detected_content_kind": "source_code",
+        "estimated_tokens": 415,
+        "origin": "human_authored",
+        "raw_bytes": 1010,
+        "raw_bytes_max": 202,
+        "raw_bytes_min": 202,
+        "role": "user",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 4,
+        "block_kind": "text",
+        "detected_content_kind": "plain_text",
+        "estimated_tokens": 128,
+        "origin": "agent_generated",
+        "raw_bytes": 408,
+        "raw_bytes_max": 102,
+        "raw_bytes_min": 102,
+        "role": "assistant",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 10,
+        "block_kind": "message",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "human_authored",
+        "raw_bytes": 247485,
+        "raw_bytes_max": 31327,
+        "raw_bytes_min": 18170,
+        "role": "developer",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 10,
+        "block_kind": "message",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "human_authored",
+        "raw_bytes": 25490,
+        "raw_bytes_max": 4371,
+        "raw_bytes_min": 727,
+        "role": "user",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 10,
+        "block_kind": "opaque_reasoning",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "provider_managed",
+        "raw_bytes": 26458,
+        "raw_bytes_max": 4301,
+        "raw_bytes_min": 1529,
+        "role": "assistant",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 5,
+        "block_kind": "unknown",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "unknown",
+        "raw_bytes": 154405,
+        "raw_bytes_max": 30881,
+        "raw_bytes_min": 30881,
+        "role": "developer",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 4,
+        "block_kind": "message",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "agent_generated",
+        "raw_bytes": 1700,
+        "raw_bytes_max": 425,
+        "raw_bytes_min": 425,
+        "role": "assistant",
+        "tool_identity_present_count": 0
+      }
+    ],
+    "provider_errors": 0,
+    "provider_requests": 5,
+    "search_projection_target_metadata": {
+      "block_count": 10,
+      "block_kind": "tool_result",
+      "detected_content_kind": "json",
+      "estimated_tokens": 616,
+      "origin": "tool_generated",
+      "raw_bytes": 3881,
+      "raw_bytes_max": 421,
+      "raw_bytes_min": 347,
+      "role": "tool",
+      "tool_identity_present_count": 10
+    },
+    "search_projection_target_observed": true,
+    "shadow_candidates": []
+  },
+  "phase": "4.6",
+  "privacy": {
+    "commands_persisted": false,
+    "metadata_database_copied": true,
+    "paths_persisted": false,
+    "raw_content_persisted": false,
+    "report_contract": "aggregate_allowlist_only",
+    "responses_persisted": false
+  },
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "shadow_compression": false,
+  "status": "completed",
+  "workspace_class": "public_controlled"
+}

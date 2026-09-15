@@ -8,6 +8,7 @@
     clippy::map_unwrap_or,
     clippy::print_stdout,
     clippy::print_stderr,
+    clippy::exit,
     clippy::unused_async,
     clippy::significant_drop_tightening,
     reason = "CLI boundary formats user-facing output and validates bounded fixed-size state"
@@ -79,6 +80,7 @@ use tracepress_storage::{
     ContextSnapshotStatus,
 };
 use tracepress_storage::{ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus};
+use tracepress_tool_proxy::execute_passthrough;
 
 const FRAME_BYTES: u64 = 65_536;
 
@@ -4356,6 +4358,11 @@ enum CommandKind {
         large_fixture: bool,
     },
     Proxy,
+    /// Execute an admitted source-side tool command without reduction.
+    Tool {
+        #[arg(required = true, trailing_var_arg = true)]
+        args: Vec<String>,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -5540,7 +5547,40 @@ async fn main() -> Result<(), String> {
         }
         CommandKind::Run { agent, args } => run_agent(&config, agent, args).await,
         CommandKind::Proxy => proxy().await,
+        CommandKind::Tool { args } => tool(args),
     }
+}
+
+fn tool(args: Vec<String>) -> Result<(), String> {
+    let command = args.join(" ");
+    let ids = UuidV7Generator::new();
+    let (stdout, stderr, metadata) = execute_passthrough(&command, &ids)
+        .map_err(|error| format!("source tool passthrough refused or failed: {error}"))?;
+    use std::io::Write as _;
+    std::io::stdout()
+        .write_all(&stdout)
+        .map_err(|error| error.to_string())?;
+    std::io::stderr()
+        .write_all(&stderr)
+        .map_err(|error| error.to_string())?;
+    if let Some(signal) = metadata.termination_signal {
+        #[cfg(unix)]
+        {
+            let status = std::process::Command::new("/bin/kill")
+                .args(["-s", &signal.to_string(), &std::process::id().to_string()])
+                .status()
+                .map_err(|error| format!("cannot reproduce child signal: {error}"))?;
+            return Err(format!("signal reproducer unexpectedly returned: {status}"));
+        }
+        #[cfg(not(unix))]
+        return Err(format!("child terminated by signal {signal}"));
+    }
+    if let Some(code) = metadata.exit_code
+        && code != 0
+    {
+        std::process::exit(code);
+    }
+    Ok(())
 }
 
 async fn dashboard(config: &Config, options: DashboardOptions) -> Result<(), String> {

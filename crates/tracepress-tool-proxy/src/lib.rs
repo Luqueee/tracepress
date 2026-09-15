@@ -1,5 +1,11 @@
 //! Conservative source-side command admission and passthrough execution.
+#![allow(
+    missing_docs,
+    reason = "Phase 5.0 internal proxy API is deliberately narrow while its runtime contract settles"
+)]
 
+#[cfg(unix)]
+use std::os::unix::process::ExitStatusExt as _;
 use std::{
     process::Command,
     time::{Duration, Instant},
@@ -69,6 +75,8 @@ pub struct SourceExecutionMetadata {
     pub raw_stderr_bytes: u64,
     pub emitted_bytes: u64,
     pub exit_code: Option<i32>,
+    /// Unix signal which terminated the child, when the platform reports one.
+    pub termination_signal: Option<i32>,
     pub duration: Duration,
 }
 
@@ -104,6 +112,10 @@ pub fn execute_passthrough(
         raw_stderr_bytes,
         emitted_bytes: raw_stdout_bytes.saturating_add(raw_stderr_bytes),
         exit_code: output.status.code(),
+        #[cfg(unix)]
+        termination_signal: output.status.signal(),
+        #[cfg(not(unix))]
+        termination_signal: None,
         duration: started.elapsed(),
     };
     Ok((stdout, stderr, metadata))

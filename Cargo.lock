@@ -3279,6 +3279,7 @@ dependencies = [
  "tracepress-provider",
  "tracepress-proxy",
  "tracepress-storage",
+ "tracepress-tool-proxy",
 ]
 
 [[package]]

@@ -33,6 +33,7 @@ tracepress-context = { path = "../tracepress-context" }
 tracepress-storage = { path = "../tracepress-storage" }
 tracepress-dashboard-api = { path = "../tracepress-dashboard-api" }
 tracepress-compression = { path = "../tracepress-compression" }
+tracepress-tool-proxy = { path = "../tracepress-tool-proxy" }
 
 [dev-dependencies]
 tempfile = "3"

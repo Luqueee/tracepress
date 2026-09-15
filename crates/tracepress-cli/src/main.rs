@@ -5654,13 +5654,39 @@ fn hook(agent: String) -> Result<(), String> {
     let _read = std::io::stdin()
         .read_to_end(&mut input)
         .map_err(|error| format!("cannot read hook input: {error}"))?;
-    if let Some(output) = codex_pre_tool_use_rewrite(&input) {
+    let output = codex_pre_tool_use_rewrite(&input);
+    let _recorded = record_hook_event(&input, output.is_some());
+    if let Some(output) = output {
         use std::io::Write as _;
         std::io::stdout()
             .write_all(&output)
             .map_err(|error| format!("cannot write hook output: {error}"))?;
     }
     Ok(())
+}
+
+/// Appends an allowlisted hook receipt; hook telemetry must never retain the command payload.
+fn record_hook_event(input: &[u8], rewritten: bool) -> Result<(), String> {
+    let root = std::env::var_os("TRACEPRESS_HOME")
+        .map(PathBuf::from)
+        .ok_or_else(|| "missing Tracepress home".to_owned())?;
+    let value: serde_json::Value =
+        serde_json::from_slice(input).map_err(|error| error.to_string())?;
+    let event = serde_json::json!({
+        "hook_event": value.get("hook_event_name").and_then(serde_json::Value::as_str),
+        "tool_name": value.get("tool_name").and_then(serde_json::Value::as_str),
+        "rewritten": rewritten,
+    });
+    let mut options = std::fs::OpenOptions::new();
+    let _options = options.create(true).append(true);
+    #[cfg(unix)]
+    let _mode = options.mode(0o600);
+    use std::io::Write as _;
+    let mut file = options
+        .open(root.join("hook-events.jsonl"))
+        .map_err(|error| error.to_string())?;
+    serde_json::to_writer(&mut file, &event).map_err(|error| error.to_string())?;
+    file.write_all(b"\n").map_err(|error| error.to_string())
 }
 
 fn tool(config: &Config, args: Vec<String>) -> Result<(), String> {

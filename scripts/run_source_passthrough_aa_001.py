@@ -25,7 +25,9 @@ def aggregate(db: Path, state: Path) -> dict[str, Any]:
         errors = int(con.execute("SELECT COUNT(*) FROM provider_attempts WHERE status <> 'completed' OR error_code IS NOT NULL OR transport_error IS NOT NULL").fetchone()[0])
     source = state / "source-executions.jsonl"
     source_rows = sum(1 for _ in source.open(encoding="utf-8")) if source.exists() else 0
-    return {"provider_requests": requests, "provider_errors": errors, "provider_usage": {"input_total": usage[0], "input_cached": usage[1], "input_uncached": usage[2], "output": usage[3], "reasoning": usage[4]}, "source_executions": source_rows}
+    hooks = state / "hook-events.jsonl"
+    hook_rows = sum(1 for _ in hooks.open(encoding="utf-8")) if hooks.exists() else 0
+    return {"provider_requests": requests, "provider_errors": errors, "provider_usage": {"input_total": usage[0], "input_cached": usage[1], "input_uncached": usage[2], "output": usage[3], "reasoning": usage[4]}, "source_executions": source_rows, "hook_events": hook_rows}
 
 def checkout(root: Path) -> Path:
     repo = root / "ripgrep"
@@ -68,7 +70,8 @@ def main() -> int:
     repo=checkout(a.workload_root); rows=[]
     for _ in range(a.pairs):
         rows.extend([arm(cli,daemon,repo,"Control",a.timeout),arm(cli,daemon,repo,"Passthrough",a.timeout)])
-    report={"experiment_id":EXPERIMENT,"phase":"5.0","status":"completed","pairs":a.pairs,"reducer":"passthrough","forwarding_mutation":False,"repository_pin":{"repository":"BurntSushi/ripgrep","commit_sha":SHA},"rows":rows,"privacy":{"commands_persisted":False,"paths_persisted":False,"raw_content_persisted":False}}
+    source_complete = all(row.get("source_executions", 0) > 0 for row in rows if row["arm"] == "Passthrough")
+    report={"experiment_id":EXPERIMENT,"phase":"5.0","status":"completed","pairs":a.pairs,"reducer":"passthrough","forwarding_mutation":False,"repository_pin":{"repository":"BurntSushi/ripgrep","commit_sha":SHA},"rows":rows,"infrastructure_gate":{"source_execution_per_passthrough_session":source_complete,"decision":"aa_valid" if source_complete else "aa_invalid_missing_source_execution"},"privacy":{"commands_persisted":False,"paths_persisted":False,"raw_content_persisted":False}}
     a.output_json.parent.mkdir(parents=True,exist_ok=True); a.output_json.write_text(json.dumps(report,indent=2,sort_keys=True)+"\n",encoding="utf-8")
     a.output_md.write_text("# TRACEPRESS_SOURCE_PASSTHROUGH_AA_001\n\nStatus: **completed**. Passthrough only; no reducer was enabled.\n",encoding="utf-8")
     return 0

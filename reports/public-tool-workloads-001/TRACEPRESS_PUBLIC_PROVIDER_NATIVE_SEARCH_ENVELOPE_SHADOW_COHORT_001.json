@@ -1,0 +1,302 @@
+{
+  "active_compression": "off",
+  "execution": {
+    "sessions_completed": 10,
+    "sessions_requested": 10,
+    "sessions_return_code_nonzero": 0,
+    "sessions_return_code_zero": 10,
+    "sessions_timed_out": 0
+  },
+  "experiment_id": "public-provider-native-search-envelope-shadow-001",
+  "forwarding_mutations": 0,
+  "limitations": [
+    "Bounded sequential public sessions characterize provider-native metadata only.",
+    "No efficacy, quality, cache-causality, or provider-savings conclusion follows from this diagnostic."
+  ],
+  "model": "gpt-5.6-luna",
+  "observed": {
+    "context_blocks": 344,
+    "context_snapshots": 20,
+    "context_snapshots_complete": 20,
+    "groups": [
+      {
+        "block_count": 60,
+        "block_kind": "text",
+        "detected_content_kind": "plain_text",
+        "estimated_tokens": 230600,
+        "origin": "human_authored",
+        "raw_bytes": 719260,
+        "raw_bytes_max": 17947,
+        "raw_bytes_min": 1026,
+        "role": "developer",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 60,
+        "block_kind": "text",
+        "detected_content_kind": "unknown",
+        "estimated_tokens": 87400,
+        "origin": "human_authored",
+        "raw_bytes": 255700,
+        "raw_bytes_max": 11785,
+        "raw_bytes_min": 346,
+        "role": "developer",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 40,
+        "block_kind": "text",
+        "detected_content_kind": "unknown",
+        "estimated_tokens": 27280,
+        "origin": "human_authored",
+        "raw_bytes": 74980,
+        "raw_bytes_max": 3236,
+        "raw_bytes_min": 513,
+        "role": "user",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 20,
+        "block_kind": "text",
+        "detected_content_kind": "source_code",
+        "estimated_tokens": 1660,
+        "origin": "human_authored",
+        "raw_bytes": 4040,
+        "raw_bytes_max": 202,
+        "raw_bytes_min": 202,
+        "role": "user",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 10,
+        "block_kind": "tool_call",
+        "detected_content_kind": "unknown",
+        "estimated_tokens": 1632,
+        "origin": "agent_generated",
+        "raw_bytes": 6655,
+        "raw_bytes_max": 890,
+        "raw_bytes_min": 604,
+        "role": "tool",
+        "tool_identity_present_count": 10
+      },
+      {
+        "block_count": 20,
+        "block_kind": "text",
+        "detected_content_kind": "plain_text",
+        "estimated_tokens": 1278,
+        "origin": "human_authored",
+        "raw_bytes": 4394,
+        "raw_bytes_max": 224,
+        "raw_bytes_min": 217,
+        "role": "user",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 10,
+        "block_kind": "tool_result",
+        "detected_content_kind": "json",
+        "estimated_tokens": 641,
+        "origin": "tool_generated",
+        "raw_bytes": 3896,
+        "raw_bytes_max": 418,
+        "raw_bytes_min": 386,
+        "role": "tool",
+        "tool_identity_present_count": 10
+      },
+      {
+        "block_count": 7,
+        "block_kind": "text",
+        "detected_content_kind": "plain_text",
+        "estimated_tokens": 209,
+        "origin": "agent_generated",
+        "raw_bytes": 701,
+        "raw_bytes_max": 120,
+        "raw_bytes_min": 87,
+        "role": "assistant",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 40,
+        "block_kind": "message",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "human_authored",
+        "raw_bytes": 989938,
+        "raw_bytes_max": 31327,
+        "raw_bytes_min": 18170,
+        "role": "developer",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 40,
+        "block_kind": "message",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "human_authored",
+        "raw_bytes": 97520,
+        "raw_bytes_max": 4371,
+        "raw_bytes_min": 502,
+        "role": "user",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 20,
+        "block_kind": "unknown",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "unknown",
+        "raw_bytes": 617620,
+        "raw_bytes_max": 30881,
+        "raw_bytes_min": 30881,
+        "role": "developer",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 10,
+        "block_kind": "opaque_reasoning",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "provider_managed",
+        "raw_bytes": 35478,
+        "raw_bytes_max": 4429,
+        "raw_bytes_min": 2809,
+        "role": "assistant",
+        "tool_identity_present_count": 0
+      },
+      {
+        "block_count": 7,
+        "block_kind": "message",
+        "detected_content_kind": "unavailable",
+        "estimated_tokens": null,
+        "origin": "agent_generated",
+        "raw_bytes": 2968,
+        "raw_bytes_max": 444,
+        "raw_bytes_min": 411,
+        "role": "assistant",
+        "tool_identity_present_count": 0
+      }
+    ],
+    "provider_errors": 0,
+    "provider_requests": 20,
+    "search_projection_target_metadata": {
+      "block_count": 10,
+      "block_kind": "tool_result",
+      "detected_content_kind": "json",
+      "estimated_tokens": 641,
+      "origin": "tool_generated",
+      "raw_bytes": 3896,
+      "raw_bytes_max": 418,
+      "raw_bytes_min": 386,
+      "role": "tool",
+      "tool_identity_present_count": 10
+    },
+    "search_projection_target_observed": true,
+    "shadow_candidates": [
+      {
+        "bytes_delta": null,
+        "candidate": "json.compact_records",
+        "deterministic": 10,
+        "evaluations": 10,
+        "input_bytes": 1260,
+        "output_bytes": 1430,
+        "recovery_verified": 10,
+        "status": "no_improvement"
+      },
+      {
+        "bytes_delta": null,
+        "candidate": "json.empty_noise_fields",
+        "deterministic": 1,
+        "evaluations": 1,
+        "input_bytes": 154,
+        "output_bytes": null,
+        "recovery_verified": 0,
+        "status": "no_improvement"
+      },
+      {
+        "bytes_delta": null,
+        "candidate": "json.key_elision",
+        "deterministic": 10,
+        "evaluations": 10,
+        "input_bytes": 1260,
+        "output_bytes": 1470,
+        "recovery_verified": 10,
+        "status": "no_improvement"
+      },
+      {
+        "bytes_delta": 0,
+        "candidate": "json.minify",
+        "deterministic": 10,
+        "evaluations": 10,
+        "input_bytes": 1260,
+        "output_bytes": 1260,
+        "recovery_verified": 10,
+        "status": "no_improvement"
+      },
+      {
+        "bytes_delta": 0,
+        "candidate": "json.noop",
+        "deterministic": 10,
+        "evaluations": 10,
+        "input_bytes": 1260,
+        "output_bytes": 1260,
+        "recovery_verified": 10,
+        "status": "no_improvement"
+      },
+      {
+        "bytes_delta": null,
+        "candidate": "json.readable_table",
+        "deterministic": 10,
+        "evaluations": 10,
+        "input_bytes": 1260,
+        "output_bytes": 1480,
+        "recovery_verified": 10,
+        "status": "no_improvement"
+      },
+      {
+        "bytes_delta": null,
+        "candidate": "json.repeated_subtree",
+        "deterministic": 0,
+        "evaluations": 10,
+        "input_bytes": 1260,
+        "output_bytes": null,
+        "recovery_verified": 0,
+        "status": "not_applicable"
+      },
+      {
+        "bytes_delta": null,
+        "candidate": "json.repeated_value_elision",
+        "deterministic": 1,
+        "evaluations": 1,
+        "input_bytes": 154,
+        "output_bytes": null,
+        "recovery_verified": 0,
+        "status": "no_improvement"
+      },
+      {
+        "bytes_delta": 30,
+        "candidate": "json.tabular",
+        "deterministic": 10,
+        "evaluations": 10,
+        "input_bytes": 1260,
+        "output_bytes": 1230,
+        "recovery_verified": 10,
+        "status": "no_improvement"
+      }
+    ]
+  },
+  "phase": "4.5",
+  "privacy": {
+    "commands_persisted": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false,
+    "report_contract": "aggregate_allowlist_only",
+    "responses_persisted": false
+  },
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "shadow_compression": true,
+  "status": "completed",
+  "workspace_class": "public_controlled"
+}

@@ -149,3 +149,29 @@ full and produced no Search candidate evaluation. This is neither a shadow drop 
 failure: the provider-native result is below the minimum size where an active rewrite could be
 material. No further active quality session is justified for this task without evidence of larger
 native Search ToolResults.
+
+## Native Search cohort decision
+
+`TRACEPRESS_PUBLIC_PROVIDER_NATIVE_SEARCH_ENVELOPE_SHADOW_COHORT_001` repeated the same bounded,
+public workflow across ten sequential Search tasks. All ten sessions completed without timeout or
+provider error, producing twenty completed Context Analysis snapshots. The ten provider-native
+ToolResults were all JSON envelopes (3,896 raw bytes and 641 locally estimated tokens in total;
+386–418 raw bytes per block).
+
+The decoded candidate inputs totalled 1,260 bytes, so every observed native Search envelope was
+below the 256-byte reduction-policy minimum. The recorded candidate rows exactly match the 72
+evaluations expected from the seven JSON candidates on ten blocks plus the two generic reducers
+admitted for the one above-policy block. `search.result_projection` was intentionally not
+evaluated because none of its native inputs reached the minimum size; it was not dropped or
+silently missing.
+
+```text
+reports/public-tool-workloads-001/
+TRACEPRESS_PUBLIC_PROVIDER_NATIVE_SEARCH_ENVELOPE_SHADOW_COHORT_001.{json,md}
+```
+
+Decision: close the provider-native Search-content adaptation path for this controlled workload.
+The raw shell-output projection remains a useful upper-bound result, but Codex's actual reinjected
+ToolResult envelope is already too compact to justify active rewriting. The appropriate next
+research surface is ToolResult lifetime, historical eviction, or recovery-based reduction—not an
+active A/B for this candidate.

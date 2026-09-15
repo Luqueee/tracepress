@@ -25,6 +25,18 @@ SHADOW_EXPERIMENT_ID = "public-provider-native-search-envelope-shadow-001"
 RIPGREP_URL = "https://github.com/BurntSushi/ripgrep"
 RIPGREP_SHA = "3fce3b5bb0236da2df6d99672afb8a719642eca7"
 MODEL = "gpt-5.6-luna"
+SEARCH_PATTERNS = (
+    "Result<",
+    "fn ",
+    "struct ",
+    "trait ",
+    "impl ",
+    "Error",
+    "TODO|FIXME",
+    "pub ",
+    "match ",
+    "use ",
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -33,6 +45,14 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output-json", type=Path, required=True)
     parser.add_argument("--output-md", type=Path, required=True)
     parser.add_argument("--timeout", type=int, default=90)
+    parser.add_argument(
+        "--sessions",
+        type=int,
+        default=1,
+        choices=range(1, len(SEARCH_PATTERNS) + 1),
+        metavar="1-10",
+        help="number of sequential public Search sessions to aggregate",
+    )
     parser.add_argument(
         "--shadow-compression",
         action="store_true",
@@ -147,11 +167,11 @@ def characterize(database: Path, shadow_experiment_id: str | None) -> dict[str, 
         }
 
 
-def prompt() -> str:
+def prompt(pattern: str) -> str:
     # Public execution input only. It is intentionally absent from every artifact.
     return (
         "Inspect this public repository. Use the shell exactly once to run a bounded ripgrep "
-        "search for Result< in Rust files, then answer with only the aggregate number of matching "
+        f"search for {pattern!r} in Rust files, then answer with only the aggregate number of matching "
         "lines and unique files. Do not modify files."
     )
 
@@ -230,17 +250,18 @@ def main() -> int:
             time.sleep(0.1)
         else:
             raise RuntimeError("daemon did not become ready")
-        try:
-            execution = subprocess.run(
-                [str(cli), "run", "codex", "exec", "-m", MODEL, "-s", "read-only",
-                 "--skip-git-repo-check", prompt()],
-                cwd=public_repo, env=environment, capture_output=True, text=True,
-                timeout=options.timeout,
-            )
-            timed_out = False
-        except subprocess.TimeoutExpired:
-            execution = subprocess.CompletedProcess([], 124, "", "")
-            timed_out = True
+        executions: list[tuple[int, bool]] = []
+        for pattern in SEARCH_PATTERNS[:options.sessions]:
+            try:
+                execution = subprocess.run(
+                    [str(cli), "run", "codex", "exec", "-m", MODEL, "-s", "read-only",
+                     "--skip-git-repo-check", prompt(pattern)],
+                    cwd=public_repo, env=environment, capture_output=True, text=True,
+                    timeout=options.timeout,
+                )
+                executions.append((execution.returncode, False))
+            except subprocess.TimeoutExpired:
+                executions.append((124, True))
         # Context Analysis and shadow evaluation are independent. Do not interpret a partially
         # flushed candidate set merely because snapshots are complete.
         deadline = time.monotonic() + 15
@@ -263,7 +284,7 @@ def main() -> int:
         )
         report = {
             "experiment_id": SHADOW_EXPERIMENT_ID if options.shadow_compression else EXPERIMENT_ID,
-            "status": "completed" if not timed_out else "completed_evaluator_unavailable",
+            "status": "completed" if not any(timed_out for _, timed_out in executions) else "completed_with_timeouts",
             "phase": "4.5",
             "workspace_class": "public_controlled",
             "repository_pin": {"repository": "BurntSushi/ripgrep", "commit_sha": RIPGREP_SHA},
@@ -271,7 +292,13 @@ def main() -> int:
             "forwarding_mutations": 0,
             "active_compression": "off",
             "shadow_compression": options.shadow_compression,
-            "execution": {"return_code": execution.returncode, "timed_out": timed_out},
+            "execution": {
+                "sessions_requested": options.sessions,
+                "sessions_completed": len(executions),
+                "sessions_return_code_zero": sum(code == 0 for code, _ in executions),
+                "sessions_return_code_nonzero": sum(code != 0 for code, _ in executions),
+                "sessions_timed_out": sum(timed_out for _, timed_out in executions),
+            },
             "observed": observed,
             "privacy": {
                 "report_contract": "aggregate_allowlist_only",
@@ -281,7 +308,7 @@ def main() -> int:
                 "responses_persisted": False,
             },
             "limitations": [
-                "One bounded public session characterizes provider-native metadata only.",
+            "Bounded sequential public sessions characterize provider-native metadata only.",
                 "No efficacy, quality, cache-causality, or provider-savings conclusion follows from this diagnostic.",
             ],
         }
@@ -290,9 +317,9 @@ def main() -> int:
         summary = [
             "# TRACEPRESS_PUBLIC_PROVIDER_NATIVE_SEARCH_SHAPE_001",
             "",
-            "One bounded public metadata-only diagnostic of the provider-native Search ToolResult shape.",
+            "Bounded public metadata-only characterization of provider-native Search ToolResult shapes.",
             "",
-            f"Provider requests: **{observed['provider_requests']}**. Context snapshots complete: **{observed['context_snapshots_complete']}/{observed['context_snapshots']}**.",
+            f"Sessions: **{options.sessions}**. Provider requests: **{observed['provider_requests']}**. Context snapshots complete: **{observed['context_snapshots_complete']}/{observed['context_snapshots']}**.",
             f"Search-projection target observed: **{str(observed['search_projection_target_observed']).lower()}**.",
             "",
             "| Origin | Block kind | Role | Detected content kind | Blocks | Raw bytes | Estimated tokens |",

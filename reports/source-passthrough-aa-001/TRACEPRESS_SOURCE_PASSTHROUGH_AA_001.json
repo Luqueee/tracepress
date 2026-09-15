@@ -1,0 +1,268 @@
+{
+  "assignment": {
+    "arms": [
+      "Control",
+      "Passthrough"
+    ],
+    "assignments": 20,
+    "pairs": 10,
+    "randomized_order": true,
+    "unit": "session"
+  },
+  "assignments": [
+    {
+      "arm": "Control",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "off",
+      "paired_order": "passthrough_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-01-control",
+      "task_id": "cargo-test-01"
+    },
+    {
+      "arm": "Passthrough",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "codex",
+      "paired_order": "passthrough_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-01-passthrough",
+      "task_id": "cargo-test-01"
+    },
+    {
+      "arm": "Control",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "off",
+      "paired_order": "passthrough_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-02-control",
+      "task_id": "cargo-test-02"
+    },
+    {
+      "arm": "Passthrough",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "codex",
+      "paired_order": "passthrough_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-02-passthrough",
+      "task_id": "cargo-test-02"
+    },
+    {
+      "arm": "Control",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "off",
+      "paired_order": "passthrough_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-03-control",
+      "task_id": "cargo-test-03"
+    },
+    {
+      "arm": "Passthrough",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "codex",
+      "paired_order": "passthrough_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-03-passthrough",
+      "task_id": "cargo-test-03"
+    },
+    {
+      "arm": "Control",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "off",
+      "paired_order": "control_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-04-control",
+      "task_id": "cargo-test-04"
+    },
+    {
+      "arm": "Passthrough",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "codex",
+      "paired_order": "control_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-04-passthrough",
+      "task_id": "cargo-test-04"
+    },
+    {
+      "arm": "Control",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "off",
+      "paired_order": "control_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-05-control",
+      "task_id": "cargo-test-05"
+    },
+    {
+      "arm": "Passthrough",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "codex",
+      "paired_order": "control_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-05-passthrough",
+      "task_id": "cargo-test-05"
+    },
+    {
+      "arm": "Control",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "off",
+      "paired_order": "control_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-06-control",
+      "task_id": "cargo-test-06"
+    },
+    {
+      "arm": "Passthrough",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "codex",
+      "paired_order": "control_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-06-passthrough",
+      "task_id": "cargo-test-06"
+    },
+    {
+      "arm": "Control",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "off",
+      "paired_order": "passthrough_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-07-control",
+      "task_id": "cargo-test-07"
+    },
+    {
+      "arm": "Passthrough",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "codex",
+      "paired_order": "passthrough_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-07-passthrough",
+      "task_id": "cargo-test-07"
+    },
+    {
+      "arm": "Control",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "off",
+      "paired_order": "passthrough_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-08-control",
+      "task_id": "cargo-test-08"
+    },
+    {
+      "arm": "Passthrough",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "codex",
+      "paired_order": "passthrough_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-08-passthrough",
+      "task_id": "cargo-test-08"
+    },
+    {
+      "arm": "Control",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "off",
+      "paired_order": "passthrough_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-09-control",
+      "task_id": "cargo-test-09"
+    },
+    {
+      "arm": "Passthrough",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "codex",
+      "paired_order": "passthrough_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-09-passthrough",
+      "task_id": "cargo-test-09"
+    },
+    {
+      "arm": "Control",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "off",
+      "paired_order": "control_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-10-control",
+      "task_id": "cargo-test-10"
+    },
+    {
+      "arm": "Passthrough",
+      "experiment_id": "source-passthrough-aa-001",
+      "hook": "codex",
+      "paired_order": "control_first",
+      "planned_only": true,
+      "reducer_id": "passthrough",
+      "reducer_version": "v1",
+      "session_id": "planned-source-passthrough-aa-001-cargo-test-10-passthrough",
+      "task_id": "cargo-test-10"
+    }
+  ],
+  "command_family": "cargo_test",
+  "experiment_id": "source-passthrough-aa-001",
+  "limitations": [
+    "No Codex, provider, or tool session was started.",
+    "No command, prompt, path, output, response, or ToolResult is persisted.",
+    "This validates passthrough infrastructure only; it does not evaluate a reducer or savings."
+  ],
+  "measurements": [
+    "provider_input_total",
+    "provider_cached_input",
+    "provider_uncached_input",
+    "provider_output",
+    "provider_reasoning",
+    "tool_calls",
+    "command_retries",
+    "duration",
+    "source_execution_metadata"
+  ],
+  "objective_outcome": {
+    "expected_exit_status_class": "success",
+    "kind": "command_exit"
+  },
+  "phase": "5.0",
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep",
+    "url": "https://github.com/BurntSushi/ripgrep"
+  },
+  "status": "prepared_not_started",
+  "treatment": {
+    "forwarding_mutation": false,
+    "hook": "codex",
+    "reducer": "passthrough"
+  }
+}

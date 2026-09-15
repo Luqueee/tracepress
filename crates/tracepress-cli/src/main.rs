@@ -80,7 +80,7 @@ use tracepress_storage::{
     ContextSnapshotStatus,
 };
 use tracepress_storage::{ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus};
-use tracepress_tool_proxy::execute_passthrough;
+use tracepress_tool_proxy::{codex_pre_tool_use_rewrite, execute_passthrough};
 
 const FRAME_BYTES: u64 = 65_536;
 
@@ -4363,6 +4363,10 @@ enum CommandKind {
         #[arg(required = true, trailing_var_arg = true)]
         args: Vec<String>,
     },
+    /// Process a fail-open Codex hook payload from standard input.
+    Hook {
+        agent: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -5548,7 +5552,26 @@ async fn main() -> Result<(), String> {
         CommandKind::Run { agent, args } => run_agent(&config, agent, args).await,
         CommandKind::Proxy => proxy().await,
         CommandKind::Tool { args } => tool(args),
+        CommandKind::Hook { agent } => hook(agent),
     }
+}
+
+fn hook(agent: String) -> Result<(), String> {
+    if agent != "codex" {
+        return Err("only the Codex hook adapter is supported".to_owned());
+    }
+    use std::io::Read as _;
+    let mut input = Vec::new();
+    let _read = std::io::stdin()
+        .read_to_end(&mut input)
+        .map_err(|error| format!("cannot read hook input: {error}"))?;
+    if let Some(output) = codex_pre_tool_use_rewrite(&input) {
+        use std::io::Write as _;
+        std::io::stdout()
+            .write_all(&output)
+            .map_err(|error| format!("cannot write hook output: {error}"))?;
+    }
+    Ok(())
 }
 
 fn tool(args: Vec<String>) -> Result<(), String> {

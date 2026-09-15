@@ -3447,6 +3447,7 @@ version = "0.1.0"
 name = "tracepress-tool-proxy"
 version = "0.1.0"
 dependencies = [
+ "serde_json",
  "tracepress-core",
 ]
 

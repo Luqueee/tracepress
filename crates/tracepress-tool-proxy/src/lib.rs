@@ -13,6 +13,36 @@ use std::{
 
 use tracepress_core::{SourceExecutionId, UuidV7Generator};
 
+/// Builds a fail-open Codex `PreToolUse` rewrite response without granting permission.
+///
+/// Malformed, non-Bash, unsupported, or syntactically unsafe calls return `None`, which means
+/// the hook writes nothing and Codex executes the original command.
+#[must_use]
+pub fn codex_pre_tool_use_rewrite(input: &[u8]) -> Option<Vec<u8>> {
+    let payload: serde_json::Value = serde_json::from_slice(input).ok()?;
+    if payload.get("hook_event_name")?.as_str()? != "PreToolUse"
+        || payload.get("tool_name")?.as_str()? != "Bash"
+    {
+        return None;
+    }
+    let command = payload.pointer("/tool_input/command")?.as_str()?;
+    let RewriteDecision::Passthrough { .. } = decide(command) else {
+        return None;
+    };
+    let executable = std::env::var("TRACEPRESS_TOOL_BIN")
+        .ok()
+        .filter(|value| !value.is_empty() && !value.contains([' ', '\'', '"', '$', '`', '\\']))
+        .unwrap_or_else(|| "tracepress".to_owned());
+    serde_json::to_vec(&serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "updatedInput": { "command": format!("{executable} tool {command}") }
+        }
+    }))
+    .ok()
+}
+
 /// The semantic contract of bytes emitted to the command consumer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OutputContract {
@@ -149,5 +179,25 @@ mod tests {
                 RewriteDecision::FailOpen(FailOpenReason::ShellSyntax)
             );
         }
+    }
+
+    #[test]
+    fn codex_rewrite_is_narrow_and_does_not_grant_permission() {
+        let input = br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test -q"}}"#;
+        let output = codex_pre_tool_use_rewrite(input).expect("admitted command must rewrite");
+        let value: serde_json::Value = serde_json::from_slice(&output).expect("valid response");
+        assert!(
+            value
+                .pointer("/hookSpecificOutput/updatedInput/command")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|command| command.ends_with(" tool cargo test -q"))
+        );
+        assert_eq!(
+            value
+                .pointer("/hookSpecificOutput/permissionDecision")
+                .and_then(serde_json::Value::as_str),
+            Some("allow")
+        );
+        assert!(codex_pre_tool_use_rewrite(br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test | tail"}}"#).is_none());
     }
 }

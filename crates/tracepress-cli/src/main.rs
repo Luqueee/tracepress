@@ -25,7 +25,7 @@ use std::{
         Arc, Condvar, Mutex,
         atomic::{AtomicU64, Ordering},
     },
-    time::Duration,
+    time::{Duration, SystemTime},
 };
 
 use axum::serve;
@@ -4389,6 +4389,30 @@ struct Config {
 #[derive(Debug)]
 struct TemporaryCodexHookHome(PathBuf);
 
+const CODEX_HOOK_HOME_GRACE: Duration = Duration::from_secs(60 * 60);
+
+/// Removes only expired UUID-shaped children of Tracepress' dedicated hook root.
+fn cleanup_stale_codex_hook_homes(root: &std::path::Path) {
+    let Ok(entries) = std::fs::read_dir(root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let name = entry.file_name();
+        let name = name.to_string_lossy();
+        let uuid_shaped =
+            name.len() == 36 && name.bytes().filter(|byte| *byte == b'-').count() == 4;
+        let expired = entry
+            .metadata()
+            .ok()
+            .and_then(|metadata| metadata.modified().ok())
+            .and_then(|modified| SystemTime::now().duration_since(modified).ok())
+            .is_some_and(|age| age > CODEX_HOOK_HOME_GRACE);
+        if uuid_shaped && expired {
+            let _removed = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
 fn temporary_codex_hook_home(
     config: &Config,
     session_id: SessionId,
@@ -4400,10 +4424,10 @@ fn temporary_codex_hook_home(
             "cannot locate Codex home for temporary session authentication".to_owned()
         })?;
     let auth = source_root.join("auth.json");
-    let root = config
-        .root
-        .join("codex-hook-sessions")
-        .join(session_id.to_string());
+    let sessions_root = config.root.join("codex-hook-sessions");
+    std::fs::create_dir_all(&sessions_root).map_err(|error| error.to_string())?;
+    cleanup_stale_codex_hook_homes(&sessions_root);
+    let root = sessions_root.join(session_id.to_string());
     std::fs::create_dir_all(&root).map_err(|error| error.to_string())?;
     #[cfg(unix)]
     std::fs::set_permissions(&root, std::fs::Permissions::from_mode(0o700))

@@ -5612,7 +5612,9 @@ fn record_source_execution(
     metadata: &tracepress_tool_proxy::SourceExecutionMetadata,
 ) -> Result<(), String> {
     config.ensure_root()?;
-    let session_id = std::env::var("TRACEPRESS_SOURCE_SESSION_ID").ok();
+    let session_id = std::env::var("TRACEPRESS_SOURCE_SESSION_ID")
+        .ok()
+        .or_else(|| std::env::var("TRACEPRESS_SESSION_ID").ok());
     let exit_status_class = if metadata.termination_signal.is_some() {
         "signal"
     } else if metadata.exit_code == Some(0) {

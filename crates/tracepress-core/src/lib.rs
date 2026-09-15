@@ -30,8 +30,8 @@ pub use finalization::{CommitState, FinalizationError, finalize_inference};
 pub use ids::{
     AttemptId, BindingId, CompressionCandidateId, ContextBlockOccurrenceId, ContextSnapshotId,
     DecisionId, EvaluationId, EventId, IdParseError, OccurrenceId, OperationId, PolicyAssignmentId,
-    RecoveryId, RequestId, SessionId, ToolCallId, UuidV7Generator, UuidV7Timestamp,
-    UuidV7TimestampError,
+    RecoveryId, RequestId, SessionId, SourceExecutionId, ToolCallId, UuidV7Generator,
+    UuidV7Timestamp, UuidV7TimestampError,
 };
 pub use lifecycle::{InferenceStatus, OperationKind, OperationStatus, SessionState, UsageStatus};
 pub use limits::{

@@ -220,6 +220,7 @@ define_uuid_v7_ids!(
     ToolCallId => "An agent tool-call identity.",
     DecisionId => "A compression decision identity.",
     RecoveryId => "A recovery record identity.",
+    SourceExecutionId => "A source-side tool execution identity.",
     EvaluationId => "An outcome evaluation identity.",
     PolicyAssignmentId => "A per-session policy assignment identity.",
     OccurrenceId => "An observed content occurrence identity.",

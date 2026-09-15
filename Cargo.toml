@@ -14,6 +14,7 @@ members = [
     "crates/tracepress-dashboard-types",
     "crates/tracepress-dashboard-api",
     "crates/tracepress-dashboard",
+    "crates/tracepress-tool-proxy",
 ]
 resolver = "3"
 

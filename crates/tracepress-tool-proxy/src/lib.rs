@@ -56,6 +56,32 @@ pub fn codex_pre_tool_use_rewrite(input: &[u8]) -> Option<Vec<u8>> {
     .ok()
 }
 
+/// Builds an admitted Codex rewrite that preserves the original command text.
+///
+/// This exists solely for Phase 5.0 attribution: it isolates the presence of a
+/// `PreToolUse` `updatedInput` response from the source-tool wrapper.
+#[must_use]
+pub fn codex_pre_tool_use_identity_rewrite(input: &[u8]) -> Option<Vec<u8>> {
+    let payload: serde_json::Value = serde_json::from_slice(input).ok()?;
+    if payload.get("hook_event_name")?.as_str()? != "PreToolUse"
+        || payload.get("tool_name")?.as_str()? != "Bash"
+    {
+        return None;
+    }
+    let command = payload.pointer("/tool_input/command")?.as_str()?;
+    let RewriteDecision::Passthrough { .. } = decide(command) else {
+        return None;
+    };
+    serde_json::to_vec(&serde_json::json!({
+        "hookSpecificOutput": {
+            "hookEventName": "PreToolUse",
+            "permissionDecision": "allow",
+            "updatedInput": { "command": command }
+        }
+    }))
+    .ok()
+}
+
 /// The semantic contract of bytes emitted to the command consumer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum OutputContract {
@@ -212,5 +238,17 @@ mod tests {
             Some("allow")
         );
         assert!(codex_pre_tool_use_rewrite(br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test | tail"}}"#).is_none());
+    }
+
+    #[test]
+    fn identity_rewrite_preserves_the_admitted_command() {
+        let input = br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test -q"}}"#;
+        let output = codex_pre_tool_use_identity_rewrite(input).expect("identity rewrite");
+        let value: serde_json::Value = serde_json::from_slice(&output).expect("valid response");
+        assert_eq!(
+            value.pointer("/hookSpecificOutput/updatedInput/command")
+                .and_then(serde_json::Value::as_str),
+            Some("cargo test -q")
+        );
     }
 }

@@ -80,7 +80,9 @@ use tracepress_storage::{
     ContextSnapshotStatus,
 };
 use tracepress_storage::{ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus};
-use tracepress_tool_proxy::{codex_pre_tool_use_rewrite, execute_passthrough};
+use tracepress_tool_proxy::{
+    codex_pre_tool_use_identity_rewrite, codex_pre_tool_use_rewrite, execute_passthrough,
+};
 
 const FRAME_BYTES: u64 = 65_536;
 
@@ -5654,7 +5656,13 @@ fn hook(agent: String) -> Result<(), String> {
     let _read = std::io::stdin()
         .read_to_end(&mut input)
         .map_err(|error| format!("cannot read hook input: {error}"))?;
-    let output = codex_pre_tool_use_rewrite(&input);
+    let output = if std::env::var("TRACEPRESS_HOOK_REWRITE_MODE").ok().as_deref()
+        == Some("identity")
+    {
+        codex_pre_tool_use_identity_rewrite(&input)
+    } else {
+        codex_pre_tool_use_rewrite(&input)
+    };
     let _recorded = record_hook_event(&input, output.is_some());
     if let Some(output) = output {
         use std::io::Write as _;

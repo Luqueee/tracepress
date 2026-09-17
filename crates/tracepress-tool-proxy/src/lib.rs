@@ -168,7 +168,12 @@ pub fn execute_passthrough(
         ));
     };
     let started = Instant::now();
-    let output = Command::new(program).args(words).output()?;
+    let executable = if program == "cargo" {
+        std::env::var_os("TRACEPRESS_REAL_CARGO").unwrap_or_else(|| program.into())
+    } else {
+        program.into()
+    };
+    let output = Command::new(executable).args(words).output()?;
     let stdout = output.stdout;
     let stderr = output.stderr;
     let raw_stdout_bytes = u64::try_from(stdout.len()).unwrap_or(u64::MAX);

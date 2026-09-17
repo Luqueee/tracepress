@@ -4996,9 +4996,14 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
         );
         if source_hook.as_deref() == Some("path") {
             let original_path = std::env::var_os("PATH").unwrap_or_default();
+            let real_cargo = std::env::split_paths(&original_path)
+                .map(|directory| directory.join("cargo"))
+                .find(|candidate| candidate.is_file())
+                .ok_or_else(|| "cannot locate Cargo before PATH interception".to_owned())?;
             let joined = std::env::join_paths([home.0.join("bin"), PathBuf::from(original_path)])
                 .map_err(|error| error.to_string())?;
             let _path = command.env("PATH", joined);
+            let _cargo = command.env("TRACEPRESS_REAL_CARGO", real_cargo);
             let _observe = command.env("TRACEPRESS_HOOK_REWRITE_MODE", "observe");
         }
     }

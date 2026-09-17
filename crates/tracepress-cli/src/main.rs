@@ -4369,6 +4369,8 @@ enum CommandKind {
     Hook {
         agent: String,
     },
+    /// Perform a metadata-only Codex app-server handshake; it never starts a thread or turn.
+    CodexObserve,
 }
 
 #[derive(Debug, Subcommand)]
@@ -5670,7 +5672,33 @@ async fn main() -> Result<(), String> {
         CommandKind::Proxy => proxy().await,
         CommandKind::Tool { args } => tool(&config, args),
         CommandKind::Hook { agent } => hook(agent),
+        CommandKind::CodexObserve => codex_observe(),
     }
+}
+
+fn codex_observe() -> Result<(), String> {
+    use std::io::{BufRead as _, Write as _};
+    let mut child = std::process::Command::new("codex")
+        .args(["app-server", "--stdio"])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("cannot start Codex app-server: {error}"))?;
+    let request = serde_json::json!({
+        "id": 1,
+        "method": "initialize",
+        "params": {"clientInfo": {"name": "tracepress-observer", "version": env!("CARGO_PKG_VERSION")}, "capabilities": {"experimentalApi": true}}
+    });
+    let mut input = child.stdin.take().ok_or_else(|| "app-server stdin unavailable".to_owned())?;
+    serde_json::to_writer(&mut input, &request).map_err(|error| error.to_string())?;
+    input.write_all(b"\n").map_err(|error| error.to_string())?;
+    let output = child.stdout.take().ok_or_else(|| "app-server stdout unavailable".to_owned())?;
+    let mut lines = std::io::BufReader::new(output).lines();
+    let response = lines.next().ok_or_else(|| "app-server closed before initialize".to_owned())?.map_err(|error| error.to_string())?;
+    let value: serde_json::Value = serde_json::from_str(&response).map_err(|error| error.to_string())?;
+    let _killed = child.kill();
+    println!("{}", serde_json::json!({"event":"initialize","accepted":value.get("result").is_some(),"output_persisted":false,"thread_started":false,"turn_started":false}));
+    Ok(())
 }
 
 fn hook(agent: String) -> Result<(), String> {

@@ -32,13 +32,22 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "source_ids_present",
         "source_sessions_linked",
         "source_emitted_bytes",
+        "source_stdout_bytes",
+        "source_stderr_bytes",
         "shadow_evaluations",
+        "active_evaluations",
+        "forwarding_mutations",
+        "fail_open_executions",
         "candidate_bytes",
         "estimated_raw_tokens",
         "estimated_candidate_tokens",
         "never_worse_accepted",
         "recovery_hint_bytes",
         "reducer_duration_us",
+        "recovery_requests",
+        "recovered_bytes",
+        "tool_calls",
+        "command_retries",
         "duration_ms",
     ):
         values = [value(row, metric) for row in rows]
@@ -49,6 +58,7 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
     result["provider_usage"] = {
         key: sum(value(row, f"provider_usage.{key}") for row in rows) for key in USAGE_KEYS
     }
+    result["task_success"] = sum(row.get("task_success") is True for row in rows)
     return result
 
 
@@ -74,7 +84,7 @@ def analyze(report: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("expected exactly two experiment arms")
     arms = {name: [row for row in rows if row["arm"] == name] for name in arm_names}
     control_name, treatment_name = arm_names
-    if control_name in {"ExplicitB", "ExplicitShadow"}:
+    if control_name in {"ExplicitB", "ExplicitShadow", "ExplicitActive"}:
         control_name, treatment_name = treatment_name, control_name
     control, treatment = arms[control_name], arms[treatment_name]
     if len(control) != len(treatment):
@@ -84,35 +94,71 @@ def analyze(report: dict[str, Any]) -> dict[str, Any]:
         f"provider_usage.{key}" for key in USAGE_KEYS
     ]
     deltas = {metric: paired_deltas(control, treatment, metric) for metric in metrics}
+    active = report.get("reducer") == "explicit-active"
     invariant_gate = all(
         left.get("agent_exit_status_class") == "success"
         and right.get("agent_exit_status_class") == "success"
         and value(left, "provider_errors") == 0
         and value(right, "provider_errors") == 0
-        and value(left, "source_executions") == 1
-        and value(right, "source_executions") == 1
-        and ("source_ids_present" not in left or value(left, "source_ids_present") == 1)
-        and ("source_ids_present" not in right or value(right, "source_ids_present") == 1)
-        and ("source_sessions_linked" not in left or value(left, "source_sessions_linked") == 1)
-        and ("source_sessions_linked" not in right or value(right, "source_sessions_linked") == 1)
+        and value(left, "source_executions") >= 1
+        and value(right, "source_executions") >= 1
+        and ("source_ids_present" not in left or value(left, "source_ids_present") == value(left, "source_executions"))
+        and ("source_ids_present" not in right or value(right, "source_ids_present") == value(right, "source_executions"))
+        and ("source_sessions_linked" not in left or value(left, "source_sessions_linked") == value(left, "source_executions"))
+        and ("source_sessions_linked" not in right or value(right, "source_sessions_linked") == value(right, "source_executions"))
         and value(left, "hook_rewrites") == 0
         and value(right, "hook_rewrites") == 0
-        and value(left, "source_emitted_bytes") == value(right, "source_emitted_bytes")
+        and (active or value(left, "source_emitted_bytes") == value(right, "source_emitted_bytes"))
         for left, right in zip(control, treatment)
     )
     shadow = report.get("reducer") == "explicit-shadow"
     shadow_gate = True
+    active_gate = True
+    positive_gate = None
     source_reduction = None
+    if shadow or active:
+        raw = sum(
+            value(row, "source_stdout_bytes") + value(row, "source_stderr_bytes")
+            for row in treatment
+        )
+        emitted = sum(
+            value(row, "source_emitted_bytes") if active else value(row, "candidate_bytes")
+            for row in treatment
+        )
+        source_reduction = (raw - emitted) / raw if raw else 0.0
     if shadow:
-        raw = sum(value(row, "source_emitted_bytes") for row in treatment)
-        candidate = sum(value(row, "candidate_bytes") for row in treatment)
-        source_reduction = (raw - candidate) / raw if raw else 0.0
         shadow_gate = (
             all(value(row, "shadow_evaluations") == 1 for row in treatment)
             and all(value(row, "never_worse_accepted") == 1 for row in treatment)
             and source_reduction >= 0.20
             and max((value(row, "reducer_duration_us") for row in treatment), default=0) <= 50_000
         )
+    if active:
+        control_uncached = sum(value(row, "provider_usage.input_uncached") for row in control)
+        treatment_uncached = sum(value(row, "provider_usage.input_uncached") for row in treatment)
+        active_gate = (
+            all(row.get("task_success") is True for row in control + treatment)
+            and all(value(row, "active_evaluations") >= 1 for row in treatment)
+            and all(value(row, "forwarding_mutations") >= 1 for row in treatment)
+            and all(value(row, "fail_open_executions") == 0 for row in treatment)
+            and all(
+                value(row, "never_worse_accepted") == value(row, "active_evaluations")
+                for row in treatment
+            )
+            and source_reduction is not None
+            and source_reduction >= 0.20
+        )
+        if report.get("pairs", 0) >= 10:
+            positive_gate = (
+                treatment_uncached < control_uncached
+                and deltas["provider_usage.input_uncached"]["median"] < 0
+                and sum(value(row, "command_retries") for row in treatment)
+                <= sum(value(row, "command_retries") for row in control) + 1
+                and sum(value(row, "tool_calls") for row in treatment)
+                <= sum(value(row, "tool_calls") for row in control) + 1
+                and sum(value(row, "recovery_requests") for row in treatment)
+                <= max(1, sum(value(row, "forwarding_mutations") for row in treatment) // 10)
+            )
     return {
         "control_arm": control_name,
         "treatment_arm": treatment_name,
@@ -121,9 +167,11 @@ def analyze(report: dict[str, Any]) -> dict[str, Any]:
         "source_candidate_reduction": source_reduction,
         "invariant_gate": invariant_gate,
         "shadow_gate": shadow_gate if shadow else None,
-        "decision": "pass" if invariant_gate and shadow_gate else "reject",
+        "active_gate": active_gate if active else None,
+        "positive_gate": positive_gate,
+        "decision": "pass" if invariant_gate and shadow_gate and active_gate and positive_gate is not False else "reject",
         "interpretation": (
-            "candidate_only_no_forwarding_change" if shadow else "passthrough_noise_characterization"
+            "active_provider_effect" if active else ("candidate_only_no_forwarding_change" if shadow else "passthrough_noise_characterization")
         ),
     }
 
@@ -158,13 +206,18 @@ def markdown(report: dict[str, Any], analysis: dict[str, Any]) -> str:
         ]
     )
     if analysis["source_candidate_reduction"] is not None:
-        lines.extend(
-            [
-                f"Source candidate reduction: **{analysis['source_candidate_reduction']:.2%}**.",
-                f"Shadow gate: **{str(analysis['shadow_gate']).lower()}**.",
-                "Agent-visible output remained raw; provider deltas are not source-reduction savings.",
-            ]
-        )
+        lines.append(f"Source output reduction: **{analysis['source_candidate_reduction']:.2%}**.")
+        if analysis["active_gate"] is not None:
+            lines.extend(
+                [
+                    f"Active gate: **{str(analysis['active_gate']).lower()}**.",
+                    f"Positive gate: **{str(analysis['positive_gate']).lower() if analysis['positive_gate'] is not None else 'pending full cohort'}**.",
+                    "Treatment forwarded the accepted candidate; downstream deltas are active-pilot evidence.",
+                ]
+            )
+        else:
+            lines.append(f"Shadow gate: **{str(analysis['shadow_gate']).lower()}**.")
+            lines.append("Agent-visible output remained raw; provider deltas are not source-reduction savings.")
     else:
         lines.append("Provider and trajectory deltas characterize A/A noise between identical arms.")
     lines.extend(

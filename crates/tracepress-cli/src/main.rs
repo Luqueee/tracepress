@@ -53,7 +53,7 @@ use tracepress_context::{
 use tracepress_core::{
     AttemptId, CompressionCandidateId, ContextSnapshotId, HttpStatusCode, MaxIpcFrameBytes,
     MaxRequestBodyBytes, MaxResponseBodyBytes, OperationId, RequestId, ResourceLimits,
-    ResourceLimitsConfig, SessionId, UuidV7Generator,
+    ResourceLimitsConfig, SessionId, SourceExecutionId, UuidV7Generator,
 };
 use tracepress_daemon::{
     ContextAnalysisFinalize, ContextAnalysisMetrics, ContextAppendReceipt,
@@ -82,8 +82,8 @@ use tracepress_storage::{
 };
 use tracepress_storage::{ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus};
 use tracepress_tool_proxy::{
-    CargoTestShadowCandidate, cargo_test_v1_shadow, codex_pre_tool_use_identity_rewrite,
-    codex_pre_tool_use_rewrite, execute_passthrough,
+    CargoTestShadowCandidate, cargo_test_v1_active, cargo_test_v1_shadow,
+    codex_pre_tool_use_identity_rewrite, codex_pre_tool_use_rewrite, execute_passthrough,
 };
 
 const FRAME_BYTES: u64 = 65_536;
@@ -4367,6 +4367,10 @@ enum CommandKind {
         #[arg(required = true, trailing_var_arg = true)]
         args: Vec<String>,
     },
+    /// Recover byte-faithful source output hidden by an active reducer.
+    Recall {
+        recovery_id: String,
+    },
     /// Process a fail-open Codex hook payload from standard input.
     Hook {
         agent: String,
@@ -5679,6 +5683,7 @@ async fn main() -> Result<(), String> {
         CommandKind::Run { agent, args } => run_agent(&config, agent, args).await,
         CommandKind::Proxy => proxy().await,
         CommandKind::Tool { args } => tool(&config, &args),
+        CommandKind::Recall { recovery_id } => recall_source_output(&config, &recovery_id),
         CommandKind::Hook { agent } => hook(&agent),
         CommandKind::CodexObserve { command_smoke } => codex_observe(command_smoke),
     }
@@ -5853,21 +5858,279 @@ fn record_hook_event(input: &[u8], rewritten: bool) -> Result<(), String> {
     file.write_all(b"\n").map_err(|error| error.to_string())
 }
 
-fn tool(config: &Config, args: &[String]) -> Result<(), String> {
-    let command = args.join(" ");
-    let ids = UuidV7Generator::new();
-    let (stdout, stderr, metadata) = execute_passthrough(&command, &ids)
-        .map_err(|error| format!("source tool passthrough refused or failed: {error}"))?;
-    let shadow = (std::env::var("TRACEPRESS_SOURCE_REDUCER").ok().as_deref()
-        == Some("cargo_test_v1_shadow"))
-    .then(|| cargo_test_v1_shadow(&stdout, &stderr));
+const SOURCE_RECOVERY_TTL: Duration = Duration::from_secs(60 * 60);
+const SOURCE_RECOVERY_MAX_BYTES: u64 = 8 * 1024 * 1024;
+
+#[derive(Debug, serde::Deserialize, serde::Serialize)]
+struct SourceRecoveryMetadata {
+    version: u32,
+    source_execution_id: String,
+    created_at_unix: u64,
+    expires_at_unix: u64,
+    stdout_bytes: u64,
+    stderr_bytes: u64,
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SourceRecoveryWrite<'a> {
+    session_id: &'a str,
+    token: &'a str,
+    source_execution_id: SourceExecutionId,
+    stdout: &'a [u8],
+    stderr: &'a [u8],
+}
+
+#[derive(Clone, Copy, Debug)]
+struct SourceEmissionRecord<'a> {
+    candidate: Option<&'a CargoTestShadowCandidate>,
+    reducer_id: &'static str,
+    emitted_bytes: u64,
+    active: bool,
+    recovery_available: bool,
+    fail_open_reason: Option<&'static str>,
+}
+
+fn source_session_id() -> Option<String> {
+    std::env::var("TRACEPRESS_SOURCE_SESSION_ID")
+        .ok()
+        .or_else(|| std::env::var("TRACEPRESS_SESSION_ID").ok())
+        .filter(|value| value.parse::<SessionId>().is_ok())
+}
+
+fn source_recovery_token() -> Result<String, String> {
+    let mut bytes = [0_u8; 16];
+    getrandom::fill(&mut bytes).map_err(|error| error.to_string())?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
+}
+
+fn valid_source_recovery_token(value: &str) -> bool {
+    value.len() == 32
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
+}
+
+fn unix_now() -> Result<u64, String> {
+    SystemTime::now()
+        .duration_since(SystemTime::UNIX_EPOCH)
+        .map_err(|error| error.to_string())
+        .map(|duration| duration.as_secs())
+}
+
+fn write_private_file(path: &std::path::Path, bytes: &[u8]) -> Result<(), String> {
+    let mut options = std::fs::OpenOptions::new();
+    let _options = options.write(true).create_new(true);
+    #[cfg(unix)]
+    let _mode = options.mode(0o600);
+    let mut file = options.open(path).map_err(|error| error.to_string())?;
+    file.write_all(bytes).map_err(|error| error.to_string())?;
+    file.sync_all().map_err(|error| error.to_string())
+}
+
+fn cleanup_expired_source_recoveries(session_root: &std::path::Path, now: u64) {
+    let Ok(entries) = std::fs::read_dir(session_root) else {
+        return;
+    };
+    for entry in entries.flatten() {
+        let token = entry.file_name();
+        let token = token.to_string_lossy();
+        if !valid_source_recovery_token(&token) {
+            continue;
+        }
+        let expired = std::fs::read(entry.path().join("metadata.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<SourceRecoveryMetadata>(&bytes).ok())
+            .is_some_and(|metadata| metadata.expires_at_unix < now);
+        if expired {
+            let _removed = std::fs::remove_dir_all(entry.path());
+        }
+    }
+}
+
+fn store_source_recovery(config: &Config, write: SourceRecoveryWrite<'_>) -> Result<(), String> {
+    let raw_bytes =
+        u64::try_from(write.stdout.len().saturating_add(write.stderr.len())).unwrap_or(u64::MAX);
+    if raw_bytes > SOURCE_RECOVERY_MAX_BYTES {
+        return Err("source recovery output exceeds the bounded store limit".to_owned());
+    }
+    let now = unix_now()?;
+    let session_root = config.root.join("source-recovery").join(write.session_id);
+    std::fs::create_dir_all(&session_root).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&session_root, std::fs::Permissions::from_mode(0o700))
+        .map_err(|error| error.to_string())?;
+    cleanup_expired_source_recoveries(&session_root, now);
+    let recovery_root = session_root.join(write.token);
+    std::fs::create_dir(&recovery_root).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    std::fs::set_permissions(&recovery_root, std::fs::Permissions::from_mode(0o700))
+        .map_err(|error| error.to_string())?;
+    let record = SourceRecoveryMetadata {
+        version: 1,
+        source_execution_id: write.source_execution_id.to_string(),
+        created_at_unix: now,
+        expires_at_unix: now.saturating_add(SOURCE_RECOVERY_TTL.as_secs()),
+        stdout_bytes: u64::try_from(write.stdout.len()).unwrap_or(u64::MAX),
+        stderr_bytes: u64::try_from(write.stderr.len()).unwrap_or(u64::MAX),
+    };
+    let result = (|| {
+        write_private_file(&recovery_root.join("stdout"), write.stdout)?;
+        write_private_file(&recovery_root.join("stderr"), write.stderr)?;
+        let encoded = serde_json::to_vec(&record).map_err(|error| error.to_string())?;
+        write_private_file(&recovery_root.join("metadata.json"), &encoded)
+    })();
+    if result.is_err() {
+        let _removed = std::fs::remove_dir_all(&recovery_root);
+    }
+    result
+}
+
+fn record_source_recovery(
+    config: &Config,
+    session_id: &str,
+    metadata: &SourceRecoveryMetadata,
+) -> Result<(), String> {
+    let event = serde_json::json!({
+        "session_id": session_id,
+        "recovered_stdout_bytes": metadata.stdout_bytes,
+        "recovered_stderr_bytes": metadata.stderr_bytes,
+        "success": true,
+    });
+    let mut options = std::fs::OpenOptions::new();
+    let _options = options.create(true).append(true);
+    #[cfg(unix)]
+    let _mode = options.mode(0o600);
+    let mut output = options
+        .open(config.root.join("source-recovery-events.jsonl"))
+        .map_err(|error| error.to_string())?;
+    serde_json::to_writer(&mut output, &event).map_err(|error| error.to_string())?;
+    output.write_all(b"\n").map_err(|error| error.to_string())
+}
+
+fn recall_source_output(config: &Config, recovery_id: &str) -> Result<(), String> {
+    if !valid_source_recovery_token(recovery_id) {
+        return Err("invalid source recovery id".to_owned());
+    }
+    let session_id = source_session_id()
+        .ok_or_else(|| "source recovery requires a valid Tracepress session".to_owned())?;
+    let recovery_root = config
+        .root
+        .join("source-recovery")
+        .join(&session_id)
+        .join(recovery_id);
+    let metadata: SourceRecoveryMetadata = serde_json::from_slice(
+        &std::fs::read(recovery_root.join("metadata.json"))
+            .map_err(|_error| "source recovery is unavailable".to_owned())?,
+    )
+    .map_err(|_error| "source recovery metadata is invalid".to_owned())?;
+    if metadata.expires_at_unix < unix_now()? {
+        let _removed = std::fs::remove_dir_all(&recovery_root);
+        return Err("source recovery has expired".to_owned());
+    }
+    if metadata.stdout_bytes.saturating_add(metadata.stderr_bytes) > SOURCE_RECOVERY_MAX_BYTES {
+        return Err("source recovery exceeds the bounded read limit".to_owned());
+    }
+    let stdout = std::fs::read(recovery_root.join("stdout"))
+        .map_err(|_error| "source recovery stdout is unavailable".to_owned())?;
+    let stderr = std::fs::read(recovery_root.join("stderr"))
+        .map_err(|_error| "source recovery stderr is unavailable".to_owned())?;
+    if u64::try_from(stdout.len()).unwrap_or(u64::MAX) != metadata.stdout_bytes
+        || u64::try_from(stderr.len()).unwrap_or(u64::MAX) != metadata.stderr_bytes
+    {
+        return Err("source recovery byte counts do not match metadata".to_owned());
+    }
     std::io::stdout()
         .write_all(&stdout)
         .map_err(|error| error.to_string())?;
     std::io::stderr()
         .write_all(&stderr)
         .map_err(|error| error.to_string())?;
-    let _recorded = record_source_execution(config, &metadata, shadow.as_ref());
+    record_source_recovery(config, &session_id, &metadata)
+}
+
+fn tool(config: &Config, args: &[String]) -> Result<(), String> {
+    let command = args.join(" ");
+    let ids = UuidV7Generator::new();
+    let (stdout, stderr, metadata) = execute_passthrough(&command, &ids)
+        .map_err(|error| format!("source tool passthrough refused or failed: {error}"))?;
+    let reducer = std::env::var("TRACEPRESS_SOURCE_REDUCER").ok();
+    let mut candidate = None;
+    let mut active = false;
+    let mut recovery_available = false;
+    let mut fail_open_reason = None;
+    if reducer.as_deref() == Some("cargo_test_v1_shadow") {
+        candidate = Some(cargo_test_v1_shadow(&stdout, &stderr));
+    } else if reducer.as_deref() == Some("cargo_test_v1_active") {
+        active = true;
+        let attempt = (|| {
+            let session_id = source_session_id().ok_or("missing_session")?;
+            let token = source_recovery_token().map_err(|_error| "token_generation_failed")?;
+            let executable = std::env::var("TRACEPRESS_TOOL_BIN")
+                .ok()
+                .filter(|value| {
+                    !value.is_empty() && !value.contains([' ', '\'', '"', '$', '`', '\\'])
+                })
+                .unwrap_or_else(|| "tracepress".to_owned());
+            let recovery_command = format!("{executable} recall {token}");
+            let evaluated = cargo_test_v1_active(&stdout, &stderr, &recovery_command);
+            if !evaluated.never_worse_accepted {
+                candidate = Some(evaluated);
+                return Err("never_worse_rejected");
+            }
+            store_source_recovery(
+                config,
+                SourceRecoveryWrite {
+                    session_id: &session_id,
+                    token: &token,
+                    source_execution_id: metadata.source_execution_id,
+                    stdout: &stdout,
+                    stderr: &stderr,
+                },
+            )
+            .map_err(|_error| "recovery_store_failed")?;
+            candidate = Some(evaluated);
+            recovery_available = true;
+            Ok(())
+        })();
+        if let Err(reason) = attempt {
+            fail_open_reason = Some(reason);
+        }
+    }
+    let active_candidate = active
+        .then_some(candidate.as_ref())
+        .flatten()
+        .filter(|evaluated| recovery_available && evaluated.never_worse_accepted);
+    let emitted_stdout =
+        active_candidate.map_or(stdout.as_slice(), |value| value.candidate_stdout.as_slice());
+    let emitted_stderr =
+        active_candidate.map_or(stderr.as_slice(), |value| value.candidate_stderr.as_slice());
+    std::io::stdout()
+        .write_all(emitted_stdout)
+        .map_err(|error| error.to_string())?;
+    std::io::stderr()
+        .write_all(emitted_stderr)
+        .map_err(|error| error.to_string())?;
+    let emitted_bytes = u64::try_from(emitted_stdout.len().saturating_add(emitted_stderr.len()))
+        .unwrap_or(u64::MAX);
+    let reducer_id = if active {
+        "cargo_test_v1_active"
+    } else if candidate.is_some() {
+        "cargo_test_v1_shadow"
+    } else {
+        "passthrough"
+    };
+    let _recorded = record_source_execution(
+        config,
+        &metadata,
+        SourceEmissionRecord {
+            candidate: candidate.as_ref(),
+            reducer_id,
+            emitted_bytes,
+            active,
+            recovery_available,
+            fail_open_reason,
+        },
+    );
     if let Some(signal) = metadata.termination_signal {
         #[cfg(unix)]
         {
@@ -5891,12 +6154,10 @@ fn tool(config: &Config, args: &[String]) -> Result<(), String> {
 fn record_source_execution(
     config: &Config,
     metadata: &tracepress_tool_proxy::SourceExecutionMetadata,
-    shadow: Option<&CargoTestShadowCandidate>,
+    emission: SourceEmissionRecord<'_>,
 ) -> Result<(), String> {
     config.ensure_root()?;
-    let session_id = std::env::var("TRACEPRESS_SOURCE_SESSION_ID")
-        .ok()
-        .or_else(|| std::env::var("TRACEPRESS_SESSION_ID").ok());
+    let session_id = source_session_id();
     let exit_status_class = if metadata.termination_signal.is_some() {
         "signal"
     } else if metadata.exit_code == Some(0) {
@@ -5908,25 +6169,28 @@ fn record_source_execution(
         "source_execution_id": metadata.source_execution_id,
         "session_id": session_id,
         "command_family": "cargo_test",
-        "reducer_id": if shadow.is_some() { "cargo_test_v1" } else { "passthrough" },
+        "reducer_id": emission.reducer_id,
         "reducer_version": "v1",
         "output_contract": "agent_readable",
         "raw_stdout_bytes": metadata.raw_stdout_bytes,
         "raw_stderr_bytes": metadata.raw_stderr_bytes,
-        "emitted_bytes": metadata.emitted_bytes,
+        "emitted_bytes": emission.emitted_bytes,
         "exit_status_class": exit_status_class,
         "duration_us": u64::try_from(metadata.duration.as_micros()).unwrap_or(u64::MAX),
-        "recovery_available": false,
-        "shadow": shadow.is_some(),
-        "candidate_bytes": shadow.map(|candidate| candidate.candidate_bytes),
-        "estimated_raw_tokens": shadow.map(|candidate| candidate.estimated_raw_tokens),
-        "estimated_candidate_tokens": shadow.map(|candidate| candidate.estimated_candidate_tokens),
-        "candidate_applicable": shadow.map(|candidate| candidate.applicable),
-        "never_worse_accepted": shadow.map(|candidate| candidate.never_worse_accepted),
-        "omitted_passing_tests": shadow.map(|candidate| candidate.omitted_passing_tests),
-        "omitted_progress_lines": shadow.map(|candidate| candidate.omitted_progress_lines),
-        "recovery_hint_bytes": shadow.map(|candidate| candidate.recovery_hint_bytes),
-        "reducer_duration_us": shadow.map(|candidate| {
+        "recovery_available": emission.recovery_available,
+        "active": emission.active,
+        "forwarding_mutation": emission.active && emission.recovery_available,
+        "fail_open_reason": emission.fail_open_reason,
+        "shadow": emission.candidate.is_some() && !emission.active,
+        "candidate_bytes": emission.candidate.map(|candidate| candidate.candidate_bytes),
+        "estimated_raw_tokens": emission.candidate.map(|candidate| candidate.estimated_raw_tokens),
+        "estimated_candidate_tokens": emission.candidate.map(|candidate| candidate.estimated_candidate_tokens),
+        "candidate_applicable": emission.candidate.map(|candidate| candidate.applicable),
+        "never_worse_accepted": emission.candidate.map(|candidate| candidate.never_worse_accepted),
+        "omitted_passing_tests": emission.candidate.map(|candidate| candidate.omitted_passing_tests),
+        "omitted_progress_lines": emission.candidate.map(|candidate| candidate.omitted_progress_lines),
+        "recovery_hint_bytes": emission.candidate.map(|candidate| candidate.recovery_hint_bytes),
+        "reducer_duration_us": emission.candidate.map(|candidate| {
             u64::try_from(candidate.reducer_duration.as_micros()).unwrap_or(u64::MAX)
         }),
     });
@@ -6007,13 +6271,110 @@ mod tests {
         CorrelationCounters, CorrelationStatus, DeferredAnalysisMetrics, DurableEventIngress,
         ObservationRecord, OperationId, PendingAnalysisEvidence, RECORDER_QUEUE_ITEMS, RequestId,
         RunRecorder, SessionId, ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus,
+        SourceExecutionId, SourceRecoveryMetadata, SourceRecoveryWrite,
         TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator, bounded_record_provider_observation_request,
-        configure_codex_subscription, context_ingestion_queue_capacity, measurement_metadata_line,
+        cleanup_expired_source_recoveries, configure_codex_subscription,
+        context_ingestion_queue_capacity, measurement_metadata_line,
         reconcile_pending_context_with, scheduler_metrics_line, shadow_candidate_batch_fits,
+        source_recovery_token, store_source_recovery, valid_source_recovery_token,
     };
 
     use tracepress_provider::{ObservationInput, ObservationLimits, parse_request, parse_response};
     use tracepress_proxy::{ContextAnalysisOutcome, ForwardId};
+
+    #[test]
+    #[allow(
+        clippy::expect_used,
+        reason = "test setup needs immediate diagnostics for operating-system randomness"
+    )]
+    fn source_recovery_tokens_are_random_opaque_and_path_safe() {
+        let mut tokens = std::collections::BTreeSet::new();
+        for _ in 0..32 {
+            let token = source_recovery_token().expect("random source recovery token");
+            assert!(valid_source_recovery_token(&token));
+            assert!(tokens.insert(token));
+        }
+    }
+
+    #[test]
+    #[allow(
+        clippy::expect_used,
+        reason = "test fixture setup and byte-for-byte file assertions need local diagnostics"
+    )]
+    fn source_recovery_store_is_byte_faithful_and_private() {
+        let temporary = tempfile::tempdir().expect("temporary recovery root");
+        let root = temporary.path().join("tracepress");
+        let config = Config {
+            database: root.join("tracepress.sqlite3"),
+            socket: root.join("tracepress.sock"),
+            credential: root.join("control.cred"),
+            ready: root.join("daemon.ready"),
+            root,
+        };
+        config.ensure_root().expect("secure Tracepress root");
+        let ids = UuidV7Generator::new();
+        let session_id = SessionId::generate(&ids).to_string();
+        let token = source_recovery_token().expect("random recovery token");
+        let stdout = b"stdout\0bytes\n";
+        let stderr = b"stderr\xffbytes\n";
+        store_source_recovery(
+            &config,
+            SourceRecoveryWrite {
+                session_id: &session_id,
+                token: &token,
+                source_execution_id: SourceExecutionId::generate(&ids),
+                stdout,
+                stderr,
+            },
+        )
+        .expect("store source recovery");
+        let recovery = config
+            .root
+            .join("source-recovery")
+            .join(session_id)
+            .join(token);
+        assert_eq!(
+            std::fs::read(recovery.join("stdout")).expect("stdout"),
+            stdout
+        );
+        assert_eq!(
+            std::fs::read(recovery.join("stderr")).expect("stderr"),
+            stderr
+        );
+        let mut metadata: SourceRecoveryMetadata = serde_json::from_slice(
+            &std::fs::read(recovery.join("metadata.json")).expect("metadata"),
+        )
+        .expect("valid metadata");
+        assert_eq!(
+            metadata.stdout_bytes,
+            u64::try_from(stdout.len()).unwrap_or(u64::MAX)
+        );
+        assert_eq!(
+            metadata.stderr_bytes,
+            u64::try_from(stderr.len()).unwrap_or(u64::MAX)
+        );
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt as _;
+            assert_eq!(
+                std::fs::metadata(recovery.join("stdout"))
+                    .expect("stdout metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777,
+                0o600
+            );
+        }
+        metadata.expires_at_unix = 0;
+        std::fs::write(
+            recovery.join("metadata.json"),
+            serde_json::to_vec(&metadata).expect("encode expired metadata"),
+        )
+        .expect("expire recovery fixture");
+        let session_root = recovery.parent().expect("session recovery root");
+        cleanup_expired_source_recoveries(session_root, 1);
+        assert!(!recovery.exists());
+    }
 
     fn synthetic_shadow_candidate(
         generator: &UuidV7Generator,

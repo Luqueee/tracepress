@@ -4370,7 +4370,11 @@ enum CommandKind {
         agent: String,
     },
     /// Perform a metadata-only Codex app-server handshake; it never starts a thread or turn.
-    CodexObserve,
+    CodexObserve {
+        /// Start one ephemeral read-only turn that runs a harmless printf command.
+        #[arg(long)]
+        command_smoke: bool,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -5620,8 +5624,10 @@ fn current_timestamp_us() -> Result<u64, String> {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    let invoked_as_cargo = std::env::args_os().next().and_then(|value| PathBuf::from(value)
-        .file_name().map(|name| name == "cargo")).unwrap_or(false);
+    let invoked_as_cargo = std::env::args_os()
+        .next()
+        .and_then(|value| PathBuf::from(value).file_name().map(|name| name == "cargo"))
+        .unwrap_or(false);
     let config = Config::load()?;
     if invoked_as_cargo {
         let args = std::env::args().skip(1).collect::<Vec<_>>();
@@ -5672,11 +5678,11 @@ async fn main() -> Result<(), String> {
         CommandKind::Proxy => proxy().await,
         CommandKind::Tool { args } => tool(&config, args),
         CommandKind::Hook { agent } => hook(agent),
-        CommandKind::CodexObserve => codex_observe(),
+        CommandKind::CodexObserve { command_smoke } => codex_observe(command_smoke),
     }
 }
 
-fn codex_observe() -> Result<(), String> {
+fn codex_observe(command_smoke: bool) -> Result<(), String> {
     use std::io::{BufRead as _, Write as _};
     let mut child = std::process::Command::new("codex")
         .args(["app-server", "--stdio"])
@@ -5689,15 +5695,105 @@ fn codex_observe() -> Result<(), String> {
         "method": "initialize",
         "params": {"clientInfo": {"name": "tracepress-observer", "version": env!("CARGO_PKG_VERSION")}, "capabilities": {"experimentalApi": true}}
     });
-    let mut input = child.stdin.take().ok_or_else(|| "app-server stdin unavailable".to_owned())?;
+    let mut input = child
+        .stdin
+        .take()
+        .ok_or_else(|| "app-server stdin unavailable".to_owned())?;
     serde_json::to_writer(&mut input, &request).map_err(|error| error.to_string())?;
     input.write_all(b"\n").map_err(|error| error.to_string())?;
-    let output = child.stdout.take().ok_or_else(|| "app-server stdout unavailable".to_owned())?;
+    let output = child
+        .stdout
+        .take()
+        .ok_or_else(|| "app-server stdout unavailable".to_owned())?;
     let mut lines = std::io::BufReader::new(output).lines();
-    let response = lines.next().ok_or_else(|| "app-server closed before initialize".to_owned())?.map_err(|error| error.to_string())?;
-    let value: serde_json::Value = serde_json::from_str(&response).map_err(|error| error.to_string())?;
+    let response = lines
+        .next()
+        .ok_or_else(|| "app-server closed before initialize".to_owned())?
+        .map_err(|error| error.to_string())?;
+    let value: serde_json::Value =
+        serde_json::from_str(&response).map_err(|error| error.to_string())?;
+    if !command_smoke {
+        let _killed = child.kill();
+        println!(
+            "{}",
+            serde_json::json!({"event":"initialize","accepted":value.get("result").is_some(),"output_persisted":false,"thread_started":false,"turn_started":false})
+        );
+        return Ok(());
+    }
+    let thread = serde_json::json!({"id":2,"method":"thread/start","params":{"cwd":std::env::current_dir().map_err(|error| error.to_string())?,"approvalPolicy":"never","sandbox":"read-only","ephemeral":true}});
+    serde_json::to_writer(&mut input, &thread).map_err(|error| error.to_string())?;
+    input.write_all(b"\n").map_err(|error| error.to_string())?;
+    let mut event_counts = BTreeMap::<String, u64>::new();
+    let thread_id = loop {
+        let line = lines
+            .next()
+            .ok_or_else(|| "app-server closed before thread/start".to_owned())?
+            .map_err(|error| error.to_string())?;
+        let event: serde_json::Value =
+            serde_json::from_str(&line).map_err(|error| error.to_string())?;
+        if let Some(method) = event.get("method").and_then(serde_json::Value::as_str) {
+            *event_counts.entry(method.to_owned()).or_default() += 1;
+        }
+        if event.get("id").and_then(serde_json::Value::as_u64) == Some(2) {
+            break event
+                .pointer("/result/thread/id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| "thread/start returned no thread id".to_owned())?
+                .to_owned();
+        }
+    };
+    let turn = serde_json::json!({"id":3,"method":"turn/start","params":{"threadId":thread_id,"input":[{"type":"text","text":"Run exactly `printf TRACEPRESS_APPSERVER_OBSERVER` once, then reply only done."}]}});
+    serde_json::to_writer(&mut input, &turn).map_err(|error| error.to_string())?;
+    input.write_all(b"\n").map_err(|error| error.to_string())?;
+    let mut output_delta_chars = 0_u64;
+    let mut aggregated_output_chars = 0_u64;
+    let mut item_types = BTreeMap::<String, u64>::new();
+    let mut turn_started = false;
+    loop {
+        let line = lines
+            .next()
+            .ok_or_else(|| "app-server closed before turn completion".to_owned())?
+            .map_err(|error| error.to_string())?;
+        let event: serde_json::Value =
+            serde_json::from_str(&line).map_err(|error| error.to_string())?;
+        if event.get("id").and_then(serde_json::Value::as_u64) == Some(3) {
+            turn_started = event.get("result").is_some();
+        }
+        if let Some(method) = event.get("method").and_then(serde_json::Value::as_str) {
+            *event_counts.entry(method.to_owned()).or_default() += 1;
+            if matches!(method, "item/started" | "item/completed")
+                && let Some(item_type) = event
+                    .pointer("/params/item/type")
+                    .and_then(serde_json::Value::as_str)
+            {
+                *item_types.entry(item_type.to_owned()).or_default() += 1;
+                if item_type == "commandExecution" && method == "item/completed" {
+                    aggregated_output_chars = aggregated_output_chars.saturating_add(
+                        event
+                            .pointer("/params/item/aggregatedOutput")
+                            .and_then(serde_json::Value::as_str)
+                            .map_or(0, |output| u64::try_from(output.len()).unwrap_or(u64::MAX)),
+                    );
+                }
+            }
+            if method == "item/commandExecution/outputDelta" {
+                output_delta_chars = output_delta_chars.saturating_add(
+                    event
+                        .pointer("/params/delta")
+                        .and_then(serde_json::Value::as_str)
+                        .map_or(0, |delta| u64::try_from(delta.len()).unwrap_or(u64::MAX)),
+                );
+            }
+            if method == "turn/completed" {
+                break;
+            }
+        }
+    }
     let _killed = child.kill();
-    println!("{}", serde_json::json!({"event":"initialize","accepted":value.get("result").is_some(),"output_persisted":false,"thread_started":false,"turn_started":false}));
+    println!(
+        "{}",
+        serde_json::json!({"event":"command_smoke","accepted":value.get("result").is_some(),"output_persisted":false,"thread_started":true,"turn_started":turn_started,"event_counts":event_counts,"item_types":item_types,"command_output_delta_chars":output_delta_chars,"command_aggregated_output_chars":aggregated_output_chars})
+    );
     Ok(())
 }
 

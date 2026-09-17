@@ -251,7 +251,8 @@ mod tests {
         let output = codex_pre_tool_use_identity_rewrite(input).expect("identity rewrite");
         let value: serde_json::Value = serde_json::from_slice(&output).expect("valid response");
         assert_eq!(
-            value.pointer("/hookSpecificOutput/updatedInput/command")
+            value
+                .pointer("/hookSpecificOutput/updatedInput/command")
                 .and_then(serde_json::Value::as_str),
             Some("cargo test -q")
         );

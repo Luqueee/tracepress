@@ -18,6 +18,13 @@ def scalar(db: Path, query: str) -> int:
     with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as con:
         return int(con.execute(query).fetchone()[0] or 0)
 
+def agent_error_class(stderr: str) -> str | None:
+    text = stderr.lower()
+    if "sandbox" in text or "permission denied" in text: return "sandbox_or_permission"
+    if "not found" in text or "no such file" in text: return "not_found"
+    if "recursion" in text: return "recursion"
+    return "other" if text else None
+
 def aggregate(db: Path, state: Path) -> dict[str, Any]:
     with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as con:
         usage = con.execute("SELECT SUM(input_total),SUM(input_cached),SUM(input_uncached),SUM(output_total),SUM(reasoning) FROM provider_usage").fetchone()
@@ -83,7 +90,7 @@ def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int) -> dict[st
         else: raise RuntimeError("daemon did not become ready")
         prompt="Your first and only Bash command must be exactly `cargo test`. Do not run any other Bash command, inspect files, or modify source. After it completes, report only whether tests passed."
         result=subprocess.run([str(cli),"run","codex","exec","-m",MODEL,"-s","workspace-write","--skip-git-repo-check",prompt],cwd=workspace,env=env,capture_output=True,text=True,timeout=timeout)
-        summary=aggregate(state/"tracepress.sqlite3",state); summary.update({"arm":name,"agent_exit_status_class":"success" if result.returncode==0 else "nonzero","duration_ms":round((time.monotonic()-started)*1000),"timed_out":False})
+        summary=aggregate(state/"tracepress.sqlite3",state); summary.update({"arm":name,"agent_exit_status_class":"success" if result.returncode==0 else "nonzero","agent_error_class":None if result.returncode==0 else agent_error_class(result.stderr),"duration_ms":round((time.monotonic()-started)*1000),"timed_out":False})
         return summary
     except subprocess.TimeoutExpired:
         return {"arm":name,"agent_exit_status_class":"timeout","duration_ms":round((time.monotonic()-started)*1000),"timed_out":True}

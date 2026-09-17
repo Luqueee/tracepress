@@ -1,0 +1,71 @@
+{
+  "experiment_id": "source-passthrough-aa-001",
+  "forwarding_mutation": false,
+  "infrastructure_gate": {
+    "decision": "instrumentation_invalid_missing_source_execution",
+    "source_execution_per_passthrough_session": false
+  },
+  "pairs": 1,
+  "phase": "5.0",
+  "privacy": {
+    "commands_persisted": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false
+  },
+  "reducer": "path",
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "rows": [
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 17178,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 39925,
+        "input_uncached": 11765,
+        "output": 172,
+        "reasoning": 49
+      },
+      "source_emitted_bytes": 0,
+      "source_executions": 0,
+      "source_stderr_bytes": 0,
+      "source_stdout_bytes": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "nonzero",
+      "arm": "Path",
+      "duration_ms": 110,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 0,
+      "provider_usage": {
+        "input_cached": null,
+        "input_total": null,
+        "input_uncached": null,
+        "output": null,
+        "reasoning": null
+      },
+      "source_emitted_bytes": 0,
+      "source_executions": 0,
+      "source_stderr_bytes": 0,
+      "source_stdout_bytes": 0,
+      "timed_out": false
+    }
+  ],
+  "status": "completed",
+  "workload_isolation": {
+    "arm_order": "alternating",
+    "per_arm_cargo_target_dir": true,
+    "per_arm_clean_git_worktree": true,
+    "rust_test_threads": 1
+  }
+}

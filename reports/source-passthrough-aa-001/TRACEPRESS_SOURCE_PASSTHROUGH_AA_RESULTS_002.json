@@ -1,0 +1,383 @@
+{
+  "experiment_id": "source-passthrough-aa-001",
+  "forwarding_mutation": false,
+  "infrastructure_gate": {
+    "decision": "aa_valid",
+    "source_execution_per_passthrough_session": true
+  },
+  "pairs": 10,
+  "phase": "5.0",
+  "privacy": {
+    "commands_persisted": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false
+  },
+  "reducer": "passthrough",
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "rows": [
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 20986,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 39001,
+        "input_uncached": 10841,
+        "output": 187,
+        "reasoning": 64
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 24726,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 3,
+      "provider_usage": {
+        "input_cached": 36096,
+        "input_total": 41007,
+        "input_uncached": 4911,
+        "output": 214,
+        "reasoning": 62
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 22805,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 36352,
+        "input_total": 38971,
+        "input_uncached": 2619,
+        "output": 149,
+        "reasoning": 38
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 21727,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 15872,
+        "input_total": 27255,
+        "input_uncached": 11383,
+        "output": 182,
+        "reasoning": 39
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 20117,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 38993,
+        "input_uncached": 10833,
+        "output": 156,
+        "reasoning": 27
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 22574,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 19968,
+        "input_total": 27269,
+        "input_uncached": 7301,
+        "output": 228,
+        "reasoning": 109
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 21425,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 39011,
+        "input_uncached": 10851,
+        "output": 189,
+        "reasoning": 50
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 19137,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 23040,
+        "input_total": 27259,
+        "input_uncached": 4219,
+        "output": 161,
+        "reasoning": 37
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 20697,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 39004,
+        "input_uncached": 10844,
+        "output": 167,
+        "reasoning": 37
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 19926,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 19968,
+        "input_total": 27246,
+        "input_uncached": 7278,
+        "output": 179,
+        "reasoning": 54
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 22130,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 38993,
+        "input_uncached": 10833,
+        "output": 156,
+        "reasoning": 47
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 21484,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 23040,
+        "input_total": 27251,
+        "input_uncached": 4211,
+        "output": 170,
+        "reasoning": 48
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 20021,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 35328,
+        "input_total": 38974,
+        "input_uncached": 3646,
+        "output": 137,
+        "reasoning": 36
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 28304,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 19968,
+        "input_total": 27268,
+        "input_uncached": 7300,
+        "output": 189,
+        "reasoning": 67
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 20182,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 3,
+      "provider_usage": {
+        "input_cached": 39168,
+        "input_total": 58692,
+        "input_uncached": 19524,
+        "output": 202,
+        "reasoning": 48
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 21632,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 23040,
+        "input_total": 27262,
+        "input_uncached": 4222,
+        "output": 195,
+        "reasoning": 63
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 20405,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 19968,
+        "input_total": 38987,
+        "input_uncached": 19019,
+        "output": 164,
+        "reasoning": 34
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 20291,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 23040,
+        "input_total": 27252,
+        "input_uncached": 4212,
+        "output": 172,
+        "reasoning": 38
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 20195,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 19968,
+        "input_total": 39011,
+        "input_uncached": 19043,
+        "output": 174,
+        "reasoning": 47
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 40144,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 23040,
+        "input_total": 27237,
+        "input_uncached": 4197,
+        "output": 165,
+        "reasoning": 57
+      },
+      "source_executions": 1,
+      "timed_out": false
+    }
+  ],
+  "status": "completed"
+}

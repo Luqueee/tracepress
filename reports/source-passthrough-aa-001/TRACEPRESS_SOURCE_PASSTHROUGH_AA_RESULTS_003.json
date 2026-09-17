@@ -1,0 +1,392 @@
+{
+  "experiment_id": "source-passthrough-aa-001",
+  "forwarding_mutation": false,
+  "infrastructure_gate": {
+    "decision": "instrumentation_valid_only",
+    "source_execution_per_passthrough_session": true
+  },
+  "passthrough_behavior_gate": {
+    "decision": "rejected_trajectory_changed",
+    "reason": "provider request and input totals differed without a reducer"
+  },
+  "pairs": 10,
+  "phase": "5.0",
+  "privacy": {
+    "commands_persisted": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false
+  },
+  "reducer": "passthrough",
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "rows": [
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 22530,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41009,
+        "input_uncached": 12849,
+        "output": 164,
+        "reasoning": 36
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 16794,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 19968,
+        "input_total": 32609,
+        "input_uncached": 12641,
+        "output": 141,
+        "reasoning": 25
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 18098,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 15872,
+        "input_total": 29266,
+        "input_uncached": 13394,
+        "output": 158,
+        "reasoning": 27
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 18860,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 40985,
+        "input_uncached": 12825,
+        "output": 163,
+        "reasoning": 24
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 21243,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41054,
+        "input_uncached": 12894,
+        "output": 184,
+        "reasoning": 85
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 21162,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 15872,
+        "input_total": 29217,
+        "input_uncached": 13345,
+        "output": 119,
+        "reasoning": 45
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 16524,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 23040,
+        "input_total": 32629,
+        "input_uncached": 9589,
+        "output": 151,
+        "reasoning": 36
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 24224,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 19968,
+        "input_total": 39953,
+        "input_uncached": 19985,
+        "output": 169,
+        "reasoning": 35
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 28853,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41018,
+        "input_uncached": 12858,
+        "output": 179,
+        "reasoning": 43
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 17306,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 19968,
+        "input_total": 29307,
+        "input_uncached": 9339,
+        "output": 181,
+        "reasoning": 59
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 22836,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 23040,
+        "input_total": 32647,
+        "input_uncached": 9607,
+        "output": 184,
+        "reasoning": 55
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 18505,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41014,
+        "input_uncached": 12854,
+        "output": 152,
+        "reasoning": 39
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 30299,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 39989,
+        "input_uncached": 11829,
+        "output": 182,
+        "reasoning": 37
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 16879,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 4,
+      "provider_usage": {
+        "input_cached": 43008,
+        "input_total": 56789,
+        "input_uncached": 13781,
+        "output": 251,
+        "reasoning": 74
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 18698,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 3,
+      "provider_usage": {
+        "input_cached": 36096,
+        "input_total": 43041,
+        "input_uncached": 6945,
+        "output": 222,
+        "reasoning": 55
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 24132,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 19968,
+        "input_total": 41042,
+        "input_uncached": 21074,
+        "output": 157,
+        "reasoning": 41
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 17718,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41021,
+        "input_uncached": 12861,
+        "output": 199,
+        "reasoning": 56
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 31783,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 23040,
+        "input_total": 28172,
+        "input_uncached": 5132,
+        "output": 169,
+        "reasoning": 41
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 18554,
+      "hook_events": 1,
+      "hook_rewrites": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 23040,
+        "input_total": 29270,
+        "input_uncached": 6230,
+        "output": 164,
+        "reasoning": 28
+      },
+      "source_executions": 1,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 17097,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41015,
+        "input_uncached": 12855,
+        "output": 153,
+        "reasoning": 27
+      },
+      "source_executions": 0,
+      "timed_out": false
+    }
+  ],
+  "status": "completed",
+  "workload_isolation": {
+    "arm_order": "alternating",
+    "per_arm_clean_git_worktree": true,
+    "rust_test_threads": 1
+  }
+}

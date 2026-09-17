@@ -82,8 +82,9 @@ use tracepress_storage::{
 };
 use tracepress_storage::{ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus};
 use tracepress_tool_proxy::{
-    CargoTestShadowCandidate, cargo_test_v1_active, cargo_test_v1_shadow,
-    codex_pre_tool_use_identity_rewrite, codex_pre_tool_use_rewrite, execute_passthrough,
+    CargoOutputCandidate, CommandFamily, cargo_check_v1_shadow, cargo_test_v1_active,
+    cargo_test_v1_shadow, codex_pre_tool_use_identity_rewrite, codex_pre_tool_use_rewrite,
+    execute_passthrough,
 };
 
 const FRAME_BYTES: u64 = 65_536;
@@ -5882,7 +5883,7 @@ struct SourceRecoveryWrite<'a> {
 
 #[derive(Clone, Copy, Debug)]
 struct SourceEmissionRecord<'a> {
-    candidate: Option<&'a CargoTestShadowCandidate>,
+    candidate: Option<&'a CargoOutputCandidate>,
     reducer_id: &'static str,
     emitted_bytes: u64,
     active: bool,
@@ -6055,6 +6056,22 @@ fn recall_source_output(config: &Config, recovery_id: &str) -> Result<(), String
     record_source_recovery(config, &session_id, &metadata)
 }
 
+fn source_reducer_id(
+    active: bool,
+    candidate: Option<&CargoOutputCandidate>,
+    family: CommandFamily,
+) -> &'static str {
+    if active {
+        "cargo_test_v1_active"
+    } else if candidate.is_some() && family == CommandFamily::CargoCheck {
+        "cargo_check_v1_shadow"
+    } else if candidate.is_some() {
+        "cargo_test_v1_shadow"
+    } else {
+        "passthrough"
+    }
+}
+
 fn tool(config: &Config, args: &[String]) -> Result<(), String> {
     let command = args.join(" ");
     let ids = UuidV7Generator::new();
@@ -6065,9 +6082,17 @@ fn tool(config: &Config, args: &[String]) -> Result<(), String> {
     let mut active = false;
     let mut recovery_available = false;
     let mut fail_open_reason = None;
-    if reducer.as_deref() == Some("cargo_test_v1_shadow") {
+    if reducer.as_deref() == Some("cargo_test_v1_shadow")
+        && metadata.command_family == CommandFamily::CargoTest
+    {
         candidate = Some(cargo_test_v1_shadow(&stdout, &stderr));
-    } else if reducer.as_deref() == Some("cargo_test_v1_active") {
+    } else if reducer.as_deref() == Some("cargo_check_v1_shadow")
+        && metadata.command_family == CommandFamily::CargoCheck
+    {
+        candidate = Some(cargo_check_v1_shadow(&stdout, &stderr));
+    } else if reducer.as_deref() == Some("cargo_test_v1_active")
+        && metadata.command_family == CommandFamily::CargoTest
+    {
         active = true;
         let attempt = (|| {
             let session_id = source_session_id().ok_or("missing_session")?;
@@ -6117,13 +6142,7 @@ fn tool(config: &Config, args: &[String]) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let emitted_bytes = u64::try_from(emitted_stdout.len().saturating_add(emitted_stderr.len()))
         .unwrap_or(u64::MAX);
-    let reducer_id = if active {
-        "cargo_test_v1_active"
-    } else if candidate.is_some() {
-        "cargo_test_v1_shadow"
-    } else {
-        "passthrough"
-    };
+    let reducer_id = source_reducer_id(active, candidate.as_ref(), metadata.command_family);
     let _recorded = record_source_execution(
         config,
         &metadata,
@@ -6170,10 +6189,15 @@ fn record_source_execution(
     } else {
         "nonzero"
     };
+    let command_family = match metadata.command_family {
+        CommandFamily::CargoTest => "cargo_test",
+        CommandFamily::CargoCheck => "cargo_check",
+        _ => "unknown",
+    };
     let record = serde_json::json!({
         "source_execution_id": metadata.source_execution_id,
         "session_id": session_id,
-        "command_family": "cargo_test",
+        "command_family": command_family,
         "reducer_id": emission.reducer_id,
         "reducer_version": "v1",
         "output_contract": "agent_readable",

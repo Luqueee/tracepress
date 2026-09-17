@@ -25,7 +25,7 @@ def agent_error_class(stderr: str) -> str | None:
     if "recursion" in text: return "recursion"
     return "other" if text else None
 
-def reported_test_outcome(stdout: str) -> str:
+def reported_command_outcome(stdout: str, passed_sentinel: str, failed_sentinel: str) -> str:
     messages = []
     for line in stdout.splitlines():
         try:
@@ -38,9 +38,9 @@ def reported_test_outcome(stdout: str) -> str:
     if not messages:
         return "unknown"
     final = messages[-1].strip().lower()
-    if final == "tests_failed":
+    if final == failed_sentinel.lower():
         return "failed"
-    if final == "tests_passed":
+    if final == passed_sentinel.lower():
         return "passed"
     return "unknown"
 
@@ -104,6 +104,7 @@ def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int, experiment
             env["TRACEPRESS_SOURCE_HOOK"] = "path" if name == "Path" else "codex"
         if name == "Identity": env["TRACEPRESS_HOOK_REWRITE_MODE"] = "identity"
         if name == "ExplicitShadow": env["TRACEPRESS_SOURCE_REDUCER"] = "cargo_test_v1_shadow"
+        if name == "ExplicitCheckShadow": env["TRACEPRESS_SOURCE_REDUCER"] = "cargo_check_v1_shadow"
         if name == "ExplicitActive": env["TRACEPRESS_SOURCE_REDUCER"] = "cargo_test_v1_active"
         subprocess.run([str(cli),"init"],cwd=workspace,env=env,check=True,capture_output=True,text=True,timeout=30)
         daemon_env = dict(env); daemon_env.update({"TRACEPRESS_DATABASE":str(state/"tracepress.sqlite3"),"TRACEPRESS_CONTROL_SOCKET":str(state/"tracepress.sock"),"TRACEPRESS_CONTROL_CREDENTIAL":str(state/"control.cred"),"TRACEPRESS_DAEMON_READY":str(state/"daemon.ready")})
@@ -114,16 +115,22 @@ def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int, experiment
             if (state/"daemon.ready").exists(): break
             time.sleep(.1)
         else: raise RuntimeError("daemon did not become ready")
-        if name in {"ExplicitActiveControl", "ExplicitActive"}:
+        if name in {"ExplicitCheckControl", "ExplicitCheckShadow"}:
+            prompt=f"Your first and only Bash command must be exactly `{cli} tool cargo check`. Do not run any other Bash command, inspect files, or modify source. End with exactly CHECK_PASSED if the command succeeds or CHECK_FAILED if it fails, and no other text."
+            passed_sentinel, failed_sentinel = "CHECK_PASSED", "CHECK_FAILED"
+        elif name in {"ExplicitActiveControl", "ExplicitActive"}:
             prompt=f"Your first Bash command must be exactly `{cli} tool cargo test`. Use its output to determine whether tests passed. If and only if the output is insufficient, you may run the exact Tracepress recovery command printed in the output or rerun the same wrapper command. Do not inspect files, modify source, or run any other Bash command. End with exactly TESTS_PASSED or TESTS_FAILED and no other text."
+            passed_sentinel, failed_sentinel = "TESTS_PASSED", "TESTS_FAILED"
         elif name.startswith("Explicit"):
             prompt=f"Your first and only Bash command must be exactly `{cli} tool cargo test`. Do not run any other Bash command, inspect files, or modify source. After it completes, report only whether tests passed."
+            passed_sentinel, failed_sentinel = "TESTS_PASSED", "TESTS_FAILED"
         else:
             prompt="Your first and only Bash command must be exactly `cargo test`. Do not run any other Bash command, inspect files, or modify source. After it completes, report only whether tests passed."
+            passed_sentinel, failed_sentinel = "TESTS_PASSED", "TESTS_FAILED"
         result=subprocess.run([str(cli),"run","codex","exec","--json","-m",MODEL,"-s","workspace-write","--skip-git-repo-check",prompt],cwd=workspace,env=env,capture_output=True,text=True,timeout=timeout)
         summary=aggregate(state/"tracepress.sqlite3",state); summary.update({"arm":name,"agent_exit_status_class":"success" if result.returncode==0 else "nonzero","agent_error_class":None if result.returncode==0 else agent_error_class(result.stderr),"duration_ms":round((time.monotonic()-started)*1000),"timed_out":False})
         actual_outcome = "passed" if summary["source_successful_executions"] == summary["source_executions"] else "failed"
-        reported_outcome = reported_test_outcome(result.stdout)
+        reported_outcome = reported_command_outcome(result.stdout, passed_sentinel, failed_sentinel)
         summary.update({"actual_outcome":actual_outcome,"reported_outcome":reported_outcome,"task_success":result.returncode == 0 and summary["source_executions"] >= 1 and summary["provider_errors"] == 0 and reported_outcome == actual_outcome})
         return summary
     except subprocess.TimeoutExpired:
@@ -135,12 +142,12 @@ def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int, experiment
         remove_worktree(repo, workspace)
 
 def main() -> int:
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--repo-root",type=Path,default=Path(__file__).resolve().parents[1]); p.add_argument("--workload-root",type=Path,default=Path("/tmp/tracepress-source-passthrough-aa-001")); p.add_argument("--pairs",type=int,default=1,choices=range(1,11)); p.add_argument("--timeout",type=int,default=180); p.add_argument("--hook-mode",choices=("passthrough","identity","path","explicit-aa","explicit-shadow","explicit-active"),default="passthrough"); p.add_argument("--output-json",type=Path,required=True); p.add_argument("--output-md",type=Path,required=True); a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--repo-root",type=Path,default=Path(__file__).resolve().parents[1]); p.add_argument("--workload-root",type=Path,default=Path("/tmp/tracepress-source-passthrough-aa-001")); p.add_argument("--pairs",type=int,default=1,choices=range(1,11)); p.add_argument("--timeout",type=int,default=180); p.add_argument("--hook-mode",choices=("passthrough","identity","path","explicit-aa","explicit-shadow","explicit-active","explicit-check-shadow"),default="passthrough"); p.add_argument("--output-json",type=Path,required=True); p.add_argument("--output-md",type=Path,required=True); a=p.parse_args()
     cli=a.repo_root/"target/debug/tracepress"; daemon=a.repo_root/"target/debug/tracepressd"
     if not cli.exists() or not daemon.exists(): raise RuntimeError("build target/debug/tracepress and target/debug/tracepressd first")
-    treatment = {"passthrough": "Passthrough", "identity": "Identity", "path": "Path", "explicit-aa": "ExplicitB", "explicit-shadow": "ExplicitShadow", "explicit-active": "ExplicitActive"}[a.hook_mode]
-    control = "ExplicitA" if a.hook_mode == "explicit-aa" else ("ExplicitActiveControl" if a.hook_mode == "explicit-active" else ("ExplicitControl" if a.hook_mode == "explicit-shadow" else "Control"))
-    experiment = "source-active-pilot-001" if a.hook_mode == "explicit-active" else EXPERIMENT
+    treatment = {"passthrough": "Passthrough", "identity": "Identity", "path": "Path", "explicit-aa": "ExplicitB", "explicit-shadow": "ExplicitShadow", "explicit-active": "ExplicitActive", "explicit-check-shadow": "ExplicitCheckShadow"}[a.hook_mode]
+    control = "ExplicitA" if a.hook_mode == "explicit-aa" else ("ExplicitActiveControl" if a.hook_mode == "explicit-active" else ("ExplicitControl" if a.hook_mode == "explicit-shadow" else ("ExplicitCheckControl" if a.hook_mode == "explicit-check-shadow" else "Control")))
+    experiment = "source-active-pilot-001" if a.hook_mode == "explicit-active" else ("source-cargo-check-shadow-001" if a.hook_mode == "explicit-check-shadow" else EXPERIMENT)
     repo=checkout(a.workload_root); rows=[]
     for pair in range(a.pairs):
         order = [control, treatment] if pair % 2 == 0 else [treatment, control]
@@ -149,7 +156,8 @@ def main() -> int:
         source_complete = all(row.get("hook_rewrites", 0) == 0 and row.get("source_executions", 0) >= 1 for row in rows)
     else:
         source_complete = all(row.get("hook_rewrites", 0) == 1 and (a.hook_mode == "identity" or row.get("source_executions", 0) == 1) for row in rows if row["arm"] == treatment)
-    report={"experiment_id":experiment,"phase":"5.1" if a.hook_mode == "explicit-active" else "5.0","status":"completed","pairs":a.pairs,"reducer":a.hook_mode,"forwarding_mutation":any(row.get("forwarding_mutations",0)>0 for row in rows),"repository_pin":{"repository":"BurntSushi/ripgrep","commit_sha":SHA},"workload_isolation":{"per_arm_clean_git_worktree":True,"per_arm_cargo_target_dir":True,"arm_order":"alternating","rust_test_threads":1},"rows":rows,"infrastructure_gate":{"source_execution_per_passthrough_session":source_complete,"decision":"instrumentation_valid" if source_complete else "instrumentation_invalid_missing_source_execution"},"privacy":{"commands_persisted":False,"paths_persisted":False,"raw_content_persisted":False}}
+    phase = "5.2" if a.hook_mode == "explicit-check-shadow" else ("5.1" if a.hook_mode == "explicit-active" else "5.0")
+    report={"experiment_id":experiment,"phase":phase,"status":"completed","pairs":a.pairs,"reducer":a.hook_mode,"forwarding_mutation":any(row.get("forwarding_mutations",0)>0 for row in rows),"repository_pin":{"repository":"BurntSushi/ripgrep","commit_sha":SHA},"workload_isolation":{"per_arm_clean_git_worktree":True,"per_arm_cargo_target_dir":True,"arm_order":"alternating","rust_test_threads":1},"rows":rows,"infrastructure_gate":{"source_execution_per_passthrough_session":source_complete,"decision":"instrumentation_valid" if source_complete else "instrumentation_invalid_missing_source_execution"},"privacy":{"commands_persisted":False,"paths_persisted":False,"raw_content_persisted":False}}
     a.output_json.parent.mkdir(parents=True,exist_ok=True); a.output_json.write_text(json.dumps(report,indent=2,sort_keys=True)+"\n",encoding="utf-8")
     a.output_md.write_text("# TRACEPRESS_SOURCE_PASSTHROUGH_AA_001\n\nStatus: **completed**. Passthrough only; no reducer was enabled.\n",encoding="utf-8")
     return 0

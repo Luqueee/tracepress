@@ -92,11 +92,12 @@ pub enum OutputContract {
     Unknown,
 }
 
-/// A supported command family. Phase 5.0 deliberately starts with one family.
+/// A supported command family. Expansion remains deliberately incremental.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[non_exhaustive]
 pub enum CommandFamily {
     CargoTest,
+    CargoCheck,
 }
 
 /// Why a command was left untouched.
@@ -128,13 +129,16 @@ pub fn decide(command: &str) -> RewriteDecision {
         return RewriteDecision::FailOpen(FailOpenReason::ShellSyntax);
     }
     let words: Vec<_> = command.split_ascii_whitespace().collect();
-    if matches!(words.as_slice(), ["cargo", "test", ..]) {
-        RewriteDecision::Passthrough {
+    match words.as_slice() {
+        ["cargo", "test", ..] => RewriteDecision::Passthrough {
             family: CommandFamily::CargoTest,
             contract: OutputContract::AgentReadable,
-        }
-    } else {
-        RewriteDecision::FailOpen(FailOpenReason::Unsupported)
+        },
+        ["cargo", "check", ..] => RewriteDecision::Passthrough {
+            family: CommandFamily::CargoCheck,
+            contract: OutputContract::AgentReadable,
+        },
+        _ => RewriteDecision::FailOpen(FailOpenReason::Unsupported),
     }
 }
 
@@ -156,7 +160,7 @@ pub struct SourceExecutionMetadata {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub struct CargoTestShadowCandidate {
+pub struct CargoOutputCandidate {
     pub candidate_stdout: Vec<u8>,
     pub candidate_stderr: Vec<u8>,
     pub raw_bytes: u64,
@@ -172,6 +176,9 @@ pub struct CargoTestShadowCandidate {
     pub applicable: bool,
     pub never_worse_accepted: bool,
 }
+
+/// Backwards-compatible Phase 5.0 name for the generalized Cargo candidate.
+pub type CargoTestShadowCandidate = CargoOutputCandidate;
 
 const fn estimated_tokens(bytes: u64) -> u64 {
     bytes.saturating_add(3) / 4
@@ -223,7 +230,7 @@ fn cargo_test_v1_candidate(
     stdout: &[u8],
     stderr: &[u8],
     active_recovery_command: Option<&str>,
-) -> CargoTestShadowCandidate {
+) -> CargoOutputCandidate {
     let started = Instant::now();
     let raw_bytes = u64::try_from(stdout.len().saturating_add(stderr.len())).unwrap_or(u64::MAX);
     let (mut candidate_stdout, candidate_stderr, omitted_passing_tests, omitted_progress_lines) =
@@ -264,7 +271,7 @@ fn cargo_test_v1_candidate(
     let never_worse_accepted = applicable
         && candidate_bytes < raw_bytes
         && estimated_candidate_tokens < estimated_raw_tokens;
-    CargoTestShadowCandidate {
+    CargoOutputCandidate {
         candidate_stdout,
         candidate_stderr,
         raw_bytes,
@@ -282,7 +289,7 @@ fn cargo_test_v1_candidate(
 
 /// Evaluates `cargo_test_v1` without changing agent-visible bytes.
 #[must_use]
-pub fn cargo_test_v1_shadow(stdout: &[u8], stderr: &[u8]) -> CargoTestShadowCandidate {
+pub fn cargo_test_v1_shadow(stdout: &[u8], stderr: &[u8]) -> CargoOutputCandidate {
     cargo_test_v1_candidate(stdout, stderr, None)
 }
 
@@ -292,8 +299,79 @@ pub fn cargo_test_v1_active(
     stdout: &[u8],
     stderr: &[u8],
     recovery_command: &str,
-) -> CargoTestShadowCandidate {
+) -> CargoOutputCandidate {
     cargo_test_v1_candidate(stdout, stderr, Some(recovery_command))
+}
+
+/// Evaluates a conservative `cargo check` progress projection without changing visible bytes.
+#[must_use]
+pub fn cargo_check_v1_shadow(stdout: &[u8], stderr: &[u8]) -> CargoOutputCandidate {
+    let started = Instant::now();
+    let raw_bytes = u64::try_from(stdout.len().saturating_add(stderr.len())).unwrap_or(u64::MAX);
+    let (candidate_stderr, omitted_progress_lines, applicable) =
+        std::str::from_utf8(stderr).ok().map_or_else(
+            || (stderr.to_vec(), 0, false),
+            |stderr| {
+                let mut candidate = Vec::new();
+                let mut omitted = 0_u64;
+                for line in stderr.split_inclusive('\n') {
+                    let trimmed = line.trim_start();
+                    if [
+                        "Compiling ",
+                        "Checking ",
+                        "Downloading ",
+                        "Downloaded ",
+                        "Finished ",
+                    ]
+                    .iter()
+                    .any(|prefix| trimmed.starts_with(prefix))
+                    {
+                        omitted = omitted.saturating_add(1);
+                    } else {
+                        candidate.extend_from_slice(line.as_bytes());
+                    }
+                }
+                (candidate, omitted, omitted > 0)
+            },
+        );
+    let mut candidate_stdout = stdout.to_vec();
+    let recovery_hint_bytes = if applicable {
+        let hint = format!(
+            "[Tracepress: {omitted_progress_lines} Cargo progress lines omitted; recovery available when active.]\n"
+        );
+        let hint_bytes = u64::try_from(hint.len()).unwrap_or(u64::MAX);
+        let mut prefixed = hint.into_bytes();
+        prefixed.append(&mut candidate_stdout);
+        candidate_stdout = prefixed;
+        hint_bytes
+    } else {
+        0
+    };
+    let candidate_bytes = u64::try_from(
+        candidate_stdout
+            .len()
+            .saturating_add(candidate_stderr.len()),
+    )
+    .unwrap_or(u64::MAX);
+    let estimated_raw_tokens = estimated_tokens(raw_bytes);
+    let estimated_candidate_tokens = estimated_tokens(candidate_bytes);
+    let never_worse_accepted = applicable
+        && candidate_bytes < raw_bytes
+        && estimated_candidate_tokens < estimated_raw_tokens;
+    CargoOutputCandidate {
+        candidate_stdout,
+        candidate_stderr,
+        raw_bytes,
+        candidate_bytes,
+        estimated_raw_tokens,
+        estimated_candidate_tokens,
+        omitted_passing_tests: 0,
+        omitted_progress_lines,
+        recovery_hint_bytes,
+        reducer_duration: started.elapsed(),
+        applicable,
+        never_worse_accepted,
+    }
 }
 
 /// Executes a previously admitted simple command without filtering its bytes.
@@ -354,7 +432,7 @@ pub fn execute_passthrough(
 mod tests {
     use super::*;
     #[test]
-    fn admits_only_standalone_cargo_test() {
+    fn admits_only_supported_standalone_cargo_commands() {
         assert!(matches!(
             decide("cargo test -q"),
             RewriteDecision::Passthrough {
@@ -362,6 +440,17 @@ mod tests {
                 ..
             }
         ));
+        assert!(matches!(
+            decide("cargo check --workspace"),
+            RewriteDecision::Passthrough {
+                family: CommandFamily::CargoCheck,
+                ..
+            }
+        ));
+        assert_eq!(
+            decide("cargo clippy"),
+            RewriteDecision::FailOpen(FailOpenReason::Unsupported)
+        );
     }
     #[test]
     fn shell_composition_fails_open() {
@@ -473,5 +562,39 @@ mod tests {
             candidate.candidate_bytes,
             u64::try_from(text.len()).unwrap_or(u64::MAX)
         );
+    }
+
+    #[test]
+    fn cargo_check_shadow_drops_only_progress_and_preserves_diagnostics() {
+        let stdout = b"build script note\n";
+        let mut stderr = String::new();
+        for index in 0..12 {
+            use std::fmt::Write as _;
+            let _written = writeln!(&mut stderr, "   Checking dependency-{index} v0.1.0");
+        }
+        stderr.push_str(
+            "warning: unused item\n --> src/lib.rs:1:1\nerror: stop\n   Finished dev profile\n",
+        );
+        let candidate = cargo_check_v1_shadow(stdout, stderr.as_bytes());
+        assert!(candidate.applicable);
+        assert!(candidate.never_worse_accepted);
+        assert_eq!(candidate.omitted_progress_lines, 13);
+        assert_eq!(candidate.omitted_passing_tests, 0);
+        let combined = [candidate.candidate_stdout, candidate.candidate_stderr].concat();
+        let text = String::from_utf8_lossy(&combined);
+        assert!(text.contains("build script note"));
+        assert!(text.contains("warning: unused item"));
+        assert!(text.contains("src/lib.rs:1:1"));
+        assert!(text.contains("error: stop"));
+        assert!(!text.contains("Checking dependency"));
+        assert!(!text.contains("Finished dev"));
+    }
+
+    #[test]
+    fn cargo_check_shadow_fails_closed_on_non_utf8_stderr() {
+        let candidate = cargo_check_v1_shadow(b"", &[0xff, b'\n']);
+        assert!(!candidate.applicable);
+        assert!(!candidate.never_worse_accepted);
+        assert_eq!(candidate.candidate_stderr, vec![0xff, b'\n']);
     }
 }

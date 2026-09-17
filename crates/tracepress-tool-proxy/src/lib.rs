@@ -303,9 +303,17 @@ pub fn cargo_test_v1_active(
     cargo_test_v1_candidate(stdout, stderr, Some(recovery_command))
 }
 
-/// Evaluates a conservative `cargo check` progress projection without changing visible bytes.
-#[must_use]
-pub fn cargo_check_v1_shadow(stdout: &[u8], stderr: &[u8]) -> CargoOutputCandidate {
+#[derive(Clone, Copy)]
+struct CargoCheckPolicy<'a> {
+    active_recovery_command: Option<&'a str>,
+    preserve_finished: bool,
+}
+
+fn cargo_check_candidate(
+    stdout: &[u8],
+    stderr: &[u8],
+    policy: CargoCheckPolicy<'_>,
+) -> CargoOutputCandidate {
     let started = Instant::now();
     let raw_bytes = u64::try_from(stdout.len().saturating_add(stderr.len())).unwrap_or(u64::MAX);
     let (candidate_stderr, omitted_progress_lines, applicable) =
@@ -316,15 +324,10 @@ pub fn cargo_check_v1_shadow(stdout: &[u8], stderr: &[u8]) -> CargoOutputCandida
                 let mut omitted = 0_u64;
                 for line in stderr.split_inclusive('\n') {
                     let trimmed = line.trim_start();
-                    if [
-                        "Compiling ",
-                        "Checking ",
-                        "Downloading ",
-                        "Downloaded ",
-                        "Finished ",
-                    ]
-                    .iter()
-                    .any(|prefix| trimmed.starts_with(prefix))
+                    if ["Compiling ", "Checking ", "Downloading ", "Downloaded "]
+                        .iter()
+                        .any(|prefix| trimmed.starts_with(prefix))
+                        || (!policy.preserve_finished && trimmed.starts_with("Finished "))
                     {
                         omitted = omitted.saturating_add(1);
                     } else {
@@ -336,8 +339,17 @@ pub fn cargo_check_v1_shadow(stdout: &[u8], stderr: &[u8]) -> CargoOutputCandida
         );
     let mut candidate_stdout = stdout.to_vec();
     let recovery_hint_bytes = if applicable {
-        let hint = format!(
-            "[Tracepress: {omitted_progress_lines} Cargo progress lines omitted; recovery available when active.]\n"
+        let hint = policy.active_recovery_command.map_or_else(
+            || {
+                format!(
+                    "[Tracepress: {omitted_progress_lines} Cargo progress lines omitted; recovery available when active.]\n"
+                )
+            },
+            |command| {
+                format!(
+                    "[Tracepress: {omitted_progress_lines} Cargo progress lines omitted. Full output: {command}]\n"
+                )
+            },
         );
         let hint_bytes = u64::try_from(hint.len()).unwrap_or(u64::MAX);
         let mut prefixed = hint.into_bytes();
@@ -372,6 +384,66 @@ pub fn cargo_check_v1_shadow(stdout: &[u8], stderr: &[u8]) -> CargoOutputCandida
         applicable,
         never_worse_accepted,
     }
+}
+
+/// Evaluates a conservative `cargo check` progress projection without changing visible bytes.
+#[must_use]
+pub fn cargo_check_v1_shadow(stdout: &[u8], stderr: &[u8]) -> CargoOutputCandidate {
+    cargo_check_candidate(
+        stdout,
+        stderr,
+        CargoCheckPolicy {
+            active_recovery_command: None,
+            preserve_finished: false,
+        },
+    )
+}
+
+/// Evaluates `cargo_check_v1` with the exact recovery command included in never-worse.
+#[must_use]
+pub fn cargo_check_v1_active(
+    stdout: &[u8],
+    stderr: &[u8],
+    recovery_command: &str,
+) -> CargoOutputCandidate {
+    cargo_check_candidate(
+        stdout,
+        stderr,
+        CargoCheckPolicy {
+            active_recovery_command: Some(recovery_command),
+            preserve_finished: false,
+        },
+    )
+}
+
+/// Evaluates `cargo_check_v2` while retaining Cargo's final `Finished` status line.
+#[must_use]
+pub fn cargo_check_v2_shadow(stdout: &[u8], stderr: &[u8]) -> CargoOutputCandidate {
+    cargo_check_candidate(
+        stdout,
+        stderr,
+        CargoCheckPolicy {
+            active_recovery_command: None,
+            preserve_finished: true,
+        },
+    )
+}
+
+/// Evaluates active `cargo_check_v2` with its exact recovery command overhead.
+#[must_use]
+pub fn cargo_check_v2_active(
+    stdout: &[u8],
+    stderr: &[u8],
+    recovery_command: &str,
+) -> CargoOutputCandidate {
+    cargo_check_candidate(
+        stdout,
+        stderr,
+        CargoCheckPolicy {
+            active_recovery_command: Some(recovery_command),
+            preserve_finished: true,
+        },
+    )
 }
 
 /// Executes a previously admitted simple command without filtering its bytes.
@@ -596,5 +668,38 @@ mod tests {
         assert!(!candidate.applicable);
         assert!(!candidate.never_worse_accepted);
         assert_eq!(candidate.candidate_stderr, vec![0xff, b'\n']);
+    }
+
+    #[test]
+    fn cargo_check_active_counts_exact_recovery_hint_in_never_worse() {
+        let mut stderr = String::new();
+        for index in 0..12 {
+            use std::fmt::Write as _;
+            let _written = writeln!(&mut stderr, "   Checking dependency-{index} v0.1.0");
+        }
+        let candidate = cargo_check_v1_active(b"", stderr.as_bytes(), "tracepress recall deadbeef");
+        let text = String::from_utf8_lossy(&candidate.candidate_stdout);
+        assert!(candidate.never_worse_accepted);
+        assert!(text.contains("tracepress recall deadbeef"));
+        assert_eq!(
+            candidate.recovery_hint_bytes,
+            u64::try_from(text.len()).unwrap_or(u64::MAX)
+        );
+    }
+
+    #[test]
+    fn cargo_check_v2_preserves_final_status_while_dropping_progress() {
+        let mut stderr = String::new();
+        for index in 0..12 {
+            use std::fmt::Write as _;
+            let _written = writeln!(&mut stderr, "   Checking dependency-{index} v0.1.0");
+        }
+        stderr.push_str("    Finished dev profile in 1.0s\n");
+        let candidate = cargo_check_v2_shadow(b"", stderr.as_bytes());
+        let text = String::from_utf8_lossy(&candidate.candidate_stderr);
+        assert!(candidate.never_worse_accepted);
+        assert_eq!(candidate.omitted_progress_lines, 12);
+        assert!(text.contains("Finished dev profile"));
+        assert!(!text.contains("Checking dependency"));
     }
 }

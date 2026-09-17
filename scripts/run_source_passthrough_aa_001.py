@@ -94,7 +94,7 @@ def remove_worktree(repo: Path, path: Path) -> None:
     )
     shutil.rmtree(path, ignore_errors=True)
 
-def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int, experiment: str) -> dict[str, Any]:
+def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int, experiment: str, check_scenario: str) -> dict[str, Any]:
     workspace = isolated_worktree(repo)
     state = Path(tempfile.mkdtemp(prefix="tp5-aa-", dir="/tmp")); log = None; process = None
     started = time.monotonic()
@@ -105,6 +105,9 @@ def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int, experiment
         if name == "Identity": env["TRACEPRESS_HOOK_REWRITE_MODE"] = "identity"
         if name == "ExplicitShadow": env["TRACEPRESS_SOURCE_REDUCER"] = "cargo_test_v1_shadow"
         if name == "ExplicitCheckShadow": env["TRACEPRESS_SOURCE_REDUCER"] = "cargo_check_v1_shadow"
+        if name == "ExplicitCheckActive": env["TRACEPRESS_SOURCE_REDUCER"] = "cargo_check_v1_active"
+        if name == "ExplicitCheckV2Shadow": env["TRACEPRESS_SOURCE_REDUCER"] = "cargo_check_v2_shadow"
+        if name == "ExplicitCheckV2Active": env["TRACEPRESS_SOURCE_REDUCER"] = "cargo_check_v2_active"
         if name == "ExplicitActive": env["TRACEPRESS_SOURCE_REDUCER"] = "cargo_test_v1_active"
         subprocess.run([str(cli),"init"],cwd=workspace,env=env,check=True,capture_output=True,text=True,timeout=30)
         daemon_env = dict(env); daemon_env.update({"TRACEPRESS_DATABASE":str(state/"tracepress.sqlite3"),"TRACEPRESS_CONTROL_SOCKET":str(state/"tracepress.sock"),"TRACEPRESS_CONTROL_CREDENTIAL":str(state/"control.cred"),"TRACEPRESS_DAEMON_READY":str(state/"daemon.ready")})
@@ -115,8 +118,10 @@ def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int, experiment
             if (state/"daemon.ready").exists(): break
             time.sleep(.1)
         else: raise RuntimeError("daemon did not become ready")
-        if name in {"ExplicitCheckControl", "ExplicitCheckShadow"}:
-            prompt=f"Your first and only Bash command must be exactly `{cli} tool cargo check`. Do not run any other Bash command, inspect files, or modify source. End with exactly CHECK_PASSED if the command succeeds or CHECK_FAILED if it fails, and no other text."
+        if name in {"ExplicitCheckControl", "ExplicitCheckShadow", "ExplicitCheckActiveControl", "ExplicitCheckActive", "ExplicitCheckV2Control", "ExplicitCheckV2Shadow", "ExplicitCheckV2Active"}:
+            check_args = "cargo check" if check_scenario == "success" else "cargo check --package tracepress_missing_package"
+            recovery = " If and only if the output is insufficient, you may run the exact Tracepress recovery command printed in the output or rerun the same wrapper command." if name in {"ExplicitCheckActiveControl", "ExplicitCheckActive", "ExplicitCheckV2Control", "ExplicitCheckV2Active"} else ""
+            prompt=f"Your first Bash command must be exactly `{cli} tool {check_args}`.{recovery} Do not run any other Bash command, inspect files, or modify source. End with exactly CHECK_PASSED if the command succeeds or CHECK_FAILED if it fails, and no other text."
             passed_sentinel, failed_sentinel = "CHECK_PASSED", "CHECK_FAILED"
         elif name in {"ExplicitActiveControl", "ExplicitActive"}:
             prompt=f"Your first Bash command must be exactly `{cli} tool cargo test`. Use its output to determine whether tests passed. If and only if the output is insufficient, you may run the exact Tracepress recovery command printed in the output or rerun the same wrapper command. Do not inspect files, modify source, or run any other Bash command. End with exactly TESTS_PASSED or TESTS_FAILED and no other text."
@@ -142,22 +147,22 @@ def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int, experiment
         remove_worktree(repo, workspace)
 
 def main() -> int:
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--repo-root",type=Path,default=Path(__file__).resolve().parents[1]); p.add_argument("--workload-root",type=Path,default=Path("/tmp/tracepress-source-passthrough-aa-001")); p.add_argument("--pairs",type=int,default=1,choices=range(1,11)); p.add_argument("--timeout",type=int,default=180); p.add_argument("--hook-mode",choices=("passthrough","identity","path","explicit-aa","explicit-shadow","explicit-active","explicit-check-shadow"),default="passthrough"); p.add_argument("--output-json",type=Path,required=True); p.add_argument("--output-md",type=Path,required=True); a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--repo-root",type=Path,default=Path(__file__).resolve().parents[1]); p.add_argument("--workload-root",type=Path,default=Path("/tmp/tracepress-source-passthrough-aa-001")); p.add_argument("--pairs",type=int,default=1,choices=range(1,11)); p.add_argument("--timeout",type=int,default=180); p.add_argument("--hook-mode",choices=("passthrough","identity","path","explicit-aa","explicit-shadow","explicit-active","explicit-check-shadow","explicit-check-active","explicit-check-shadow-v2","explicit-check-active-v2"),default="passthrough"); p.add_argument("--check-scenario",choices=("success","diagnostic-failure"),default="success"); p.add_argument("--output-json",type=Path,required=True); p.add_argument("--output-md",type=Path,required=True); a=p.parse_args()
     cli=a.repo_root/"target/debug/tracepress"; daemon=a.repo_root/"target/debug/tracepressd"
     if not cli.exists() or not daemon.exists(): raise RuntimeError("build target/debug/tracepress and target/debug/tracepressd first")
-    treatment = {"passthrough": "Passthrough", "identity": "Identity", "path": "Path", "explicit-aa": "ExplicitB", "explicit-shadow": "ExplicitShadow", "explicit-active": "ExplicitActive", "explicit-check-shadow": "ExplicitCheckShadow"}[a.hook_mode]
-    control = "ExplicitA" if a.hook_mode == "explicit-aa" else ("ExplicitActiveControl" if a.hook_mode == "explicit-active" else ("ExplicitControl" if a.hook_mode == "explicit-shadow" else ("ExplicitCheckControl" if a.hook_mode == "explicit-check-shadow" else "Control")))
-    experiment = "source-active-pilot-001" if a.hook_mode == "explicit-active" else ("source-cargo-check-shadow-001" if a.hook_mode == "explicit-check-shadow" else EXPERIMENT)
+    treatment = {"passthrough": "Passthrough", "identity": "Identity", "path": "Path", "explicit-aa": "ExplicitB", "explicit-shadow": "ExplicitShadow", "explicit-active": "ExplicitActive", "explicit-check-shadow": "ExplicitCheckShadow", "explicit-check-active": "ExplicitCheckActive", "explicit-check-shadow-v2": "ExplicitCheckV2Shadow", "explicit-check-active-v2": "ExplicitCheckV2Active"}[a.hook_mode]
+    control = "ExplicitA" if a.hook_mode == "explicit-aa" else ("ExplicitActiveControl" if a.hook_mode == "explicit-active" else ("ExplicitControl" if a.hook_mode == "explicit-shadow" else ("ExplicitCheckControl" if a.hook_mode == "explicit-check-shadow" else ("ExplicitCheckActiveControl" if a.hook_mode == "explicit-check-active" else ("ExplicitCheckV2Control" if a.hook_mode in {"explicit-check-shadow-v2","explicit-check-active-v2"} else "Control")))))
+    experiment = "source-active-pilot-001" if a.hook_mode == "explicit-active" else ("source-cargo-check-shadow-001" if a.hook_mode == "explicit-check-shadow" else (f"source-cargo-check-active-{a.check_scenario}-001" if a.hook_mode == "explicit-check-active" else ("source-cargo-check-v2-shadow-001" if a.hook_mode == "explicit-check-shadow-v2" else (f"source-cargo-check-v2-active-{a.check_scenario}-001" if a.hook_mode == "explicit-check-active-v2" else EXPERIMENT))))
     repo=checkout(a.workload_root); rows=[]
     for pair in range(a.pairs):
         order = [control, treatment] if pair % 2 == 0 else [treatment, control]
-        rows.extend(arm(cli,daemon,repo,name,a.timeout,experiment) for name in order)
+        rows.extend(arm(cli,daemon,repo,name,a.timeout,experiment,a.check_scenario) for name in order)
     if a.hook_mode.startswith("explicit"):
         source_complete = all(row.get("hook_rewrites", 0) == 0 and row.get("source_executions", 0) >= 1 for row in rows)
     else:
         source_complete = all(row.get("hook_rewrites", 0) == 1 and (a.hook_mode == "identity" or row.get("source_executions", 0) == 1) for row in rows if row["arm"] == treatment)
-    phase = "5.2" if a.hook_mode == "explicit-check-shadow" else ("5.1" if a.hook_mode == "explicit-active" else "5.0")
-    report={"experiment_id":experiment,"phase":phase,"status":"completed","pairs":a.pairs,"reducer":a.hook_mode,"forwarding_mutation":any(row.get("forwarding_mutations",0)>0 for row in rows),"repository_pin":{"repository":"BurntSushi/ripgrep","commit_sha":SHA},"workload_isolation":{"per_arm_clean_git_worktree":True,"per_arm_cargo_target_dir":True,"arm_order":"alternating","rust_test_threads":1},"rows":rows,"infrastructure_gate":{"source_execution_per_passthrough_session":source_complete,"decision":"instrumentation_valid" if source_complete else "instrumentation_invalid_missing_source_execution"},"privacy":{"commands_persisted":False,"paths_persisted":False,"raw_content_persisted":False}}
+    phase = "5.3" if a.hook_mode in {"explicit-check-active","explicit-check-shadow-v2","explicit-check-active-v2"} else ("5.2" if a.hook_mode == "explicit-check-shadow" else ("5.1" if a.hook_mode == "explicit-active" else "5.0"))
+    report={"experiment_id":experiment,"phase":phase,"status":"completed","pairs":a.pairs,"reducer":a.hook_mode,"scenario":a.check_scenario if a.hook_mode in {"explicit-check-active","explicit-check-shadow-v2","explicit-check-active-v2"} else None,"forwarding_mutation":any(row.get("forwarding_mutations",0)>0 for row in rows),"repository_pin":{"repository":"BurntSushi/ripgrep","commit_sha":SHA},"workload_isolation":{"per_arm_clean_git_worktree":True,"per_arm_cargo_target_dir":True,"arm_order":"alternating","rust_test_threads":1},"rows":rows,"infrastructure_gate":{"source_execution_per_passthrough_session":source_complete,"decision":"instrumentation_valid" if source_complete else "instrumentation_invalid_missing_source_execution"},"privacy":{"commands_persisted":False,"paths_persisted":False,"raw_content_persisted":False}}
     a.output_json.parent.mkdir(parents=True,exist_ok=True); a.output_json.write_text(json.dumps(report,indent=2,sort_keys=True)+"\n",encoding="utf-8")
     a.output_md.write_text("# TRACEPRESS_SOURCE_PASSTHROUGH_AA_001\n\nStatus: **completed**. Passthrough only; no reducer was enabled.\n",encoding="utf-8")
     return 0

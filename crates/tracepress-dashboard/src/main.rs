@@ -100,7 +100,7 @@ fn Sidebar() -> Element {
             Link { class: "nav-link", to: Route::BaselinesPage {}, "Baselines" }
             Link { class: "nav-link", to: Route::OpportunitiesPage {}, "Opportunities" }
             Link { class: "nav-link", to: Route::CompressionPage {}, "Compression" span { class: "badge success", "Shadow" } }
-            Link { class: "nav-link", to: Route::SourceOptimizationPage {}, "Source Optimization" span { class: "badge warning", "Shadow" } }
+            Link { class: "nav-link", to: Route::SourceOptimizationPage {}, "Source Optimization" span { class: "badge warning", "Measured" } }
         }
     } }
 }
@@ -790,7 +790,7 @@ fn render_source_optimization(
                 DataTable {
                     thead { tr { th { "Arm" } th { class: "numeric", "Success" } th { class: "numeric", "Provider requests" } th { class: "numeric", "Input" } th { class: "numeric", "Cached" } th { class: "numeric", "Uncached" } th { class: "numeric", "Output" } th { class: "numeric", "Reasoning" } th { class: "numeric", "Tool calls" } th { class: "numeric", "Retries" } th { class: "numeric", "Recoveries" } th { class: "numeric", "Duration" } } }
                     tbody { for arm in &report.downstream { tr {
-                        td { Badge { text: arm.arm.clone(), tone: if arm.arm == "ExplicitShadow" { "warning" } else { "neutral" } } }
+                        td { Badge { text: arm.arm.clone(), tone: if arm.arm.contains("Active") && !arm.arm.contains("Control") { "warning" } else { "neutral" } } }
                         td { class: "numeric", "{arm.successful_sessions}/{arm.sessions}" }
                         td { class: "numeric mono", "{compact_u64(arm.provider_requests)}" }
                         td { class: "numeric mono", "{compact_u64(arm.input_total)}" }

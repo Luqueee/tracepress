@@ -142,6 +142,12 @@ aggregates: raw/emitted bytes, never-worse, recovery rate, provider usage, task 
 retries, recoveries, and duration. Active-pilot evidence is labeled explicitly; no command, output,
 prompt, path, recovery token, or provider body crosses the API.
 
+The current preferred report is the accepted `cargo_check_v2_active` success cohort. The loader
+derives its command family, arm names, experiment id, and active/shadow semantics from an explicit
+allowlist and falls back to earlier Cargo Test evidence when newer artifacts are absent. Diagnostic
+fail-open evidence remains in the research report rather than being mixed into source-reduction
+totals.
+
 Compression Lab reads operational shadow metadata in SQLite read-only mode. It shows experiment
 quality, compressor applicability, addressable estimated-token share, local byte/token-estimate
 reduction, recovery, determinism, latency, prefix evidence, cache risk, provider readability, and

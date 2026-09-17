@@ -5,7 +5,15 @@ use tracepress_dashboard_types::{
     SourceOptimizationArm, SourceOptimizationSource, SourceOptimizationSummary,
 };
 
-const REPORTS: [(&str, &str); 4] = [
+const REPORTS: [(&str, &str); 6] = [
+    (
+        "source-cargo-check-active-001",
+        "TRACEPRESS_CHECK_V2_ACTIVE_SUCCESS_RESULTS_001.json",
+    ),
+    (
+        "source-cargo-check-active-001",
+        "TRACEPRESS_CHECK_V2_SHADOW_RESULTS_001.json",
+    ),
     (
         "source-active-pilot-001",
         "TRACEPRESS_ACTIVE_RESULTS_001.json",
@@ -38,16 +46,27 @@ pub(crate) fn load(root: &Path) -> io::Result<Option<SourceOptimizationSummary>>
         .get("rows")
         .and_then(Value::as_array)
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "source report has no rows"))?;
-    let active = report.get("reducer").and_then(Value::as_str) == Some("explicit-active");
-    let treatment_name = if active {
-        "ExplicitActive"
-    } else {
-        "ExplicitShadow"
-    };
-    let control_name = if active {
-        "ExplicitActiveControl"
-    } else {
-        "ExplicitControl"
+    let reducer = report.get("reducer").and_then(Value::as_str);
+    let (active, treatment_name, control_name, command_family) = match reducer {
+        Some("explicit-check-active-v2") => (
+            true,
+            "ExplicitCheckV2Active",
+            "ExplicitCheckV2Control",
+            "cargo_check",
+        ),
+        Some("explicit-check-shadow-v2") => (
+            false,
+            "ExplicitCheckV2Shadow",
+            "ExplicitCheckV2Control",
+            "cargo_check",
+        ),
+        Some("explicit-active") => (
+            true,
+            "ExplicitActive",
+            "ExplicitActiveControl",
+            "cargo_test",
+        ),
+        _ => (false, "ExplicitShadow", "ExplicitControl", "cargo_test"),
     };
     let treatment: Vec<_> = rows
         .iter()
@@ -73,15 +92,14 @@ pub(crate) fn load(root: &Path) -> io::Result<Option<SourceOptimizationSummary>>
         _ => "pending",
     };
     Ok(Some(SourceOptimizationSummary {
-        experiment_id: if active {
-            "source-active-pilot-001"
-        } else {
-            "source-passthrough-aa-001"
-        }
-        .to_owned(),
+        experiment_id: report
+            .get("experiment_id")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown-source-experiment")
+            .to_owned(),
         decision: decision.to_owned(),
         pairs: report.get("pairs").and_then(Value::as_u64).unwrap_or(0),
-        command_family: "cargo_test".to_owned(),
+        command_family: command_family.to_owned(),
         mode: if active { "active_pilot" } else { "shadow" }.to_owned(),
         provider_effect_active: active,
         source: SourceOptimizationSource {

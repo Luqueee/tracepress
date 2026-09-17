@@ -82,9 +82,9 @@ use tracepress_storage::{
 };
 use tracepress_storage::{ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus};
 use tracepress_tool_proxy::{
-    CargoOutputCandidate, CommandFamily, cargo_check_v1_shadow, cargo_test_v1_active,
-    cargo_test_v1_shadow, codex_pre_tool_use_identity_rewrite, codex_pre_tool_use_rewrite,
-    execute_passthrough,
+    CargoOutputCandidate, CommandFamily, cargo_check_v1_active, cargo_check_v1_shadow,
+    cargo_check_v2_active, cargo_check_v2_shadow, cargo_test_v1_active, cargo_test_v1_shadow,
+    codex_pre_tool_use_identity_rewrite, codex_pre_tool_use_rewrite, execute_passthrough,
 };
 
 const FRAME_BYTES: u64 = 65_536;
@@ -6057,19 +6057,101 @@ fn recall_source_output(config: &Config, recovery_id: &str) -> Result<(), String
 }
 
 fn source_reducer_id(
+    requested: Option<&str>,
     active: bool,
-    candidate: Option<&CargoOutputCandidate>,
-    family: CommandFamily,
+    candidate_present: bool,
 ) -> &'static str {
-    if active {
-        "cargo_test_v1_active"
-    } else if candidate.is_some() && family == CommandFamily::CargoCheck {
-        "cargo_check_v1_shadow"
-    } else if candidate.is_some() {
-        "cargo_test_v1_shadow"
-    } else {
-        "passthrough"
+    match (requested, active, candidate_present) {
+        (Some("cargo_test_v1_active"), true, _) => "cargo_test_v1_active",
+        (Some("cargo_check_v1_active"), true, _) => "cargo_check_v1_active",
+        (Some("cargo_check_v2_active"), true, _) => "cargo_check_v2_active",
+        (Some("cargo_test_v1_shadow"), false, true) => "cargo_test_v1_shadow",
+        (Some("cargo_check_v1_shadow"), false, true) => "cargo_check_v1_shadow",
+        (Some("cargo_check_v2_shadow"), false, true) => "cargo_check_v2_shadow",
+        _ => "passthrough",
     }
+}
+
+#[derive(Clone, Copy)]
+struct SourceReducerInput<'a> {
+    requested: Option<&'a str>,
+    family: CommandFamily,
+    stdout: &'a [u8],
+    stderr: &'a [u8],
+}
+
+fn shadow_source_candidate(input: SourceReducerInput<'_>) -> Option<CargoOutputCandidate> {
+    match (input.requested, input.family) {
+        (Some("cargo_test_v1_shadow"), CommandFamily::CargoTest) => {
+            Some(cargo_test_v1_shadow(input.stdout, input.stderr))
+        }
+        (Some("cargo_check_v1_shadow"), CommandFamily::CargoCheck) => {
+            Some(cargo_check_v1_shadow(input.stdout, input.stderr))
+        }
+        (Some("cargo_check_v2_shadow"), CommandFamily::CargoCheck) => {
+            Some(cargo_check_v2_shadow(input.stdout, input.stderr))
+        }
+        _ => None,
+    }
+}
+
+type ActiveSourceReducer = fn(&[u8], &[u8], &str) -> CargoOutputCandidate;
+
+fn active_source_reducer(
+    requested: Option<&str>,
+    family: CommandFamily,
+) -> Option<ActiveSourceReducer> {
+    match (requested, family) {
+        (Some("cargo_test_v1_active"), CommandFamily::CargoTest) => Some(cargo_test_v1_active),
+        (Some("cargo_check_v1_active"), CommandFamily::CargoCheck) => Some(cargo_check_v1_active),
+        (Some("cargo_check_v2_active"), CommandFamily::CargoCheck) => Some(cargo_check_v2_active),
+        _ => None,
+    }
+}
+
+#[derive(Clone, Copy)]
+struct ActiveSourceInput<'a> {
+    config: &'a Config,
+    metadata: &'a tracepress_tool_proxy::SourceExecutionMetadata,
+    stdout: &'a [u8],
+    stderr: &'a [u8],
+}
+
+fn prepare_active_source_candidate(
+    input: ActiveSourceInput<'_>,
+    evaluate: impl FnOnce(&str) -> CargoOutputCandidate,
+) -> (Option<CargoOutputCandidate>, bool, Option<&'static str>) {
+    let mut candidate = None;
+    let mut recovery_available = false;
+    let attempt = (|| {
+        let session_id = source_session_id().ok_or("missing_session")?;
+        let token = source_recovery_token().map_err(|_error| "token_generation_failed")?;
+        let executable = std::env::var("TRACEPRESS_TOOL_BIN")
+            .ok()
+            .filter(|value| safe_source_recovery_executable(value))
+            .unwrap_or_else(|| "tracepress".to_owned());
+        let recovery_command = format!("{executable} recall {token}");
+        let evaluated = evaluate(&recovery_command);
+        if !evaluated.never_worse_accepted {
+            candidate = Some(evaluated);
+            return Err("never_worse_rejected");
+        }
+        store_source_recovery(
+            input.config,
+            SourceRecoveryWrite {
+                session_id: &session_id,
+                token: &token,
+                source_execution_id: input.metadata.source_execution_id,
+                stdout: input.stdout,
+                stderr: input.stderr,
+            },
+        )
+        .map_err(|_error| "recovery_store_failed")?;
+        candidate = Some(evaluated);
+        recovery_available = true;
+        Ok(())
+    })();
+    (candidate, recovery_available, attempt.err())
 }
 
 fn tool(config: &Config, args: &[String]) -> Result<(), String> {
@@ -6078,53 +6160,26 @@ fn tool(config: &Config, args: &[String]) -> Result<(), String> {
     let (stdout, stderr, metadata) = execute_passthrough(&command, &ids)
         .map_err(|error| format!("source tool passthrough refused or failed: {error}"))?;
     let reducer = std::env::var("TRACEPRESS_SOURCE_REDUCER").ok();
-    let mut candidate = None;
+    let mut candidate = shadow_source_candidate(SourceReducerInput {
+        requested: reducer.as_deref(),
+        family: metadata.command_family,
+        stdout: &stdout,
+        stderr: &stderr,
+    });
     let mut active = false;
     let mut recovery_available = false;
     let mut fail_open_reason = None;
-    if reducer.as_deref() == Some("cargo_test_v1_shadow")
-        && metadata.command_family == CommandFamily::CargoTest
-    {
-        candidate = Some(cargo_test_v1_shadow(&stdout, &stderr));
-    } else if reducer.as_deref() == Some("cargo_check_v1_shadow")
-        && metadata.command_family == CommandFamily::CargoCheck
-    {
-        candidate = Some(cargo_check_v1_shadow(&stdout, &stderr));
-    } else if reducer.as_deref() == Some("cargo_test_v1_active")
-        && metadata.command_family == CommandFamily::CargoTest
-    {
+    if let Some(evaluate) = active_source_reducer(reducer.as_deref(), metadata.command_family) {
         active = true;
-        let attempt = (|| {
-            let session_id = source_session_id().ok_or("missing_session")?;
-            let token = source_recovery_token().map_err(|_error| "token_generation_failed")?;
-            let executable = std::env::var("TRACEPRESS_TOOL_BIN")
-                .ok()
-                .filter(|value| safe_source_recovery_executable(value))
-                .unwrap_or_else(|| "tracepress".to_owned());
-            let recovery_command = format!("{executable} recall {token}");
-            let evaluated = cargo_test_v1_active(&stdout, &stderr, &recovery_command);
-            if !evaluated.never_worse_accepted {
-                candidate = Some(evaluated);
-                return Err("never_worse_rejected");
-            }
-            store_source_recovery(
+        (candidate, recovery_available, fail_open_reason) = prepare_active_source_candidate(
+            ActiveSourceInput {
                 config,
-                SourceRecoveryWrite {
-                    session_id: &session_id,
-                    token: &token,
-                    source_execution_id: metadata.source_execution_id,
-                    stdout: &stdout,
-                    stderr: &stderr,
-                },
-            )
-            .map_err(|_error| "recovery_store_failed")?;
-            candidate = Some(evaluated);
-            recovery_available = true;
-            Ok(())
-        })();
-        if let Err(reason) = attempt {
-            fail_open_reason = Some(reason);
-        }
+                metadata: &metadata,
+                stdout: &stdout,
+                stderr: &stderr,
+            },
+            |recovery_command| evaluate(&stdout, &stderr, recovery_command),
+        );
     }
     let active_candidate = active
         .then_some(candidate.as_ref())
@@ -6142,7 +6197,7 @@ fn tool(config: &Config, args: &[String]) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let emitted_bytes = u64::try_from(emitted_stdout.len().saturating_add(emitted_stderr.len()))
         .unwrap_or(u64::MAX);
-    let reducer_id = source_reducer_id(active, candidate.as_ref(), metadata.command_family);
+    let reducer_id = source_reducer_id(reducer.as_deref(), active, candidate.is_some());
     let _recorded = record_source_execution(
         config,
         &metadata,

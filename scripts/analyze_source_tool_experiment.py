@@ -85,7 +85,7 @@ def analyze(report: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("expected exactly two experiment arms")
     arms = {name: [row for row in rows if row["arm"] == name] for name in arm_names}
     control_name, treatment_name = arm_names
-    if control_name in {"ExplicitB", "ExplicitShadow", "ExplicitActive", "ExplicitCheckShadow"}:
+    if control_name in {"ExplicitB", "ExplicitShadow", "ExplicitActive", "ExplicitCheckShadow", "ExplicitCheckActive", "ExplicitCheckV2Shadow", "ExplicitCheckV2Active"}:
         control_name, treatment_name = treatment_name, control_name
     control, treatment = arms[control_name], arms[treatment_name]
     if len(control) != len(treatment):
@@ -95,7 +95,8 @@ def analyze(report: dict[str, Any]) -> dict[str, Any]:
         f"provider_usage.{key}" for key in USAGE_KEYS
     ]
     deltas = {metric: paired_deltas(control, treatment, metric) for metric in metrics}
-    active = report.get("reducer") == "explicit-active"
+    active = report.get("reducer") in {"explicit-active", "explicit-check-active", "explicit-check-active-v2"}
+    active_fail_open = active and report.get("scenario") == "diagnostic-failure"
     invariant_gate = all(
         left.get("agent_exit_status_class") == "success"
         and right.get("agent_exit_status_class") == "success"
@@ -112,7 +113,7 @@ def analyze(report: dict[str, Any]) -> dict[str, Any]:
         and (active or value(left, "source_emitted_bytes") == value(right, "source_emitted_bytes"))
         for left, right in zip(control, treatment)
     )
-    shadow = report.get("reducer") in {"explicit-shadow", "explicit-check-shadow"}
+    shadow = report.get("reducer") in {"explicit-shadow", "explicit-check-shadow", "explicit-check-shadow-v2"}
     shadow_gate = True
     active_gate = True
     positive_gate = None
@@ -137,28 +138,43 @@ def analyze(report: dict[str, Any]) -> dict[str, Any]:
     if active:
         control_uncached = sum(value(row, "provider_usage.input_uncached") for row in control)
         treatment_uncached = sum(value(row, "provider_usage.input_uncached") for row in treatment)
-        active_gate = (
-            all(row.get("task_success") is True for row in control + treatment)
-            and all(value(row, "active_evaluations") >= 1 for row in treatment)
-            and all(value(row, "forwarding_mutations") >= 1 for row in treatment)
-            and all(value(row, "fail_open_executions") == 0 for row in treatment)
-            and all(
-                value(row, "never_worse_accepted") == value(row, "active_evaluations")
-                for row in treatment
+        if active_fail_open:
+            active_gate = (
+                all(row.get("task_success") is True for row in control + treatment)
+                and all(value(row, "active_evaluations") >= 1 for row in treatment)
+                and all(value(row, "forwarding_mutations") == 0 for row in treatment)
+                and all(value(row, "fail_open_executions") == value(row, "active_evaluations") for row in treatment)
+                and all(value(row, "never_worse_accepted") == 0 for row in treatment)
+                and all(value(row, "candidate_bytes") == value(row, "source_stdout_bytes") + value(row, "source_stderr_bytes") for row in treatment)
+                and all(value(row, "source_emitted_bytes") == value(row, "source_stdout_bytes") + value(row, "source_stderr_bytes") for row in treatment)
+                and all(value(row, "recovery_requests") == 0 for row in treatment)
             )
-            and source_reduction is not None
-            and source_reduction >= 0.20
-        )
+        else:
+            active_gate = (
+                all(row.get("task_success") is True for row in control + treatment)
+                and all(value(row, "active_evaluations") >= 1 for row in treatment)
+                and all(value(row, "forwarding_mutations") >= 1 for row in treatment)
+                and all(value(row, "fail_open_executions") == 0 for row in treatment)
+                and all(
+                    value(row, "never_worse_accepted") == value(row, "active_evaluations")
+                    for row in treatment
+                )
+                and source_reduction is not None
+                and source_reduction >= 0.20
+            )
         if report.get("pairs", 0) >= 10:
-            positive_gate = (
-                treatment_uncached < control_uncached
-                and deltas["provider_usage.input_uncached"]["median"] < 0
-                and sum(value(row, "command_retries") for row in treatment)
+            trajectory_gate = (
+                sum(value(row, "command_retries") for row in treatment)
                 <= sum(value(row, "command_retries") for row in control) + 1
                 and sum(value(row, "provider_requests") for row in treatment)
                 <= sum(value(row, "provider_requests") for row in control) + 1
                 and sum(value(row, "tool_calls") for row in treatment)
                 <= sum(value(row, "tool_calls") for row in control) + 1
+            )
+            positive_gate = trajectory_gate if active_fail_open else (
+                treatment_uncached < control_uncached
+                and deltas["provider_usage.input_uncached"]["median"] < 0
+                and trajectory_gate
                 and sum(value(row, "recovery_requests") for row in treatment)
                 <= max(1, sum(value(row, "forwarding_mutations") for row in treatment) // 10)
             )
@@ -174,7 +190,7 @@ def analyze(report: dict[str, Any]) -> dict[str, Any]:
         "positive_gate": positive_gate,
         "decision": "pass" if invariant_gate and shadow_gate and active_gate and positive_gate is not False else "reject",
         "interpretation": (
-            "active_provider_effect" if active else ("candidate_only_no_forwarding_change" if shadow else "passthrough_noise_characterization")
+            "active_fail_open_safety" if active_fail_open else ("active_provider_effect" if active else ("candidate_only_no_forwarding_change" if shadow else "passthrough_noise_characterization"))
         ),
     }
 
@@ -228,7 +244,7 @@ def markdown(report: dict[str, Any], analysis: dict[str, Any]) -> str:
                 [
                     f"Active gate: **{str(analysis['active_gate']).lower()}**.",
                     f"Positive gate: **{str(analysis['positive_gate']).lower() if analysis['positive_gate'] is not None else 'pending full cohort'}**.",
-                    "Treatment forwarded the accepted candidate; downstream deltas are active-pilot evidence.",
+                    "Treatment fail-open preserved raw output; downstream deltas are safety A/A evidence." if report.get("scenario") == "diagnostic-failure" else "Treatment forwarded the accepted candidate; downstream deltas are active-pilot evidence.",
                 ]
             )
         else:

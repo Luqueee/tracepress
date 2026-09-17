@@ -20,6 +20,9 @@ and intentionally do not include prompts, paths, tool arguments, raw results, or
 | `cargo_test_v1` Shadow | Pinned public `cargo test` N=10 paired Shadow | Candidate output -93.99% with raw bytes still forwarded; provider deltas are therefore non-causal noise | Accept candidate for Phase 5.1; do not claim provider savings |
 | `cargo_test_v1_active` | Pinned public `cargo test` N=10 paired active pilot | Source -93.52%, uncached input -35.77%, task success 10/10 in both arms, no retries or recalls | Accepted for this workload behind explicit opt-in; default remains passthrough |
 | `cargo_check_v1` Shadow | Pinned public `cargo check` N=10 paired Shadow | Candidate -94.76%, raw bytes still forwarded, task success 10/10, no retries | Accept candidate for a separate active pilot; provider deltas are non-causal A/A noise |
+| `cargo_check_v1_active` | Pinned public `cargo check` active smoke N=1 paired | Source -89.52%, but recovery 1/1 after final `Finished` status was removed | Reject v1 active; preserve explicit final status and return revised candidate to Shadow |
+| `cargo_check_v2` Shadow | Pinned public `cargo check` N=10 paired Shadow | Candidate -89.98%, task success 10/10, no retries, raw still forwarded | Passed prerequisite for isolated v2 active pilot |
+| `cargo_check_v2_active` | Success and diagnostic cohorts, each N=10 paired | Success source -84.74%, uncached -6.57%, no retries/recalls; diagnostics fail-open raw with one Treatment rerun | Accepted for this workload behind explicit opt-in; total input/output/reasoning/duration tradeoffs retained |
 
 The evidence is workload-scoped. It closes generic deterministic/provider-readable expansion for
 the current cohorts; it does not claim that every future tool-family policy is impossible.

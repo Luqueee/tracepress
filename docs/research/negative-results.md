@@ -18,6 +18,7 @@ and intentionally do not include prompts, paths, tool arguments, raw results, or
 | `source.path_shim` | Codex PATH interception smoke | Agent exited before provider, hook, or source execution; no sandbox bypass attempted | Closed for this runtime |
 | `source.explicit_passthrough` | Pinned public `cargo test` N=10 paired A/A | 20/20 successful sessions, byte-identical source output, paired median request delta 0 | Accepted as the Phase 5.0 causal control surface |
 | `cargo_test_v1` Shadow | Pinned public `cargo test` N=10 paired Shadow | Candidate output -93.99% with raw bytes still forwarded; provider deltas are therefore non-causal noise | Accept candidate for Phase 5.1; do not claim provider savings |
+| `cargo_test_v1_active` | Pinned public `cargo test` N=10 paired active pilot | Source -93.52%, uncached input -35.77%, task success 10/10 in both arms, no retries or recalls | Accepted for this workload behind explicit opt-in; default remains passthrough |
 
 The evidence is workload-scoped. It closes generic deterministic/provider-readable expansion for
 the current cohorts; it does not claim that every future tool-family policy is impossible.

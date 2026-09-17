@@ -25,6 +25,25 @@ def agent_error_class(stderr: str) -> str | None:
     if "recursion" in text: return "recursion"
     return "other" if text else None
 
+def reported_test_outcome(stdout: str) -> str:
+    messages = []
+    for line in stdout.splitlines():
+        try:
+            event = json.loads(line)
+        except json.JSONDecodeError:
+            continue
+        item = event.get("item") if event.get("type") == "item.completed" else None
+        if isinstance(item, dict) and item.get("type") == "agent_message" and isinstance(item.get("text"), str):
+            messages.append(item["text"])
+    if not messages:
+        return "unknown"
+    final = messages[-1].strip().lower()
+    if final == "tests_failed":
+        return "failed"
+    if final == "tests_passed":
+        return "passed"
+    return "unknown"
+
 def aggregate(db: Path, state: Path) -> dict[str, Any]:
     with sqlite3.connect(f"file:{db}?mode=ro", uri=True) as con:
         usage = con.execute("SELECT SUM(input_total),SUM(input_cached),SUM(input_uncached),SUM(output_total),SUM(reasoning) FROM provider_usage").fetchone()
@@ -40,7 +59,9 @@ def aggregate(db: Path, state: Path) -> dict[str, Any]:
     hook_rewrites = sum(receipt.get("rewritten") is True for receipt in hook_receipts)
     recoveries = state / "source-recovery-events.jsonl"
     recovery_receipts = [json.loads(line) for line in recoveries.open(encoding="utf-8")] if recoveries.exists() else []
-    return {"provider_requests": requests, "provider_errors": errors, "provider_usage": {"input_total": usage[0], "input_cached": usage[1], "input_uncached": usage[2], "output": usage[3], "reasoning": usage[4]}, "source_executions": source_rows, "source_ids_present": sum(bool(receipt.get("source_execution_id")) for receipt in source_receipts), "source_sessions_linked": sum(receipt.get("session_id") in provider_sessions for receipt in source_receipts), "source_stdout_bytes": sum(receipt["raw_stdout_bytes"] for receipt in source_receipts), "source_stderr_bytes": sum(receipt["raw_stderr_bytes"] for receipt in source_receipts), "source_emitted_bytes": sum(receipt["emitted_bytes"] for receipt in source_receipts), "shadow_evaluations": sum(receipt.get("shadow") is True for receipt in source_receipts), "active_evaluations": sum(receipt.get("active") is True for receipt in source_receipts), "forwarding_mutations": sum(receipt.get("forwarding_mutation") is True for receipt in source_receipts), "fail_open_executions": sum(bool(receipt.get("fail_open_reason")) for receipt in source_receipts), "candidate_bytes": sum(receipt.get("candidate_bytes") or 0 for receipt in source_receipts), "estimated_raw_tokens": sum(receipt.get("estimated_raw_tokens") or 0 for receipt in source_receipts), "estimated_candidate_tokens": sum(receipt.get("estimated_candidate_tokens") or 0 for receipt in source_receipts), "never_worse_accepted": sum(receipt.get("never_worse_accepted") is True for receipt in source_receipts), "omitted_passing_tests": sum(receipt.get("omitted_passing_tests") or 0 for receipt in source_receipts), "omitted_progress_lines": sum(receipt.get("omitted_progress_lines") or 0 for receipt in source_receipts), "recovery_hint_bytes": sum(receipt.get("recovery_hint_bytes") or 0 for receipt in source_receipts), "reducer_duration_us": sum(receipt.get("reducer_duration_us") or 0 for receipt in source_receipts), "recovery_requests": len(recovery_receipts), "recovered_bytes": sum((receipt.get("recovered_stdout_bytes") or 0) + (receipt.get("recovered_stderr_bytes") or 0) for receipt in recovery_receipts), "tool_calls": source_rows + len(recovery_receipts), "command_retries": max(0, source_rows - 1), "hook_events": hook_rows, "hook_rewrites": hook_rewrites}
+    source_status_counts = {status: sum(receipt.get("exit_status_class") == status for receipt in source_receipts) for status in ("success", "nonzero", "signal")}
+    source_status_counts["unknown"] = source_rows - sum(source_status_counts.values())
+    return {"provider_requests": requests, "provider_errors": errors, "provider_usage": {"input_total": usage[0], "input_cached": usage[1], "input_uncached": usage[2], "output": usage[3], "reasoning": usage[4]}, "source_executions": source_rows, "source_exit_status_counts": source_status_counts, "source_successful_executions": source_status_counts["success"], "source_ids_present": sum(bool(receipt.get("source_execution_id")) for receipt in source_receipts), "source_sessions_linked": sum(receipt.get("session_id") in provider_sessions for receipt in source_receipts), "source_stdout_bytes": sum(receipt["raw_stdout_bytes"] for receipt in source_receipts), "source_stderr_bytes": sum(receipt["raw_stderr_bytes"] for receipt in source_receipts), "source_emitted_bytes": sum(receipt["emitted_bytes"] for receipt in source_receipts), "shadow_evaluations": sum(receipt.get("shadow") is True for receipt in source_receipts), "active_evaluations": sum(receipt.get("active") is True for receipt in source_receipts), "forwarding_mutations": sum(receipt.get("forwarding_mutation") is True for receipt in source_receipts), "fail_open_executions": sum(bool(receipt.get("fail_open_reason")) for receipt in source_receipts), "candidate_bytes": sum(receipt.get("candidate_bytes") or 0 for receipt in source_receipts), "estimated_raw_tokens": sum(receipt.get("estimated_raw_tokens") or 0 for receipt in source_receipts), "estimated_candidate_tokens": sum(receipt.get("estimated_candidate_tokens") or 0 for receipt in source_receipts), "never_worse_accepted": sum(receipt.get("never_worse_accepted") is True for receipt in source_receipts), "omitted_passing_tests": sum(receipt.get("omitted_passing_tests") or 0 for receipt in source_receipts), "omitted_progress_lines": sum(receipt.get("omitted_progress_lines") or 0 for receipt in source_receipts), "recovery_hint_bytes": sum(receipt.get("recovery_hint_bytes") or 0 for receipt in source_receipts), "reducer_duration_us": sum(receipt.get("reducer_duration_us") or 0 for receipt in source_receipts), "recovery_requests": len(recovery_receipts), "recovered_bytes": sum((receipt.get("recovered_stdout_bytes") or 0) + (receipt.get("recovered_stderr_bytes") or 0) for receipt in recovery_receipts), "tool_calls": source_rows + len(recovery_receipts), "command_retries": max(0, source_rows - 1), "hook_events": hook_rows, "hook_rewrites": hook_rewrites}
 
 def checkout(root: Path) -> Path:
     repo = root / "ripgrep"
@@ -94,14 +115,16 @@ def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int, experiment
             time.sleep(.1)
         else: raise RuntimeError("daemon did not become ready")
         if name in {"ExplicitActiveControl", "ExplicitActive"}:
-            prompt=f"Your first Bash command must be exactly `{cli} tool cargo test`. Use its output to determine whether tests passed. If and only if the output is insufficient, you may run the exact Tracepress recovery command printed in the output or rerun the same wrapper command. Do not inspect files, modify source, or run any other Bash command. Report only whether tests passed."
+            prompt=f"Your first Bash command must be exactly `{cli} tool cargo test`. Use its output to determine whether tests passed. If and only if the output is insufficient, you may run the exact Tracepress recovery command printed in the output or rerun the same wrapper command. Do not inspect files, modify source, or run any other Bash command. End with exactly TESTS_PASSED or TESTS_FAILED and no other text."
         elif name.startswith("Explicit"):
             prompt=f"Your first and only Bash command must be exactly `{cli} tool cargo test`. Do not run any other Bash command, inspect files, or modify source. After it completes, report only whether tests passed."
         else:
             prompt="Your first and only Bash command must be exactly `cargo test`. Do not run any other Bash command, inspect files, or modify source. After it completes, report only whether tests passed."
-        result=subprocess.run([str(cli),"run","codex","exec","-m",MODEL,"-s","workspace-write","--skip-git-repo-check",prompt],cwd=workspace,env=env,capture_output=True,text=True,timeout=timeout)
+        result=subprocess.run([str(cli),"run","codex","exec","--json","-m",MODEL,"-s","workspace-write","--skip-git-repo-check",prompt],cwd=workspace,env=env,capture_output=True,text=True,timeout=timeout)
         summary=aggregate(state/"tracepress.sqlite3",state); summary.update({"arm":name,"agent_exit_status_class":"success" if result.returncode==0 else "nonzero","agent_error_class":None if result.returncode==0 else agent_error_class(result.stderr),"duration_ms":round((time.monotonic()-started)*1000),"timed_out":False})
-        summary["task_success"] = result.returncode == 0 and summary["source_executions"] >= 1 and summary["provider_errors"] == 0
+        actual_outcome = "passed" if summary["source_successful_executions"] == summary["source_executions"] else "failed"
+        reported_outcome = reported_test_outcome(result.stdout)
+        summary.update({"actual_outcome":actual_outcome,"reported_outcome":reported_outcome,"task_success":result.returncode == 0 and summary["source_executions"] >= 1 and summary["provider_errors"] == 0 and reported_outcome == actual_outcome})
         return summary
     except subprocess.TimeoutExpired:
         return {"arm":name,"agent_exit_status_class":"timeout","duration_ms":round((time.monotonic()-started)*1000),"timed_out":True}

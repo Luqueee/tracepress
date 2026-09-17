@@ -768,7 +768,7 @@ fn render_source_optimization(
         Some(Err(error)) => rsx! { ErrorState { message: error.clone() } },
         Some(Ok(report)) => rsx! {
             div { class: "quality-banner", role: "status",
-                Badge { text: "SHADOW ONLY", tone: "warning" }
+                Badge { text: if report.provider_effect_active { "ACTIVE PILOT" } else { "SHADOW ONLY" }, tone: "warning" }
                 span { class: "spacer-inline", "{report.experiment_id} · {report.pairs} paired tasks · decision {report.decision}" }
             }
             div { class: "spacer-top", Card { title: "Source candidate",
@@ -776,10 +776,10 @@ fn render_source_optimization(
                     Metric { label: "Command family", value: report.command_family.clone(), source: "allowlisted" }
                     Metric { label: "Executions", value: compact_u64(report.source.executions), source: "source receipts" }
                     Metric { label: "Raw output", value: format!("{} B", compact_u64(report.source.raw_output_bytes)), source: "observed" }
-                    Metric { label: "Candidate output", value: format!("{} B", compact_u64(report.source.candidate_output_bytes)), source: "shadow" }
-                    Metric { label: "Source reduction", value: format_basis_points(report.source.reduction_basis_points), source: "candidate only" }
-                    Metric { label: "Never-worse", value: format!("{}/{}", report.source.never_worse_accepted, report.source.shadow_evaluations), source: "accepted/evaluated" }
-                    Metric { label: "Recovery rate", value: format_basis_points(report.source.recovery_rate_basis_points), source: "unavailable in shadow" }
+                    Metric { label: "Candidate output", value: format!("{} B", compact_u64(report.source.candidate_output_bytes)), source: report.mode.clone() }
+                    Metric { label: "Source reduction", value: format_basis_points(report.source.reduction_basis_points), source: if report.provider_effect_active { "agent-visible" } else { "candidate only" } }
+                    Metric { label: "Never-worse", value: format!("{}/{}", report.source.never_worse_accepted, report.source.evaluations), source: "accepted/evaluated" }
+                    Metric { label: "Recovery rate", value: format_basis_points(report.source.recovery_rate_basis_points), source: if report.provider_effect_active { "requests / filtered outputs" } else { "unavailable in shadow" } }
                     Metric { label: "Reducer time", value: format!("{} µs", compact_u64(report.source.reducer_duration_us)), source: "aggregate" }
                 }
                 div { class: "compact-notice spacer-top",
@@ -804,7 +804,7 @@ fn render_source_optimization(
                         td { class: "numeric mono", "{compact_u64(arm.duration_ms)} ms" }
                     } } }
                 }
-                p { class: "muted spacer-top", "The agent received raw output in both arms. Provider deltas are trajectory observations, not claimed savings." }
+                p { class: "muted spacer-top", if report.provider_effect_active { "Treatment received the accepted candidate. Provider deltas are active-pilot evidence and remain workload-scoped." } else { "The agent received raw output in both arms. Provider deltas are trajectory observations, not claimed savings." } }
             } }
         },
     }

@@ -126,6 +126,7 @@ GET /api/v1/workloads
 GET /api/v1/baselines
 GET /api/v1/baselines/:id
 GET /api/v1/opportunities
+GET /api/v1/source-optimization
 GET /api/v1/compression/experiments
 GET /api/v1/compression/experiments/:id
 GET /api/v1/compression/experiments/:id/candidates?limit=50&cursor=...
@@ -134,6 +135,12 @@ GET /api/v1/compression/experiments/:id/candidates?limit=50&cursor=...
 Sessions accept `limit`, opaque `cursor`, `model`, `transport`, `status`, `has_compaction`, `from`, `to`, `sort`, and `direction`. Page size is restricted to 1–100. `workload` and `measurement_id` are accepted contract fields, but return no operational matches until a certified operational mapping exists; Observatory does not borrow labels from unrelated reports. Supported sorts are `created_at`, `request_count`, `input_tokens`, `cache_ratio`, `estimated_context_tokens`, and `repetition`.
 
 The baseline/workload/opportunity endpoints read reproducible JSON report artifacts. They do not replace or modify those artifacts, and official convergence status is projected rather than recalculated.
+
+Source Optimization reads the latest bounded Phase 5 report and keeps source-output measurements
+separate from downstream provider and trajectory measurements. It exposes only allowlisted
+aggregates: raw/emitted bytes, never-worse, recovery rate, provider usage, task success, tool calls,
+retries, recoveries, and duration. Active-pilot evidence is labeled explicitly; no command, output,
+prompt, path, recovery token, or provider body crosses the API.
 
 Compression Lab reads operational shadow metadata in SQLite read-only mode. It shows experiment
 quality, compressor applicability, addressable estimated-token share, local byte/token-estimate

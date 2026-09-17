@@ -480,6 +480,10 @@ pub struct SourceOptimizationSummary {
     pub pairs: u64,
     /// Only admitted command family in Phase 5.0.
     pub command_family: String,
+    /// `shadow` or `active_pilot`; controls downstream interpretation.
+    pub mode: String,
+    /// Whether Treatment actually forwarded candidate bytes.
+    pub provider_effect_active: bool,
     /// Candidate-only source measurements.
     pub source: SourceOptimizationSource,
     /// Provider and trajectory measurements kept separate by arm.
@@ -497,7 +501,7 @@ pub struct SourceOptimizationSource {
     pub raw_output_bytes: u64,
     pub candidate_output_bytes: u64,
     pub reduction_basis_points: Option<u16>,
-    pub shadow_evaluations: u64,
+    pub evaluations: u64,
     pub never_worse_accepted: u64,
     pub recovery_rate_basis_points: Option<u16>,
     pub recovery_hint_bytes: u64,

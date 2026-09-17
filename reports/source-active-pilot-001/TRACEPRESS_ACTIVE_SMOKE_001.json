@@ -99,6 +99,10 @@
           "median": 18742,
           "total": 18742
         },
+        "source_successful_executions": {
+          "median": 0,
+          "total": 0
+        },
         "successful_runs": 1,
         "task_success": 1,
         "timed_out_runs": 0,
@@ -204,6 +208,10 @@
           "median": 18742,
           "total": 18742
         },
+        "source_successful_executions": {
+          "median": 0,
+          "total": 0
+        },
         "successful_runs": 1,
         "task_success": 1,
         "timed_out_runs": 0,
@@ -301,6 +309,7 @@
     "source_candidate_reduction": 0.9352326593789301,
     "treatment_arm": "ExplicitActive"
   },
+  "assignment": "session_level",
   "experiment_id": "source-active-pilot-001",
   "forwarding_mutation": true,
   "infrastructure_gate": {

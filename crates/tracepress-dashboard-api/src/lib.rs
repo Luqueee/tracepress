@@ -754,8 +754,10 @@ mod tests {
             serde_json::from_slice(&body).expect("source optimization JSON");
         assert_eq!(report.command_family, "cargo_test");
         assert!(report.source.raw_output_bytes > report.source.candidate_output_bytes);
-        assert_eq!(report.source.forwarding_mutations, 0);
-        assert_eq!(report.source.recovery_rate_basis_points, None);
+        assert!(report.provider_effect_active);
+        assert_eq!(report.mode, "active_pilot");
+        assert!(report.source.forwarding_mutations > 0);
+        assert_eq!(report.source.recovery_rate_basis_points, Some(0));
         assert_eq!(report.downstream.len(), 2);
         assert!(
             report

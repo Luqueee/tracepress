@@ -29,6 +29,7 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "provider_requests",
         "provider_errors",
         "source_executions",
+        "source_successful_executions",
         "source_ids_present",
         "source_sessions_linked",
         "source_emitted_bytes",
@@ -154,6 +155,8 @@ def analyze(report: dict[str, Any]) -> dict[str, Any]:
                 and deltas["provider_usage.input_uncached"]["median"] < 0
                 and sum(value(row, "command_retries") for row in treatment)
                 <= sum(value(row, "command_retries") for row in control) + 1
+                and sum(value(row, "provider_requests") for row in treatment)
+                <= sum(value(row, "provider_requests") for row in control) + 1
                 and sum(value(row, "tool_calls") for row in treatment)
                 <= sum(value(row, "tool_calls") for row in control) + 1
                 and sum(value(row, "recovery_requests") for row in treatment)
@@ -202,6 +205,19 @@ def markdown(report: dict[str, Any], analysis: dict[str, Any]) -> str:
     lines.extend(
         [
             "",
+            "| Trajectory metric | Control | Treatment |",
+            "|---|---:|---:|",
+            f"| Task success | {analysis['arms'][control]['task_success']}/{analysis['arms'][control]['runs']} | {analysis['arms'][treatment]['task_success']}/{analysis['arms'][treatment]['runs']} |",
+            f"| Tool calls | {analysis['arms'][control]['tool_calls']['total']} | {analysis['arms'][treatment]['tool_calls']['total']} |",
+            f"| Command retries | {analysis['arms'][control]['command_retries']['total']} | {analysis['arms'][treatment]['command_retries']['total']} |",
+            f"| Recovery requests | {analysis['arms'][control]['recovery_requests']['total']} | {analysis['arms'][treatment]['recovery_requests']['total']} |",
+            f"| Raw source bytes | {analysis['arms'][control]['source_stdout_bytes']['total'] + analysis['arms'][control]['source_stderr_bytes']['total']} | {analysis['arms'][treatment]['source_stdout_bytes']['total'] + analysis['arms'][treatment]['source_stderr_bytes']['total']} |",
+            f"| Emitted source bytes | {analysis['arms'][control]['source_emitted_bytes']['total']} | {analysis['arms'][treatment]['source_emitted_bytes']['total']} |",
+        ]
+    )
+    lines.extend(
+        [
+            "",
             f"Invariant gate: **{str(analysis['invariant_gate']).lower()}**.",
         ]
     )
@@ -238,6 +254,8 @@ def main() -> int:
     report = json.loads(args.report.read_text(encoding="utf-8"))
     analysis = analyze(report)
     report["analysis"] = analysis
+    if report.get("reducer") == "explicit-active":
+        report["assignment"] = "session_level"
     args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     args.markdown.write_text(markdown(report, analysis), encoding="utf-8")
     return 0

@@ -5910,6 +5910,13 @@ fn valid_source_recovery_token(value: &str) -> bool {
             .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
+fn safe_source_recovery_executable(value: &str) -> bool {
+    !value.is_empty()
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_alphanumeric() || matches!(byte, b'/' | b'.' | b'_' | b'-'))
+}
+
 fn unix_now() -> Result<u64, String> {
     SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
@@ -6067,9 +6074,7 @@ fn tool(config: &Config, args: &[String]) -> Result<(), String> {
             let token = source_recovery_token().map_err(|_error| "token_generation_failed")?;
             let executable = std::env::var("TRACEPRESS_TOOL_BIN")
                 .ok()
-                .filter(|value| {
-                    !value.is_empty() && !value.contains([' ', '\'', '"', '$', '`', '\\'])
-                })
+                .filter(|value| safe_source_recovery_executable(value))
                 .unwrap_or_else(|| "tracepress".to_owned());
             let recovery_command = format!("{executable} recall {token}");
             let evaluated = cargo_test_v1_active(&stdout, &stderr, &recovery_command);
@@ -6275,8 +6280,9 @@ mod tests {
         TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator, bounded_record_provider_observation_request,
         cleanup_expired_source_recoveries, configure_codex_subscription,
         context_ingestion_queue_capacity, measurement_metadata_line,
-        reconcile_pending_context_with, scheduler_metrics_line, shadow_candidate_batch_fits,
-        source_recovery_token, store_source_recovery, valid_source_recovery_token,
+        reconcile_pending_context_with, safe_source_recovery_executable, scheduler_metrics_line,
+        shadow_candidate_batch_fits, source_recovery_token, store_source_recovery,
+        valid_source_recovery_token,
     };
 
     use tracepress_provider::{ObservationInput, ObservationLimits, parse_request, parse_response};
@@ -6294,6 +6300,11 @@ mod tests {
             assert!(valid_source_recovery_token(&token));
             assert!(tokens.insert(token));
         }
+        assert!(safe_source_recovery_executable(
+            "/opt/tracepress/bin/tracepress-v1"
+        ));
+        assert!(!safe_source_recovery_executable("tracepress; touch pwned"));
+        assert!(!safe_source_recovery_executable("$(tracepress)"));
     }
 
     #[test]

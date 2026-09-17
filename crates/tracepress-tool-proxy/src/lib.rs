@@ -84,6 +84,7 @@ pub fn codex_pre_tool_use_identity_rewrite(input: &[u8]) -> Option<Vec<u8>> {
 
 /// The semantic contract of bytes emitted to the command consumer.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum OutputContract {
     AgentReadable,
     LineOrientedMachine,
@@ -93,12 +94,14 @@ pub enum OutputContract {
 
 /// A supported command family. Phase 5.0 deliberately starts with one family.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum CommandFamily {
     CargoTest,
 }
 
 /// Why a command was left untouched.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum FailOpenReason {
     Unsupported,
     ShellSyntax,
@@ -106,6 +109,7 @@ pub enum FailOpenReason {
 
 /// The only admission outcome available before reducers exist.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub enum RewriteDecision {
     Passthrough {
         family: CommandFamily,
@@ -136,6 +140,7 @@ pub fn decide(command: &str) -> RewriteDecision {
 
 /// Allowlisted metadata for one source execution; it intentionally has no command or output.
 #[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
 pub struct SourceExecutionMetadata {
     pub source_execution_id: SourceExecutionId,
     pub command_family: CommandFamily,
@@ -160,6 +165,10 @@ pub struct CargoTestShadowCandidate {
     pub estimated_candidate_tokens: u64,
     pub omitted_passing_tests: u64,
     pub omitted_progress_lines: u64,
+    /// Bytes added by the recovery hint and included in the candidate comparison.
+    pub recovery_hint_bytes: u64,
+    /// Wall-clock time spent constructing and evaluating the candidate.
+    pub reducer_duration: Duration,
     pub applicable: bool,
     pub never_worse_accepted: bool,
 }
@@ -168,7 +177,7 @@ const fn estimated_tokens(bytes: u64) -> u64 {
     bytes.saturating_add(3) / 4
 }
 
-fn cargo_test_v1_streams(stdout: &str, stderr: &str) -> (Vec<u8>, Vec<u8>, u64, u64) {
+fn cargo_test_v1_streams(stdout: &str, stderr: &str) -> (Vec<u8>, Vec<u8>, u64, u64, u64) {
     let mut candidate_stdout = Vec::new();
     let mut omitted_passing_tests = 0_u64;
     for line in stdout.split_inclusive('\n') {
@@ -183,14 +192,18 @@ fn cargo_test_v1_streams(stdout: &str, stderr: &str) -> (Vec<u8>, Vec<u8>, u64, 
         }
         candidate_stdout.extend_from_slice(line.as_bytes());
     }
-    if omitted_passing_tests > 0 {
+    let recovery_hint_bytes = if omitted_passing_tests > 0 {
         let hint = format!(
             "[Tracepress: {omitted_passing_tests} passing test lines omitted; full output recoverable when active.]\n"
         );
+        let hint_bytes = u64::try_from(hint.len()).unwrap_or(u64::MAX);
         let mut prefixed = hint.into_bytes();
         prefixed.append(&mut candidate_stdout);
         candidate_stdout = prefixed;
-    }
+        hint_bytes
+    } else {
+        0
+    };
 
     let mut candidate_stderr = Vec::new();
     let mut omitted_progress_lines = 0_u64;
@@ -216,18 +229,25 @@ fn cargo_test_v1_streams(stdout: &str, stderr: &str) -> (Vec<u8>, Vec<u8>, u64, 
         candidate_stderr,
         omitted_passing_tests,
         omitted_progress_lines,
+        recovery_hint_bytes,
     )
 }
 
 /// Evaluates `cargo_test_v1` without changing agent-visible bytes.
 #[must_use]
 pub fn cargo_test_v1_shadow(stdout: &[u8], stderr: &[u8]) -> CargoTestShadowCandidate {
+    let started = Instant::now();
     let raw_bytes = u64::try_from(stdout.len().saturating_add(stderr.len())).unwrap_or(u64::MAX);
-    let (candidate_stdout, candidate_stderr, omitted_passing_tests, omitted_progress_lines) =
-        match (std::str::from_utf8(stdout), std::str::from_utf8(stderr)) {
-            (Ok(stdout), Ok(stderr)) => cargo_test_v1_streams(stdout, stderr),
-            _ => (stdout.to_vec(), stderr.to_vec(), 0, 0),
-        };
+    let (
+        candidate_stdout,
+        candidate_stderr,
+        omitted_passing_tests,
+        omitted_progress_lines,
+        recovery_hint_bytes,
+    ) = match (std::str::from_utf8(stdout), std::str::from_utf8(stderr)) {
+        (Ok(stdout), Ok(stderr)) => cargo_test_v1_streams(stdout, stderr),
+        _ => (stdout.to_vec(), stderr.to_vec(), 0, 0, 0),
+    };
     let candidate_bytes = u64::try_from(
         candidate_stdout
             .len()
@@ -249,12 +269,18 @@ pub fn cargo_test_v1_shadow(stdout: &[u8], stderr: &[u8]) -> CargoTestShadowCand
         estimated_candidate_tokens,
         omitted_passing_tests,
         omitted_progress_lines,
+        recovery_hint_bytes,
+        reducer_duration: started.elapsed(),
         applicable,
         never_worse_accepted,
     }
 }
 
 /// Executes a previously admitted simple command without filtering its bytes.
+///
+/// # Errors
+///
+/// Returns an error when the command is not admitted or the real process cannot be executed.
 pub fn execute_passthrough(
     command: &str,
     ids: &UuidV7Generator,
@@ -301,6 +327,10 @@ pub fn execute_passthrough(
 }
 
 #[cfg(test)]
+#[allow(
+    clippy::panic,
+    reason = "test assertion setup uses explicit panic branches instead of banned unwrap/expect"
+)]
 mod tests {
     use super::*;
     #[test]
@@ -333,8 +363,12 @@ mod tests {
     #[test]
     fn codex_rewrite_is_narrow_and_does_not_grant_permission() {
         let input = br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test -q"}}"#;
-        let output = codex_pre_tool_use_rewrite(input).expect("admitted command must rewrite");
-        let value: serde_json::Value = serde_json::from_slice(&output).expect("valid response");
+        let Some(output) = codex_pre_tool_use_rewrite(input) else {
+            panic!("admitted command must rewrite");
+        };
+        let Ok(value): Result<serde_json::Value, _> = serde_json::from_slice(&output) else {
+            panic!("rewrite response must be valid JSON");
+        };
         assert!(
             value
                 .pointer("/hookSpecificOutput/updatedInput/command")
@@ -353,8 +387,12 @@ mod tests {
     #[test]
     fn identity_rewrite_preserves_the_admitted_command() {
         let input = br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test -q"}}"#;
-        let output = codex_pre_tool_use_identity_rewrite(input).expect("identity rewrite");
-        let value: serde_json::Value = serde_json::from_slice(&output).expect("valid response");
+        let Some(output) = codex_pre_tool_use_identity_rewrite(input) else {
+            panic!("admitted command must produce an identity rewrite");
+        };
+        let Ok(value): Result<serde_json::Value, _> = serde_json::from_slice(&output) else {
+            panic!("identity response must be valid JSON");
+        };
         assert_eq!(
             value
                 .pointer("/hookSpecificOutput/updatedInput/command")
@@ -370,7 +408,9 @@ mod tests {
         let candidate = cargo_test_v1_shadow(stdout, stderr);
         assert!(candidate.applicable);
         let combined = [candidate.candidate_stdout, candidate.candidate_stderr].concat();
-        let text = String::from_utf8(combined).expect("candidate remains utf8");
+        let Ok(text) = String::from_utf8(combined) else {
+            panic!("candidate must remain UTF-8");
+        };
         assert!(text.contains("test b ... FAILED"));
         assert!(text.contains("boom"));
         assert!(text.contains("error: compilation detail"));
@@ -396,5 +436,6 @@ mod tests {
         assert!(candidate.never_worse_accepted);
         assert!(candidate.candidate_bytes < candidate.raw_bytes);
         assert!(candidate.estimated_candidate_tokens < candidate.estimated_raw_tokens);
+        assert!(candidate.recovery_hint_bytes > 0);
     }
 }

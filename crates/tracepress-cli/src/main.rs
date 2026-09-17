@@ -5922,6 +5922,10 @@ fn record_source_execution(
         "never_worse_accepted": shadow.map(|candidate| candidate.never_worse_accepted),
         "omitted_passing_tests": shadow.map(|candidate| candidate.omitted_passing_tests),
         "omitted_progress_lines": shadow.map(|candidate| candidate.omitted_progress_lines),
+        "recovery_hint_bytes": shadow.map(|candidate| candidate.recovery_hint_bytes),
+        "reducer_duration_us": shadow.map(|candidate| {
+            u64::try_from(candidate.reducer_duration.as_micros()).unwrap_or(u64::MAX)
+        }),
     });
     let path = config.root.join("source-executions.jsonl");
     let mut options = std::fs::OpenOptions::new();

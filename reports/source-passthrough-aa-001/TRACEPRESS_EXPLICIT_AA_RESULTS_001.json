@@ -1,0 +1,898 @@
+{
+  "analysis": {
+    "arms": {
+      "ExplicitA": {
+        "candidate_bytes": {
+          "median": 0.0,
+          "total": 0
+        },
+        "duration_ms": {
+          "median": 18044.0,
+          "total": 181607
+        },
+        "estimated_candidate_tokens": {
+          "median": 0.0,
+          "total": 0
+        },
+        "estimated_raw_tokens": {
+          "median": 0.0,
+          "total": 0
+        },
+        "never_worse_accepted": {
+          "median": 0.0,
+          "total": 0
+        },
+        "provider_errors": {
+          "median": 0.0,
+          "total": 0
+        },
+        "provider_requests": {
+          "median": 2.0,
+          "total": 20
+        },
+        "provider_usage": {
+          "input_cached": 273408,
+          "input_total": 409711,
+          "input_uncached": 136303,
+          "output": 1820,
+          "reasoning": 436
+        },
+        "recovery_hint_bytes": {
+          "median": 0.0,
+          "total": 0
+        },
+        "reducer_duration_us": {
+          "median": 0.0,
+          "total": 0
+        },
+        "runs": 10,
+        "shadow_evaluations": {
+          "median": 0.0,
+          "total": 0
+        },
+        "source_emitted_bytes": {
+          "median": 20674.0,
+          "total": 206740
+        },
+        "source_executions": {
+          "median": 1.0,
+          "total": 10
+        },
+        "source_ids_present": {
+          "median": 0.0,
+          "total": 0
+        },
+        "source_sessions_linked": {
+          "median": 0.0,
+          "total": 0
+        },
+        "successful_runs": 10,
+        "timed_out_runs": 0
+      },
+      "ExplicitB": {
+        "candidate_bytes": {
+          "median": 0.0,
+          "total": 0
+        },
+        "duration_ms": {
+          "median": 17638.5,
+          "total": 202335
+        },
+        "estimated_candidate_tokens": {
+          "median": 0.0,
+          "total": 0
+        },
+        "estimated_raw_tokens": {
+          "median": 0.0,
+          "total": 0
+        },
+        "never_worse_accepted": {
+          "median": 0.0,
+          "total": 0
+        },
+        "provider_errors": {
+          "median": 0.0,
+          "total": 0
+        },
+        "provider_requests": {
+          "median": 2.0,
+          "total": 21
+        },
+        "provider_usage": {
+          "input_cached": 300800,
+          "input_total": 435764,
+          "input_uncached": 134964,
+          "output": 1766,
+          "reasoning": 395
+        },
+        "recovery_hint_bytes": {
+          "median": 0.0,
+          "total": 0
+        },
+        "reducer_duration_us": {
+          "median": 0.0,
+          "total": 0
+        },
+        "runs": 10,
+        "shadow_evaluations": {
+          "median": 0.0,
+          "total": 0
+        },
+        "source_emitted_bytes": {
+          "median": 20674.0,
+          "total": 206740
+        },
+        "source_executions": {
+          "median": 1.0,
+          "total": 10
+        },
+        "source_ids_present": {
+          "median": 0.0,
+          "total": 0
+        },
+        "source_sessions_linked": {
+          "median": 0.0,
+          "total": 0
+        },
+        "successful_runs": 10,
+        "timed_out_runs": 0
+      }
+    },
+    "control_arm": "ExplicitA",
+    "decision": "pass",
+    "interpretation": "passthrough_noise_characterization",
+    "invariant_gate": true,
+    "paired_treatment_minus_control": {
+      "duration_ms": {
+        "max": 11736,
+        "median": -498.5,
+        "min": -2227,
+        "negative": 7,
+        "positive": 3,
+        "values": [
+          -759,
+          11736,
+          -563,
+          10895,
+          -740,
+          -2227,
+          -53,
+          -1789,
+          -434,
+          4662
+        ],
+        "zero": 0
+      },
+      "provider_requests": {
+        "max": 1,
+        "median": 0.0,
+        "min": 0,
+        "negative": 0,
+        "positive": 1,
+        "values": [
+          0,
+          0,
+          0,
+          0,
+          1,
+          0,
+          0,
+          0,
+          0,
+          0
+        ],
+        "zero": 9
+      },
+      "provider_usage.input_cached": {
+        "max": 19200,
+        "median": 0.0,
+        "min": 0,
+        "negative": 0,
+        "positive": 2,
+        "values": [
+          0,
+          0,
+          0,
+          0,
+          19200,
+          8192,
+          0,
+          0,
+          0,
+          0
+        ],
+        "zero": 8
+      },
+      "provider_usage.input_total": {
+        "max": 19592,
+        "median": -17.5,
+        "min": -1104,
+        "negative": 6,
+        "positive": 4,
+        "values": [
+          -33,
+          -13,
+          4361,
+          2,
+          19592,
+          -68,
+          -30,
+          -22,
+          -1104,
+          3368
+        ],
+        "zero": 0
+      },
+      "provider_usage.input_uncached": {
+        "max": 4361,
+        "median": -17.5,
+        "min": -8260,
+        "negative": 6,
+        "positive": 4,
+        "values": [
+          -33,
+          -13,
+          4361,
+          2,
+          392,
+          -8260,
+          -30,
+          -22,
+          -1104,
+          3368
+        ],
+        "zero": 0
+      },
+      "provider_usage.output": {
+        "max": 59,
+        "median": -9.5,
+        "min": -47,
+        "negative": 6,
+        "positive": 4,
+        "values": [
+          -18,
+          -8,
+          -47,
+          1,
+          59,
+          -11,
+          -45,
+          9,
+          -15,
+          21
+        ],
+        "zero": 0
+      },
+      "provider_usage.reasoning": {
+        "max": 26,
+        "median": -3.0,
+        "min": -41,
+        "negative": 6,
+        "positive": 3,
+        "values": [
+          0,
+          -41,
+          -33,
+          -12,
+          26,
+          -1,
+          21,
+          -11,
+          -5,
+          15
+        ],
+        "zero": 1
+      }
+    },
+    "shadow_gate": null,
+    "source_candidate_reduction": null,
+    "treatment_arm": "ExplicitB"
+  },
+  "experiment_id": "source-passthrough-aa-001",
+  "forwarding_mutation": false,
+  "infrastructure_gate": {
+    "decision": "instrumentation_valid",
+    "source_execution_per_passthrough_session": true
+  },
+  "pairs": 10,
+  "phase": "5.0",
+  "privacy": {
+    "commands_persisted": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false
+  },
+  "reducer": "explicit-aa",
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "rows": [
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitA",
+      "candidate_bytes": 0,
+      "duration_ms": 18114,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41082,
+        "input_uncached": 12922,
+        "output": 179,
+        "reasoning": 31
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitB",
+      "candidate_bytes": 0,
+      "duration_ms": 17355,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41049,
+        "input_uncached": 12889,
+        "output": 161,
+        "reasoning": 31
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitB",
+      "candidate_bytes": 0,
+      "duration_ms": 29848,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41061,
+        "input_uncached": 12901,
+        "output": 197,
+        "reasoning": 37
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitA",
+      "candidate_bytes": 0,
+      "duration_ms": 18112,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41074,
+        "input_uncached": 12914,
+        "output": 205,
+        "reasoning": 78
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitA",
+      "candidate_bytes": 0,
+      "duration_ms": 18923,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 40068,
+        "input_uncached": 11908,
+        "output": 218,
+        "reasoning": 78
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitB",
+      "candidate_bytes": 0,
+      "duration_ms": 18360,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 44429,
+        "input_uncached": 16269,
+        "output": 171,
+        "reasoning": 45
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitB",
+      "candidate_bytes": 0,
+      "duration_ms": 28871,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41064,
+        "input_uncached": 12904,
+        "output": 175,
+        "reasoning": 31
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitA",
+      "candidate_bytes": 0,
+      "duration_ms": 17976,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41062,
+        "input_uncached": 12902,
+        "output": 174,
+        "reasoning": 43
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitA",
+      "candidate_bytes": 0,
+      "duration_ms": 17745,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41096,
+        "input_uncached": 12936,
+        "output": 189,
+        "reasoning": 43
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitB",
+      "candidate_bytes": 0,
+      "duration_ms": 17005,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 3,
+      "provider_usage": {
+        "input_cached": 47360,
+        "input_total": 60688,
+        "input_uncached": 13328,
+        "output": 248,
+        "reasoning": 69
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitB",
+      "candidate_bytes": 0,
+      "duration_ms": 17288,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41005,
+        "input_uncached": 12845,
+        "output": 163,
+        "reasoning": 27
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitA",
+      "candidate_bytes": 0,
+      "duration_ms": 19515,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 19968,
+        "input_total": 41073,
+        "input_uncached": 21105,
+        "output": 174,
+        "reasoning": 28
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitA",
+      "candidate_bytes": 0,
+      "duration_ms": 17975,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41065,
+        "input_uncached": 12905,
+        "output": 194,
+        "reasoning": 38
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitB",
+      "candidate_bytes": 0,
+      "duration_ms": 17922,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41035,
+        "input_uncached": 12875,
+        "output": 149,
+        "reasoning": 59
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitB",
+      "candidate_bytes": 0,
+      "duration_ms": 17266,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41076,
+        "input_uncached": 12916,
+        "output": 175,
+        "reasoning": 34
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitA",
+      "candidate_bytes": 0,
+      "duration_ms": 19055,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41098,
+        "input_uncached": 12938,
+        "output": 166,
+        "reasoning": 45
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitA",
+      "candidate_bytes": 0,
+      "duration_ms": 17432,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41060,
+        "input_uncached": 12900,
+        "output": 172,
+        "reasoning": 29
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitB",
+      "candidate_bytes": 0,
+      "duration_ms": 16998,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 39956,
+        "input_uncached": 11796,
+        "output": 157,
+        "reasoning": 24
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitB",
+      "candidate_bytes": 0,
+      "duration_ms": 21422,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 44401,
+        "input_uncached": 16241,
+        "output": 170,
+        "reasoning": 38
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitA",
+      "candidate_bytes": 0,
+      "duration_ms": 16760,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41033,
+        "input_uncached": 12873,
+        "output": 149,
+        "reasoning": 23
+      },
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    }
+  ],
+  "status": "completed",
+  "workload_isolation": {
+    "arm_order": "alternating",
+    "per_arm_cargo_target_dir": true,
+    "per_arm_clean_git_worktree": true,
+    "rust_test_threads": 1
+  }
+}

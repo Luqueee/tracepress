@@ -1,0 +1,321 @@
+{
+  "analysis": {
+    "arms": {
+      "ExplicitControl": {
+        "candidate_bytes": {
+          "median": 0,
+          "total": 0
+        },
+        "duration_ms": {
+          "median": 17754,
+          "total": 17754
+        },
+        "estimated_candidate_tokens": {
+          "median": 0,
+          "total": 0
+        },
+        "estimated_raw_tokens": {
+          "median": 0,
+          "total": 0
+        },
+        "never_worse_accepted": {
+          "median": 0,
+          "total": 0
+        },
+        "provider_errors": {
+          "median": 0,
+          "total": 0
+        },
+        "provider_requests": {
+          "median": 2,
+          "total": 2
+        },
+        "provider_usage": {
+          "input_cached": 19968,
+          "input_total": 41065,
+          "input_uncached": 21097,
+          "output": 175,
+          "reasoning": 42
+        },
+        "recovery_hint_bytes": {
+          "median": 0,
+          "total": 0
+        },
+        "reducer_duration_us": {
+          "median": 0,
+          "total": 0
+        },
+        "runs": 1,
+        "shadow_evaluations": {
+          "median": 0,
+          "total": 0
+        },
+        "source_emitted_bytes": {
+          "median": 20674,
+          "total": 20674
+        },
+        "source_executions": {
+          "median": 1,
+          "total": 1
+        },
+        "source_ids_present": {
+          "median": 1,
+          "total": 1
+        },
+        "source_sessions_linked": {
+          "median": 1,
+          "total": 1
+        },
+        "successful_runs": 1,
+        "timed_out_runs": 0
+      },
+      "ExplicitShadow": {
+        "candidate_bytes": {
+          "median": 1243,
+          "total": 1243
+        },
+        "duration_ms": {
+          "median": 18157,
+          "total": 18157
+        },
+        "estimated_candidate_tokens": {
+          "median": 311,
+          "total": 311
+        },
+        "estimated_raw_tokens": {
+          "median": 5169,
+          "total": 5169
+        },
+        "never_worse_accepted": {
+          "median": 1,
+          "total": 1
+        },
+        "provider_errors": {
+          "median": 0,
+          "total": 0
+        },
+        "provider_requests": {
+          "median": 2,
+          "total": 2
+        },
+        "provider_usage": {
+          "input_cached": 28160,
+          "input_total": 41060,
+          "input_uncached": 12900,
+          "output": 153,
+          "reasoning": 24
+        },
+        "recovery_hint_bytes": {
+          "median": 83,
+          "total": 83
+        },
+        "reducer_duration_us": {
+          "median": 73,
+          "total": 73
+        },
+        "runs": 1,
+        "shadow_evaluations": {
+          "median": 1,
+          "total": 1
+        },
+        "source_emitted_bytes": {
+          "median": 20674,
+          "total": 20674
+        },
+        "source_executions": {
+          "median": 1,
+          "total": 1
+        },
+        "source_ids_present": {
+          "median": 1,
+          "total": 1
+        },
+        "source_sessions_linked": {
+          "median": 1,
+          "total": 1
+        },
+        "successful_runs": 1,
+        "timed_out_runs": 0
+      }
+    },
+    "control_arm": "ExplicitControl",
+    "decision": "pass",
+    "interpretation": "candidate_only_no_forwarding_change",
+    "invariant_gate": true,
+    "paired_treatment_minus_control": {
+      "duration_ms": {
+        "max": 403,
+        "median": 403,
+        "min": 403,
+        "negative": 0,
+        "positive": 1,
+        "values": [
+          403
+        ],
+        "zero": 0
+      },
+      "provider_requests": {
+        "max": 0,
+        "median": 0,
+        "min": 0,
+        "negative": 0,
+        "positive": 0,
+        "values": [
+          0
+        ],
+        "zero": 1
+      },
+      "provider_usage.input_cached": {
+        "max": 8192,
+        "median": 8192,
+        "min": 8192,
+        "negative": 0,
+        "positive": 1,
+        "values": [
+          8192
+        ],
+        "zero": 0
+      },
+      "provider_usage.input_total": {
+        "max": -5,
+        "median": -5,
+        "min": -5,
+        "negative": 1,
+        "positive": 0,
+        "values": [
+          -5
+        ],
+        "zero": 0
+      },
+      "provider_usage.input_uncached": {
+        "max": -8197,
+        "median": -8197,
+        "min": -8197,
+        "negative": 1,
+        "positive": 0,
+        "values": [
+          -8197
+        ],
+        "zero": 0
+      },
+      "provider_usage.output": {
+        "max": -22,
+        "median": -22,
+        "min": -22,
+        "negative": 1,
+        "positive": 0,
+        "values": [
+          -22
+        ],
+        "zero": 0
+      },
+      "provider_usage.reasoning": {
+        "max": -18,
+        "median": -18,
+        "min": -18,
+        "negative": 1,
+        "positive": 0,
+        "values": [
+          -18
+        ],
+        "zero": 0
+      }
+    },
+    "shadow_gate": true,
+    "source_candidate_reduction": 0.9398761729708813,
+    "treatment_arm": "ExplicitShadow"
+  },
+  "experiment_id": "source-passthrough-aa-001",
+  "forwarding_mutation": false,
+  "infrastructure_gate": {
+    "decision": "instrumentation_valid",
+    "source_execution_per_passthrough_session": true
+  },
+  "pairs": 1,
+  "phase": "5.0",
+  "privacy": {
+    "commands_persisted": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false
+  },
+  "reducer": "explicit-shadow",
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "rows": [
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitControl",
+      "candidate_bytes": 0,
+      "duration_ms": 17754,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 19968,
+        "input_total": 41065,
+        "input_uncached": 21097,
+        "output": 175,
+        "reasoning": 42
+      },
+      "recovery_hint_bytes": 0,
+      "reducer_duration_us": 0,
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_ids_present": 1,
+      "source_sessions_linked": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    },
+    {
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitShadow",
+      "candidate_bytes": 1243,
+      "duration_ms": 18157,
+      "estimated_candidate_tokens": 311,
+      "estimated_raw_tokens": 5169,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 1,
+      "omitted_passing_tests": 449,
+      "omitted_progress_lines": 40,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 28160,
+        "input_total": 41060,
+        "input_uncached": 12900,
+        "output": 153,
+        "reasoning": 24
+      },
+      "recovery_hint_bytes": 83,
+      "reducer_duration_us": 73,
+      "shadow_evaluations": 1,
+      "source_emitted_bytes": 20674,
+      "source_executions": 1,
+      "source_ids_present": 1,
+      "source_sessions_linked": 1,
+      "source_stderr_bytes": 1932,
+      "source_stdout_bytes": 18742,
+      "timed_out": false
+    }
+  ],
+  "status": "completed",
+  "workload_isolation": {
+    "arm_order": "alternating",
+    "per_arm_cargo_target_dir": true,
+    "per_arm_clean_git_worktree": true,
+    "rust_test_threads": 1
+  }
+}

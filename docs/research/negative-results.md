@@ -15,6 +15,7 @@ and intentionally do not include prompts, paths, tool arguments, raw results, or
 | `search.result_projection` over provider-native envelope | Controlled public Search workload | Native envelopes were below the material reduction threshold | Closed for current candidates |
 | `toolresult.lifetime` historical eviction | Public multi-request shadow cohort | 3.04% historical exposure; best net total-context reduction 2.76%, below Phase 4.6 gates | Closed without recovery or active eviction |
 | `source.passthrough` Codex hook wrapper | Fully isolated `cargo test` N=10 A/A | Hook/proxy instrumentation was complete, but passthrough changed provider input materially (433,889 to 308,562) with no reducer enabled | Reject causal interpretation; require byte-faithful control evidence before Shadow |
+| `source.path_shim` | Codex PATH interception smoke | Agent exited before provider, hook, or source execution; no sandbox bypass attempted | Closed for this runtime |
 
 The evidence is workload-scoped. It closes generic deterministic/provider-readable expansion for
 the current cohorts; it does not claim that every future tool-family policy is impossible.

@@ -69,7 +69,9 @@ def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int) -> dict[st
     started = time.monotonic()
     try:
         env = os.environ.copy(); env.update({"TRACEPRESS_HOME":str(state),"TRACEPRESS_CONTEXT_ANALYSIS":"shadow","TRACEPRESS_SHADOW_COMPRESSION":"off","TRACEPRESS_ACTIVE_COMPRESSION":"off","TRACEPRESS_MEASUREMENT_RUN_ID":EXPERIMENT,"RUST_TEST_THREADS":"1","CARGO_TARGET_DIR":str(state / "cargo-target")})
-        if name == "Passthrough": env["TRACEPRESS_SOURCE_HOOK"] = "codex"
+        if name in {"Passthrough", "Identity"}:
+            env["TRACEPRESS_SOURCE_HOOK"] = "codex"
+        if name == "Identity": env["TRACEPRESS_HOOK_REWRITE_MODE"] = "identity"
         subprocess.run([str(cli),"init"],cwd=workspace,env=env,check=True,capture_output=True,text=True,timeout=30)
         daemon_env = dict(env); daemon_env.update({"TRACEPRESS_DATABASE":str(state/"tracepress.sqlite3"),"TRACEPRESS_CONTROL_SOCKET":str(state/"tracepress.sock"),"TRACEPRESS_CONTROL_CREDENTIAL":str(state/"control.cred"),"TRACEPRESS_DAEMON_READY":str(state/"daemon.ready")})
         log = (state/"daemon.log").open("w",encoding="utf-8"); process = subprocess.Popen([str(daemon)],cwd=workspace,env=daemon_env,stdout=log,stderr=subprocess.STDOUT,start_new_session=True,text=True)
@@ -92,15 +94,16 @@ def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int) -> dict[st
         remove_worktree(repo, workspace)
 
 def main() -> int:
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--repo-root",type=Path,default=Path(__file__).resolve().parents[1]); p.add_argument("--workload-root",type=Path,default=Path("/tmp/tracepress-source-passthrough-aa-001")); p.add_argument("--pairs",type=int,default=1,choices=range(1,11)); p.add_argument("--timeout",type=int,default=180); p.add_argument("--output-json",type=Path,required=True); p.add_argument("--output-md",type=Path,required=True); a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--repo-root",type=Path,default=Path(__file__).resolve().parents[1]); p.add_argument("--workload-root",type=Path,default=Path("/tmp/tracepress-source-passthrough-aa-001")); p.add_argument("--pairs",type=int,default=1,choices=range(1,11)); p.add_argument("--timeout",type=int,default=180); p.add_argument("--hook-mode",choices=("passthrough","identity"),default="passthrough"); p.add_argument("--output-json",type=Path,required=True); p.add_argument("--output-md",type=Path,required=True); a=p.parse_args()
     cli=a.repo_root/"target/debug/tracepress"; daemon=a.repo_root/"target/debug/tracepressd"
     if not cli.exists() or not daemon.exists(): raise RuntimeError("build target/debug/tracepress and target/debug/tracepressd first")
+    treatment = "Passthrough" if a.hook_mode == "passthrough" else "Identity"
     repo=checkout(a.workload_root); rows=[]
     for pair in range(a.pairs):
-        order = ["Control", "Passthrough"] if pair % 2 == 0 else ["Passthrough", "Control"]
+        order = ["Control", treatment] if pair % 2 == 0 else [treatment, "Control"]
         rows.extend(arm(cli,daemon,repo,name,a.timeout) for name in order)
-    source_complete = all(row.get("source_executions", 0) == 1 and row.get("hook_rewrites", 0) == 1 for row in rows if row["arm"] == "Passthrough")
-    report={"experiment_id":EXPERIMENT,"phase":"5.0","status":"completed","pairs":a.pairs,"reducer":"passthrough","forwarding_mutation":False,"repository_pin":{"repository":"BurntSushi/ripgrep","commit_sha":SHA},"workload_isolation":{"per_arm_clean_git_worktree":True,"per_arm_cargo_target_dir":True,"arm_order":"alternating","rust_test_threads":1},"rows":rows,"infrastructure_gate":{"source_execution_per_passthrough_session":source_complete,"decision":"instrumentation_valid" if source_complete else "instrumentation_invalid_missing_source_execution"},"privacy":{"commands_persisted":False,"paths_persisted":False,"raw_content_persisted":False}}
+    source_complete = all(row.get("hook_rewrites", 0) == 1 and (a.hook_mode == "identity" or row.get("source_executions", 0) == 1) for row in rows if row["arm"] == treatment)
+    report={"experiment_id":EXPERIMENT,"phase":"5.0","status":"completed","pairs":a.pairs,"reducer":a.hook_mode,"forwarding_mutation":False,"repository_pin":{"repository":"BurntSushi/ripgrep","commit_sha":SHA},"workload_isolation":{"per_arm_clean_git_worktree":True,"per_arm_cargo_target_dir":True,"arm_order":"alternating","rust_test_threads":1},"rows":rows,"infrastructure_gate":{"source_execution_per_passthrough_session":source_complete,"decision":"instrumentation_valid" if source_complete else "instrumentation_invalid_missing_source_execution"},"privacy":{"commands_persisted":False,"paths_persisted":False,"raw_content_persisted":False}}
     a.output_json.parent.mkdir(parents=True,exist_ok=True); a.output_json.write_text(json.dumps(report,indent=2,sort_keys=True)+"\n",encoding="utf-8")
     a.output_md.write_text("# TRACEPRESS_SOURCE_PASSTHROUGH_AA_001\n\nStatus: **completed**. Passthrough only; no reducer was enabled.\n",encoding="utf-8")
     return 0

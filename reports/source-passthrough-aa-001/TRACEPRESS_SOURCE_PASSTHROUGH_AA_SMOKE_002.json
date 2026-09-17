@@ -1,0 +1,57 @@
+{
+  "experiment_id": "source-passthrough-aa-001",
+  "forwarding_mutation": false,
+  "infrastructure_gate": {
+    "decision": "aa_invalid_missing_source_execution",
+    "source_execution_per_passthrough_session": false
+  },
+  "pairs": 1,
+  "phase": "5.0",
+  "privacy": {
+    "commands_persisted": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false
+  },
+  "reducer": "passthrough",
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "rows": [
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Control",
+      "duration_ms": 25732,
+      "hook_events": 0,
+      "provider_errors": 0,
+      "provider_requests": 5,
+      "provider_usage": {
+        "input_cached": 88832,
+        "input_total": 102975,
+        "input_uncached": 14143,
+        "output": 503,
+        "reasoning": 166
+      },
+      "source_executions": 0,
+      "timed_out": false
+    },
+    {
+      "agent_exit_status_class": "success",
+      "arm": "Passthrough",
+      "duration_ms": 32005,
+      "hook_events": 1,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 23040,
+        "input_total": 27466,
+        "input_uncached": 4426,
+        "output": 546,
+        "reasoning": 355
+      },
+      "source_executions": 0,
+      "timed_out": false
+    }
+  ],
+  "status": "completed"
+}

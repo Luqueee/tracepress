@@ -26,8 +26,10 @@ def aggregate(db: Path, state: Path) -> dict[str, Any]:
     source = state / "source-executions.jsonl"
     source_rows = sum(1 for _ in source.open(encoding="utf-8")) if source.exists() else 0
     hooks = state / "hook-events.jsonl"
-    hook_rows = sum(1 for _ in hooks.open(encoding="utf-8")) if hooks.exists() else 0
-    return {"provider_requests": requests, "provider_errors": errors, "provider_usage": {"input_total": usage[0], "input_cached": usage[1], "input_uncached": usage[2], "output": usage[3], "reasoning": usage[4]}, "source_executions": source_rows, "hook_events": hook_rows}
+    hook_receipts = [json.loads(line) for line in hooks.open(encoding="utf-8")] if hooks.exists() else []
+    hook_rows = len(hook_receipts)
+    hook_rewrites = sum(receipt.get("rewritten") is True for receipt in hook_receipts)
+    return {"provider_requests": requests, "provider_errors": errors, "provider_usage": {"input_total": usage[0], "input_cached": usage[1], "input_uncached": usage[2], "output": usage[3], "reasoning": usage[4]}, "source_executions": source_rows, "hook_events": hook_rows, "hook_rewrites": hook_rewrites}
 
 def checkout(root: Path) -> Path:
     repo = root / "ripgrep"
@@ -52,7 +54,7 @@ def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int) -> dict[st
             if (state/"daemon.ready").exists(): break
             time.sleep(.1)
         else: raise RuntimeError("daemon did not become ready")
-        prompt="Inspect this public repository. Run cargo test exactly once. Do not modify source. Report only whether tests passed."
+        prompt="Your first and only Bash command must be exactly `cargo test`. Do not run any other Bash command, inspect files, or modify source. After it completes, report only whether tests passed."
         result=subprocess.run([str(cli),"run","codex","exec","-m",MODEL,"-s","workspace-write","--skip-git-repo-check",prompt],cwd=repo,env=env,capture_output=True,text=True,timeout=timeout)
         summary=aggregate(state/"tracepress.sqlite3",state); summary.update({"arm":name,"agent_exit_status_class":"success" if result.returncode==0 else "nonzero","duration_ms":round((time.monotonic()-started)*1000),"timed_out":False})
         return summary
@@ -70,7 +72,7 @@ def main() -> int:
     repo=checkout(a.workload_root); rows=[]
     for _ in range(a.pairs):
         rows.extend([arm(cli,daemon,repo,"Control",a.timeout),arm(cli,daemon,repo,"Passthrough",a.timeout)])
-    source_complete = all(row.get("source_executions", 0) > 0 for row in rows if row["arm"] == "Passthrough")
+    source_complete = all(row.get("source_executions", 0) == 1 and row.get("hook_rewrites", 0) == 1 for row in rows if row["arm"] == "Passthrough")
     report={"experiment_id":EXPERIMENT,"phase":"5.0","status":"completed","pairs":a.pairs,"reducer":"passthrough","forwarding_mutation":False,"repository_pin":{"repository":"BurntSushi/ripgrep","commit_sha":SHA},"rows":rows,"infrastructure_gate":{"source_execution_per_passthrough_session":source_complete,"decision":"aa_valid" if source_complete else "aa_invalid_missing_source_execution"},"privacy":{"commands_persisted":False,"paths_persisted":False,"raw_content_persisted":False}}
     a.output_json.parent.mkdir(parents=True,exist_ok=True); a.output_json.write_text(json.dumps(report,indent=2,sort_keys=True)+"\n",encoding="utf-8")
     a.output_md.write_text("# TRACEPRESS_SOURCE_PASSTHROUGH_AA_001\n\nStatus: **completed**. Passthrough only; no reducer was enabled.\n",encoding="utf-8")

@@ -23,6 +23,7 @@ and intentionally do not include prompts, paths, tool arguments, raw results, or
 | `cargo_check_v1_active` | Pinned public `cargo check` active smoke N=1 paired | Source -89.52%, but recovery 1/1 after final `Finished` status was removed | Reject v1 active; preserve explicit final status and return revised candidate to Shadow |
 | `cargo_check_v2` Shadow | Pinned public `cargo check` N=10 paired Shadow | Candidate -89.98%, task success 10/10, no retries, raw still forwarded | Passed prerequisite for isolated v2 active pilot |
 | `cargo_check_v2_active` | Success and diagnostic cohorts, each N=10 paired | Success source -84.74%, uncached -6.57%, no retries/recalls; diagnostics fail-open raw with one Treatment rerun | Accepted for this workload behind explicit opt-in; total input/output/reasoning/duration tradeoffs retained |
+| `cargo_clippy_v1` Shadow | Pinned public `cargo clippy` paired smoke | Candidate -0.99%; 134,972 of 136,328 bytes remained because safe diagnostics dominated output | Reject active pilot and stop before N=10; do not add lossy grouping/dedup without a new evidence gate |
 
 The evidence is workload-scoped. It closes generic deterministic/provider-readable expansion for
 the current cohorts; it does not claim that every future tool-family policy is impossible.

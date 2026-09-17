@@ -83,8 +83,9 @@ use tracepress_storage::{
 use tracepress_storage::{ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus};
 use tracepress_tool_proxy::{
     CargoOutputCandidate, CommandFamily, cargo_check_v1_active, cargo_check_v1_shadow,
-    cargo_check_v2_active, cargo_check_v2_shadow, cargo_test_v1_active, cargo_test_v1_shadow,
-    codex_pre_tool_use_identity_rewrite, codex_pre_tool_use_rewrite, execute_passthrough,
+    cargo_check_v2_active, cargo_check_v2_shadow, cargo_clippy_v1_shadow, cargo_test_v1_active,
+    cargo_test_v1_shadow, codex_pre_tool_use_identity_rewrite, codex_pre_tool_use_rewrite,
+    execute_passthrough,
 };
 
 const FRAME_BYTES: u64 = 65_536;
@@ -6068,6 +6069,7 @@ fn source_reducer_id(
         (Some("cargo_test_v1_shadow"), false, true) => "cargo_test_v1_shadow",
         (Some("cargo_check_v1_shadow"), false, true) => "cargo_check_v1_shadow",
         (Some("cargo_check_v2_shadow"), false, true) => "cargo_check_v2_shadow",
+        (Some("cargo_clippy_v1_shadow"), false, true) => "cargo_clippy_v1_shadow",
         _ => "passthrough",
     }
 }
@@ -6090,6 +6092,9 @@ fn shadow_source_candidate(input: SourceReducerInput<'_>) -> Option<CargoOutputC
         }
         (Some("cargo_check_v2_shadow"), CommandFamily::CargoCheck) => {
             Some(cargo_check_v2_shadow(input.stdout, input.stderr))
+        }
+        (Some("cargo_clippy_v1_shadow"), CommandFamily::CargoClippy) => {
+            Some(cargo_clippy_v1_shadow(input.stdout, input.stderr))
         }
         _ => None,
     }
@@ -6247,6 +6252,7 @@ fn record_source_execution(
     let command_family = match metadata.command_family {
         CommandFamily::CargoTest => "cargo_test",
         CommandFamily::CargoCheck => "cargo_check",
+        CommandFamily::CargoClippy => "cargo_clippy",
         _ => "unknown",
     };
     let record = serde_json::json!({

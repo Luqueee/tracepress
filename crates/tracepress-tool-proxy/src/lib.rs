@@ -98,6 +98,7 @@ pub enum OutputContract {
 pub enum CommandFamily {
     CargoTest,
     CargoCheck,
+    CargoClippy,
 }
 
 /// Why a command was left untouched.
@@ -136,6 +137,10 @@ pub fn decide(command: &str) -> RewriteDecision {
         },
         ["cargo", "check", ..] => RewriteDecision::Passthrough {
             family: CommandFamily::CargoCheck,
+            contract: OutputContract::AgentReadable,
+        },
+        ["cargo", "clippy", ..] => RewriteDecision::Passthrough {
+            family: CommandFamily::CargoClippy,
             contract: OutputContract::AgentReadable,
         },
         _ => RewriteDecision::FailOpen(FailOpenReason::Unsupported),
@@ -446,6 +451,19 @@ pub fn cargo_check_v2_active(
     )
 }
 
+/// Evaluates conservative Clippy progress stripping while preserving final status and diagnostics.
+#[must_use]
+pub fn cargo_clippy_v1_shadow(stdout: &[u8], stderr: &[u8]) -> CargoOutputCandidate {
+    cargo_check_candidate(
+        stdout,
+        stderr,
+        CargoCheckPolicy {
+            active_recovery_command: None,
+            preserve_finished: true,
+        },
+    )
+}
+
 /// Executes a previously admitted simple command without filtering its bytes.
 ///
 /// # Errors
@@ -519,8 +537,15 @@ mod tests {
                 ..
             }
         ));
+        assert!(matches!(
+            decide("cargo clippy --workspace"),
+            RewriteDecision::Passthrough {
+                family: CommandFamily::CargoClippy,
+                ..
+            }
+        ));
         assert_eq!(
-            decide("cargo clippy"),
+            decide("cargo build"),
             RewriteDecision::FailOpen(FailOpenReason::Unsupported)
         );
     }
@@ -699,6 +724,26 @@ mod tests {
         let text = String::from_utf8_lossy(&candidate.candidate_stderr);
         assert!(candidate.never_worse_accepted);
         assert_eq!(candidate.omitted_progress_lines, 12);
+        assert!(text.contains("Finished dev profile"));
+        assert!(!text.contains("Checking dependency"));
+    }
+
+    #[test]
+    fn cargo_clippy_shadow_preserves_lints_locations_and_final_status() {
+        let mut stderr = String::new();
+        for index in 0..12 {
+            use std::fmt::Write as _;
+            let _written = writeln!(&mut stderr, "    Checking dependency-{index} v0.1.0");
+        }
+        stderr.push_str(
+            "warning: redundant closure\n --> src/lib.rs:2:3\n    Finished dev profile in 1.0s\n",
+        );
+        let candidate = cargo_clippy_v1_shadow(b"", stderr.as_bytes());
+        let text = String::from_utf8_lossy(&candidate.candidate_stderr);
+        assert!(candidate.never_worse_accepted);
+        assert_eq!(candidate.omitted_progress_lines, 12);
+        assert!(text.contains("warning: redundant closure"));
+        assert!(text.contains("src/lib.rs:2:3"));
         assert!(text.contains("Finished dev profile"));
         assert!(!text.contains("Checking dependency"));
     }

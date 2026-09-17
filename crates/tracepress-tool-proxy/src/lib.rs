@@ -149,6 +149,111 @@ pub struct SourceExecutionMetadata {
     pub duration: Duration,
 }
 
+#[derive(Clone, Debug, Eq, PartialEq)]
+#[non_exhaustive]
+pub struct CargoTestShadowCandidate {
+    pub candidate_stdout: Vec<u8>,
+    pub candidate_stderr: Vec<u8>,
+    pub raw_bytes: u64,
+    pub candidate_bytes: u64,
+    pub estimated_raw_tokens: u64,
+    pub estimated_candidate_tokens: u64,
+    pub omitted_passing_tests: u64,
+    pub omitted_progress_lines: u64,
+    pub applicable: bool,
+    pub never_worse_accepted: bool,
+}
+
+const fn estimated_tokens(bytes: u64) -> u64 {
+    bytes.saturating_add(3) / 4
+}
+
+fn cargo_test_v1_streams(stdout: &str, stderr: &str) -> (Vec<u8>, Vec<u8>, u64, u64) {
+    let mut candidate_stdout = Vec::new();
+    let mut omitted_passing_tests = 0_u64;
+    for line in stdout.split_inclusive('\n') {
+        let trimmed = line.trim();
+        if (trimmed.starts_with("test ") && trimmed.ends_with(" ... ok"))
+            || (trimmed.starts_with("running ") && trimmed.ends_with(" tests"))
+        {
+            if trimmed.starts_with("test ") {
+                omitted_passing_tests = omitted_passing_tests.saturating_add(1);
+            }
+            continue;
+        }
+        candidate_stdout.extend_from_slice(line.as_bytes());
+    }
+    if omitted_passing_tests > 0 {
+        let hint = format!(
+            "[Tracepress: {omitted_passing_tests} passing test lines omitted; full output recoverable when active.]\n"
+        );
+        let mut prefixed = hint.into_bytes();
+        prefixed.append(&mut candidate_stdout);
+        candidate_stdout = prefixed;
+    }
+
+    let mut candidate_stderr = Vec::new();
+    let mut omitted_progress_lines = 0_u64;
+    for line in stderr.split_inclusive('\n') {
+        let trimmed = line.trim_start();
+        if [
+            "Compiling ",
+            "Checking ",
+            "Downloading ",
+            "Downloaded ",
+            "Finished ",
+        ]
+        .iter()
+        .any(|prefix| trimmed.starts_with(prefix))
+        {
+            omitted_progress_lines = omitted_progress_lines.saturating_add(1);
+        } else {
+            candidate_stderr.extend_from_slice(line.as_bytes());
+        }
+    }
+    (
+        candidate_stdout,
+        candidate_stderr,
+        omitted_passing_tests,
+        omitted_progress_lines,
+    )
+}
+
+/// Evaluates `cargo_test_v1` without changing agent-visible bytes.
+#[must_use]
+pub fn cargo_test_v1_shadow(stdout: &[u8], stderr: &[u8]) -> CargoTestShadowCandidate {
+    let raw_bytes = u64::try_from(stdout.len().saturating_add(stderr.len())).unwrap_or(u64::MAX);
+    let (candidate_stdout, candidate_stderr, omitted_passing_tests, omitted_progress_lines) =
+        match (std::str::from_utf8(stdout), std::str::from_utf8(stderr)) {
+            (Ok(stdout), Ok(stderr)) => cargo_test_v1_streams(stdout, stderr),
+            _ => (stdout.to_vec(), stderr.to_vec(), 0, 0),
+        };
+    let candidate_bytes = u64::try_from(
+        candidate_stdout
+            .len()
+            .saturating_add(candidate_stderr.len()),
+    )
+    .unwrap_or(u64::MAX);
+    let estimated_raw_tokens = estimated_tokens(raw_bytes);
+    let estimated_candidate_tokens = estimated_tokens(candidate_bytes);
+    let applicable = omitted_passing_tests > 0 || omitted_progress_lines > 0;
+    let never_worse_accepted = applicable
+        && candidate_bytes < raw_bytes
+        && estimated_candidate_tokens < estimated_raw_tokens;
+    CargoTestShadowCandidate {
+        candidate_stdout,
+        candidate_stderr,
+        raw_bytes,
+        candidate_bytes,
+        estimated_raw_tokens,
+        estimated_candidate_tokens,
+        omitted_passing_tests,
+        omitted_progress_lines,
+        applicable,
+        never_worse_accepted,
+    }
+}
+
 /// Executes a previously admitted simple command without filtering its bytes.
 pub fn execute_passthrough(
     command: &str,
@@ -256,5 +361,40 @@ mod tests {
                 .and_then(serde_json::Value::as_str),
             Some("cargo test -q")
         );
+    }
+
+    #[test]
+    fn cargo_test_shadow_preserves_failures_and_drops_passing_noise() {
+        let stdout = b"running 2 tests\ntest a ... ok\ntest b ... FAILED\n\nfailures:\nboom\ntest result: FAILED. 1 passed; 1 failed\n";
+        let stderr = b"   Compiling demo v0.1.0\nerror: compilation detail\n";
+        let candidate = cargo_test_v1_shadow(stdout, stderr);
+        assert!(candidate.applicable);
+        let combined = [candidate.candidate_stdout, candidate.candidate_stderr].concat();
+        let text = String::from_utf8(combined).expect("candidate remains utf8");
+        assert!(text.contains("test b ... FAILED"));
+        assert!(text.contains("boom"));
+        assert!(text.contains("error: compilation detail"));
+        assert!(!text.contains("test a ... ok"));
+    }
+
+    #[test]
+    fn cargo_test_shadow_rejects_non_improving_output() {
+        let candidate = cargo_test_v1_shadow(b"test result: ok. 0 passed\n", b"");
+        assert!(!candidate.applicable);
+        assert!(!candidate.never_worse_accepted);
+    }
+
+    #[test]
+    fn cargo_test_shadow_accepts_material_reduction() {
+        use std::fmt::Write as _;
+        let mut stdout = String::from("running 50 tests\n");
+        for index in 0..50 {
+            let _written = writeln!(&mut stdout, "test suite::case_{index} ... ok");
+        }
+        stdout.push_str("test result: ok. 50 passed; 0 failed\n");
+        let candidate = cargo_test_v1_shadow(stdout.as_bytes(), b"    Finished test profile\n");
+        assert!(candidate.never_worse_accepted);
+        assert!(candidate.candidate_bytes < candidate.raw_bytes);
+        assert!(candidate.estimated_candidate_tokens < candidate.estimated_raw_tokens);
     }
 }

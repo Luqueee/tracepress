@@ -81,7 +81,8 @@ use tracepress_storage::{
 };
 use tracepress_storage::{ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus};
 use tracepress_tool_proxy::{
-    codex_pre_tool_use_identity_rewrite, codex_pre_tool_use_rewrite, execute_passthrough,
+    CargoTestShadowCandidate, cargo_test_v1_shadow, codex_pre_tool_use_identity_rewrite,
+    codex_pre_tool_use_rewrite, execute_passthrough,
 };
 
 const FRAME_BYTES: u64 = 65_536;
@@ -5853,6 +5854,9 @@ fn tool(config: &Config, args: Vec<String>) -> Result<(), String> {
     let ids = UuidV7Generator::new();
     let (stdout, stderr, metadata) = execute_passthrough(&command, &ids)
         .map_err(|error| format!("source tool passthrough refused or failed: {error}"))?;
+    let shadow = (std::env::var("TRACEPRESS_SOURCE_REDUCER").ok().as_deref()
+        == Some("cargo_test_v1_shadow"))
+    .then(|| cargo_test_v1_shadow(&stdout, &stderr));
     use std::io::Write as _;
     std::io::stdout()
         .write_all(&stdout)
@@ -5860,7 +5864,7 @@ fn tool(config: &Config, args: Vec<String>) -> Result<(), String> {
     std::io::stderr()
         .write_all(&stderr)
         .map_err(|error| error.to_string())?;
-    let _recorded = record_source_execution(config, &metadata);
+    let _recorded = record_source_execution(config, &metadata, shadow.as_ref());
     if let Some(signal) = metadata.termination_signal {
         #[cfg(unix)]
         {
@@ -5884,6 +5888,7 @@ fn tool(config: &Config, args: Vec<String>) -> Result<(), String> {
 fn record_source_execution(
     config: &Config,
     metadata: &tracepress_tool_proxy::SourceExecutionMetadata,
+    shadow: Option<&CargoTestShadowCandidate>,
 ) -> Result<(), String> {
     config.ensure_root()?;
     let session_id = std::env::var("TRACEPRESS_SOURCE_SESSION_ID")
@@ -5900,7 +5905,7 @@ fn record_source_execution(
         "source_execution_id": metadata.source_execution_id,
         "session_id": session_id,
         "command_family": "cargo_test",
-        "reducer_id": "passthrough",
+        "reducer_id": if shadow.is_some() { "cargo_test_v1" } else { "passthrough" },
         "reducer_version": "v1",
         "output_contract": "agent_readable",
         "raw_stdout_bytes": metadata.raw_stdout_bytes,
@@ -5909,6 +5914,14 @@ fn record_source_execution(
         "exit_status_class": exit_status_class,
         "duration_us": u64::try_from(metadata.duration.as_micros()).unwrap_or(u64::MAX),
         "recovery_available": false,
+        "shadow": shadow.is_some(),
+        "candidate_bytes": shadow.map(|candidate| candidate.candidate_bytes),
+        "estimated_raw_tokens": shadow.map(|candidate| candidate.estimated_raw_tokens),
+        "estimated_candidate_tokens": shadow.map(|candidate| candidate.estimated_candidate_tokens),
+        "candidate_applicable": shadow.map(|candidate| candidate.applicable),
+        "never_worse_accepted": shadow.map(|candidate| candidate.never_worse_accepted),
+        "omitted_passing_tests": shadow.map(|candidate| candidate.omitted_passing_tests),
+        "omitted_progress_lines": shadow.map(|candidate| candidate.omitted_progress_lines),
     });
     let path = config.root.join("source-executions.jsonl");
     let mut options = std::fs::OpenOptions::new();

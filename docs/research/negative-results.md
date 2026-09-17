@@ -14,7 +14,7 @@ and intentionally do not include prompts, paths, tool arguments, raw results, or
 | `json.tabular` | ToolResult JSON | Small structural upper bound; opaque custom representation | Shadow-only upper bound |
 | `search.result_projection` over provider-native envelope | Controlled public Search workload | Native envelopes were below the material reduction threshold | Closed for current candidates |
 | `toolresult.lifetime` historical eviction | Public multi-request shadow cohort | 3.04% historical exposure; best net total-context reduction 2.76%, below Phase 4.6 gates | Closed without recovery or active eviction |
-| `source.passthrough` Codex hook wrapper | Isolated `cargo test` N=10 A/A | Hook/proxy instrumentation was complete, but passthrough changed provider-request count (20 to 23) and provider-input trajectory with no reducer enabled | Diagnose before Shadow or active source reduction |
+| `source.passthrough` Codex hook wrapper | Fully isolated `cargo test` N=10 A/A | Hook/proxy instrumentation was complete, but passthrough changed provider input materially (433,889 to 308,562) with no reducer enabled | Reject causal interpretation; require byte-faithful control evidence before Shadow |
 
 The evidence is workload-scoped. It closes generic deterministic/provider-readable expansion for
 the current cohorts; it does not claim that every future tool-family policy is impossible.

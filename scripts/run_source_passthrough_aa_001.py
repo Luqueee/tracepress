@@ -69,8 +69,8 @@ def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int) -> dict[st
     started = time.monotonic()
     try:
         env = os.environ.copy(); env.update({"TRACEPRESS_HOME":str(state),"TRACEPRESS_CONTEXT_ANALYSIS":"shadow","TRACEPRESS_SHADOW_COMPRESSION":"off","TRACEPRESS_ACTIVE_COMPRESSION":"off","TRACEPRESS_MEASUREMENT_RUN_ID":EXPERIMENT,"RUST_TEST_THREADS":"1","CARGO_TARGET_DIR":str(state / "cargo-target")})
-        if name in {"Passthrough", "Identity"}:
-            env["TRACEPRESS_SOURCE_HOOK"] = "codex"
+        if name in {"Passthrough", "Identity", "Path"}:
+            env["TRACEPRESS_SOURCE_HOOK"] = "path" if name == "Path" else "codex"
         if name == "Identity": env["TRACEPRESS_HOOK_REWRITE_MODE"] = "identity"
         subprocess.run([str(cli),"init"],cwd=workspace,env=env,check=True,capture_output=True,text=True,timeout=30)
         daemon_env = dict(env); daemon_env.update({"TRACEPRESS_DATABASE":str(state/"tracepress.sqlite3"),"TRACEPRESS_CONTROL_SOCKET":str(state/"tracepress.sock"),"TRACEPRESS_CONTROL_CREDENTIAL":str(state/"control.cred"),"TRACEPRESS_DAEMON_READY":str(state/"daemon.ready")})
@@ -94,10 +94,10 @@ def arm(cli: Path, daemon: Path, repo: Path, name: str, timeout: int) -> dict[st
         remove_worktree(repo, workspace)
 
 def main() -> int:
-    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--repo-root",type=Path,default=Path(__file__).resolve().parents[1]); p.add_argument("--workload-root",type=Path,default=Path("/tmp/tracepress-source-passthrough-aa-001")); p.add_argument("--pairs",type=int,default=1,choices=range(1,11)); p.add_argument("--timeout",type=int,default=180); p.add_argument("--hook-mode",choices=("passthrough","identity"),default="passthrough"); p.add_argument("--output-json",type=Path,required=True); p.add_argument("--output-md",type=Path,required=True); a=p.parse_args()
+    p=argparse.ArgumentParser(description=__doc__); p.add_argument("--repo-root",type=Path,default=Path(__file__).resolve().parents[1]); p.add_argument("--workload-root",type=Path,default=Path("/tmp/tracepress-source-passthrough-aa-001")); p.add_argument("--pairs",type=int,default=1,choices=range(1,11)); p.add_argument("--timeout",type=int,default=180); p.add_argument("--hook-mode",choices=("passthrough","identity","path"),default="passthrough"); p.add_argument("--output-json",type=Path,required=True); p.add_argument("--output-md",type=Path,required=True); a=p.parse_args()
     cli=a.repo_root/"target/debug/tracepress"; daemon=a.repo_root/"target/debug/tracepressd"
     if not cli.exists() or not daemon.exists(): raise RuntimeError("build target/debug/tracepress and target/debug/tracepressd first")
-    treatment = "Passthrough" if a.hook_mode == "passthrough" else "Identity"
+    treatment = {"passthrough": "Passthrough", "identity": "Identity", "path": "Path"}[a.hook_mode]
     repo=checkout(a.workload_root); rows=[]
     for pair in range(a.pairs):
         order = ["Control", treatment] if pair % 2 == 0 else [treatment, "Control"]

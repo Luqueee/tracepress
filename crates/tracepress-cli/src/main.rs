@@ -4443,6 +4443,11 @@ fn temporary_codex_hook_home(
     )
     .map_err(|error| error.to_string())?;
     let executable = std::env::current_exe().map_err(|error| error.to_string())?;
+    let shim_dir = root.join("bin");
+    std::fs::create_dir(&shim_dir).map_err(|error| error.to_string())?;
+    #[cfg(unix)]
+    std::os::unix::fs::symlink(&executable, shim_dir.join("cargo"))
+        .map_err(|error| error.to_string())?;
     let command = format!("{} hook codex", executable.display());
     let hooks = serde_json::json!({"hooks":{"PreToolUse":[{"matcher":"^Bash$","hooks":[{"type":"command","command":command,"timeout":5}]}]}});
     std::fs::write(
@@ -4975,8 +4980,9 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
     if matches!(transport, ProviderTransport::ChatGptCodexSubscription) && is_codex_agent(&agent) {
         configure_codex_subscription(&mut args, proxy_address);
     }
+    let source_hook = std::env::var("TRACEPRESS_SOURCE_HOOK").ok();
     let hook_home = (is_codex_agent(&agent)
-        && std::env::var("TRACEPRESS_SOURCE_HOOK").ok().as_deref() == Some("codex"))
+        && matches!(source_hook.as_deref(), Some("codex") | Some("path")))
     .then(|| temporary_codex_hook_home(config, session.session_id))
     .transpose()?;
     if let Some(home) = hook_home.as_ref() {
@@ -4988,6 +4994,13 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
             "TRACEPRESS_TOOL_BIN",
             std::env::current_exe().map_err(|error| error.to_string())?,
         );
+        if source_hook.as_deref() == Some("path") {
+            let original_path = std::env::var_os("PATH").unwrap_or_default();
+            let joined = std::env::join_paths([home.0.join("bin"), PathBuf::from(original_path)])
+                .map_err(|error| error.to_string())?;
+            let _path = command.env("PATH", joined);
+            let _observe = command.env("TRACEPRESS_HOOK_REWRITE_MODE", "observe");
+        }
     }
     let status_result = command
         .args(args)
@@ -5600,8 +5613,16 @@ fn current_timestamp_us() -> Result<u64, String> {
 
 #[tokio::main]
 async fn main() -> Result<(), String> {
-    let cli = Cli::parse();
+    let invoked_as_cargo = std::env::args_os().next().and_then(|value| PathBuf::from(value)
+        .file_name().map(|name| name == "cargo")).unwrap_or(false);
     let config = Config::load()?;
+    if invoked_as_cargo {
+        let args = std::env::args().skip(1).collect::<Vec<_>>();
+        let mut tool_args = vec!["cargo".to_owned()];
+        tool_args.extend(args);
+        return tool(&config, tool_args);
+    }
+    let cli = Cli::parse();
     match cli.command {
         CommandKind::Init => init(&config).await,
         CommandKind::Doctor => doctor(&config).await,
@@ -5656,9 +5677,10 @@ fn hook(agent: String) -> Result<(), String> {
     let _read = std::io::stdin()
         .read_to_end(&mut input)
         .map_err(|error| format!("cannot read hook input: {error}"))?;
-    let output = if std::env::var("TRACEPRESS_HOOK_REWRITE_MODE").ok().as_deref()
-        == Some("identity")
-    {
+    let mode = std::env::var("TRACEPRESS_HOOK_REWRITE_MODE").ok();
+    let output = if mode.as_deref() == Some("observe") {
+        None
+    } else if mode.as_deref() == Some("identity") {
         codex_pre_tool_use_identity_rewrite(&input)
     } else {
         codex_pre_tool_use_rewrite(&input)

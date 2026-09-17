@@ -23,9 +23,10 @@ make the shim work by weakening the sandbox or approval model.
 
 Codex 0.154's locally generated experimental app-server schema includes native
 `command/exec` requests with a sandbox policy and streamed stdout/stderr output
-notifications. It also models command-approval requests separately. This is a
-promising observation surface because the native command, sandbox, and approval
-lifecycles remain explicit.
+notifications. It also models command-approval requests separately, and exposes
+`item/commandExecution/outputDelta` for agent command-execution output. This is
+a promising observation surface because the native command, sandbox, and
+approval lifecycles remain explicit.
 
 The schema alone does not establish that an app-server client may replace a
 terminal command output while preserving those lifecycles. No app-server client

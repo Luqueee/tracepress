@@ -469,6 +469,64 @@ pub struct OpportunitySummary {
     pub candidate_priority: Option<f64>,
 }
 
+/// Source-side candidate evidence and its separately observed downstream trajectory.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SourceOptimizationSummary {
+    /// Experiment identifier from the bounded public workload.
+    pub experiment_id: String,
+    /// Formal experiment decision.
+    pub decision: String,
+    /// Number of paired control/treatment tasks.
+    pub pairs: u64,
+    /// Only admitted command family in Phase 5.0.
+    pub command_family: String,
+    /// Candidate-only source measurements.
+    pub source: SourceOptimizationSource,
+    /// Provider and trajectory measurements kept separate by arm.
+    pub downstream: Vec<SourceOptimizationArm>,
+}
+
+/// Candidate-only source-output measurements; these are not provider savings.
+#[allow(
+    missing_docs,
+    reason = "field names are the versioned dashboard wire contract"
+)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SourceOptimizationSource {
+    pub executions: u64,
+    pub raw_output_bytes: u64,
+    pub candidate_output_bytes: u64,
+    pub reduction_basis_points: Option<u16>,
+    pub shadow_evaluations: u64,
+    pub never_worse_accepted: u64,
+    pub recovery_rate_basis_points: Option<u16>,
+    pub recovery_hint_bytes: u64,
+    pub reducer_duration_us: u64,
+    pub forwarding_mutations: u64,
+}
+
+/// One experiment arm's downstream provider and trajectory measurements.
+#[allow(
+    missing_docs,
+    reason = "field names are the versioned dashboard wire contract"
+)]
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct SourceOptimizationArm {
+    pub arm: String,
+    pub sessions: u64,
+    pub successful_sessions: u64,
+    pub provider_requests: u64,
+    pub input_total: u64,
+    pub cached_input: u64,
+    pub uncached_input: u64,
+    pub output: u64,
+    pub reasoning: u64,
+    pub tool_calls: u64,
+    pub command_retries: Option<u64>,
+    pub recovery_requests: u64,
+    pub duration_ms: u64,
+}
+
 /// Metadata-only summary of one shadow experiment.
 #[allow(
     missing_docs,

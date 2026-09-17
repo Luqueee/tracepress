@@ -26,7 +26,7 @@ use tracepress_dashboard_types::{
     CompressionExperimentSummary, CompressionHistogramBucket, ContextCategoryStats,
     ContextExplorer, ContextGrowthPoint, MeasurementQuality, Metric as WireMetric, MetricSource,
     OpportunitySummary, Overview, Page, SessionContext, SessionDetail, SessionSummary,
-    UnknownSummary, WorkloadSummary,
+    SourceOptimizationSummary, UnknownSummary, WorkloadSummary,
 };
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
@@ -76,6 +76,7 @@ enum Route {
         #[route("/opportunities")] OpportunitiesPage {},
         #[route("/compression")] CompressionPage {},
         #[route("/compression/:id")] CompressionDetailPage { id: String },
+        #[route("/source-optimization")] SourceOptimizationPage {},
     #[end_layout]
     #[route("/:..route")] NotFoundPage { route: Vec<String> },
 }
@@ -99,6 +100,7 @@ fn Sidebar() -> Element {
             Link { class: "nav-link", to: Route::BaselinesPage {}, "Baselines" }
             Link { class: "nav-link", to: Route::OpportunitiesPage {}, "Opportunities" }
             Link { class: "nav-link", to: Route::CompressionPage {}, "Compression" span { class: "badge success", "Shadow" } }
+            Link { class: "nav-link", to: Route::SourceOptimizationPage {}, "Source Optimization" span { class: "badge warning", "Shadow" } }
         }
     } }
 }
@@ -746,6 +748,65 @@ fn render_opportunities(state: &Option<Result<Vec<OpportunitySummary>, String>>)
                 td { class: "numeric", "{format_decimal(row.persistence)}" } td { class: "numeric", "{format_decimal(row.redundancy)}" } td { class: "numeric", "{format_ratio(row.measurement_confidence)}" } td { class: "numeric", "{format_decimal(row.candidate_priority)}" }
             } } }
         } },
+    }
+}
+
+#[component]
+fn SourceOptimizationPage() -> Element {
+    let resource =
+        use_resource(|| fetch::<SourceOptimizationSummary>("/api/v1/source-optimization"));
+    rsx! { PageHeader { title: "Source Optimization", subtitle: "Candidate output reduction and downstream provider behavior are deliberately separate." }
+        div { class: "page", {render_source_optimization(&resource.read())} }
+    }
+}
+
+fn render_source_optimization(
+    state: &Option<Result<SourceOptimizationSummary, String>>,
+) -> Element {
+    match state {
+        None => rsx! { Skeleton {} },
+        Some(Err(error)) => rsx! { ErrorState { message: error.clone() } },
+        Some(Ok(report)) => rsx! {
+            div { class: "quality-banner", role: "status",
+                Badge { text: "SHADOW ONLY", tone: "warning" }
+                span { class: "spacer-inline", "{report.experiment_id} · {report.pairs} paired tasks · decision {report.decision}" }
+            }
+            div { class: "spacer-top", Card { title: "Source candidate",
+                MetricGroup {
+                    Metric { label: "Command family", value: report.command_family.clone(), source: "allowlisted" }
+                    Metric { label: "Executions", value: compact_u64(report.source.executions), source: "source receipts" }
+                    Metric { label: "Raw output", value: format!("{} B", compact_u64(report.source.raw_output_bytes)), source: "observed" }
+                    Metric { label: "Candidate output", value: format!("{} B", compact_u64(report.source.candidate_output_bytes)), source: "shadow" }
+                    Metric { label: "Source reduction", value: format_basis_points(report.source.reduction_basis_points), source: "candidate only" }
+                    Metric { label: "Never-worse", value: format!("{}/{}", report.source.never_worse_accepted, report.source.shadow_evaluations), source: "accepted/evaluated" }
+                    Metric { label: "Recovery rate", value: format_basis_points(report.source.recovery_rate_basis_points), source: "unavailable in shadow" }
+                    Metric { label: "Reducer time", value: format!("{} µs", compact_u64(report.source.reducer_duration_us)), source: "aggregate" }
+                }
+                div { class: "compact-notice spacer-top",
+                    "Forwarding mutations: {report.source.forwarding_mutations}. Recovery hint bytes are included in candidate size: {report.source.recovery_hint_bytes}."
+                }
+            } }
+            div { class: "spacer-top", Card { title: "Downstream provider and trajectory",
+                DataTable {
+                    thead { tr { th { "Arm" } th { class: "numeric", "Success" } th { class: "numeric", "Provider requests" } th { class: "numeric", "Input" } th { class: "numeric", "Cached" } th { class: "numeric", "Uncached" } th { class: "numeric", "Output" } th { class: "numeric", "Reasoning" } th { class: "numeric", "Tool calls" } th { class: "numeric", "Retries" } th { class: "numeric", "Recoveries" } th { class: "numeric", "Duration" } } }
+                    tbody { for arm in &report.downstream { tr {
+                        td { Badge { text: arm.arm.clone(), tone: if arm.arm == "ExplicitShadow" { "warning" } else { "neutral" } } }
+                        td { class: "numeric", "{arm.successful_sessions}/{arm.sessions}" }
+                        td { class: "numeric mono", "{compact_u64(arm.provider_requests)}" }
+                        td { class: "numeric mono", "{compact_u64(arm.input_total)}" }
+                        td { class: "numeric mono", "{compact_u64(arm.cached_input)}" }
+                        td { class: "numeric mono", "{compact_u64(arm.uncached_input)}" }
+                        td { class: "numeric mono", "{compact_u64(arm.output)}" }
+                        td { class: "numeric mono", "{compact_u64(arm.reasoning)}" }
+                        td { class: "numeric mono", "{compact_u64(arm.tool_calls)}" }
+                        td { class: "numeric mono", "{format_optional_u64(arm.command_retries)}" }
+                        td { class: "numeric mono", "{compact_u64(arm.recovery_requests)}" }
+                        td { class: "numeric mono", "{compact_u64(arm.duration_ms)} ms" }
+                    } } }
+                }
+                p { class: "muted spacer-top", "The agent received raw output in both arms. Provider deltas are trajectory observations, not claimed savings." }
+            } }
+        },
     }
 }
 

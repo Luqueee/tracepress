@@ -19,6 +19,7 @@ use std::os::unix::fs::{OpenOptionsExt as _, PermissionsExt as _};
 use std::{
     collections::{BTreeMap, BTreeSet, HashMap, VecDeque},
     future::Future,
+    io::{BufRead as _, Read as _, Write as _},
     path::PathBuf,
     process::Stdio,
     sync::{
@@ -4989,7 +4990,7 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
     }
     let source_hook = std::env::var("TRACEPRESS_SOURCE_HOOK").ok();
     let hook_home = (is_codex_agent(&agent)
-        && matches!(source_hook.as_deref(), Some("codex") | Some("path")))
+        && matches!(source_hook.as_deref(), Some("codex" | "path")))
     .then(|| temporary_codex_hook_home(config, session.session_id))
     .transpose()?;
     if let Some(home) = hook_home.as_ref() {
@@ -5634,7 +5635,7 @@ async fn main() -> Result<(), String> {
         let args = std::env::args().skip(1).collect::<Vec<_>>();
         let mut tool_args = vec!["cargo".to_owned()];
         tool_args.extend(args);
-        return tool(&config, tool_args);
+        return tool(&config, &tool_args);
     }
     let cli = Cli::parse();
     match cli.command {
@@ -5677,14 +5678,17 @@ async fn main() -> Result<(), String> {
         }
         CommandKind::Run { agent, args } => run_agent(&config, agent, args).await,
         CommandKind::Proxy => proxy().await,
-        CommandKind::Tool { args } => tool(&config, args),
-        CommandKind::Hook { agent } => hook(agent),
+        CommandKind::Tool { args } => tool(&config, &args),
+        CommandKind::Hook { agent } => hook(&agent),
         CommandKind::CodexObserve { command_smoke } => codex_observe(command_smoke),
     }
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "the bounded experimental observer keeps its protocol lifecycle in one auditable scope"
+)]
 fn codex_observe(command_smoke: bool) -> Result<(), String> {
-    use std::io::{BufRead as _, Write as _};
     let mut child = std::process::Command::new("codex")
         .args(["app-server", "--stdio"])
         .stdin(std::process::Stdio::piped())
@@ -5733,7 +5737,8 @@ fn codex_observe(command_smoke: bool) -> Result<(), String> {
         let event: serde_json::Value =
             serde_json::from_str(&line).map_err(|error| error.to_string())?;
         if let Some(method) = event.get("method").and_then(serde_json::Value::as_str) {
-            *event_counts.entry(method.to_owned()).or_default() += 1;
+            let count = event_counts.entry(method.to_owned()).or_default();
+            *count = count.saturating_add(1);
         }
         if event.get("id").and_then(serde_json::Value::as_u64) == Some(2) {
             break event
@@ -5761,13 +5766,15 @@ fn codex_observe(command_smoke: bool) -> Result<(), String> {
             turn_started = event.get("result").is_some();
         }
         if let Some(method) = event.get("method").and_then(serde_json::Value::as_str) {
-            *event_counts.entry(method.to_owned()).or_default() += 1;
+            let count = event_counts.entry(method.to_owned()).or_default();
+            *count = count.saturating_add(1);
             if matches!(method, "item/started" | "item/completed")
                 && let Some(item_type) = event
                     .pointer("/params/item/type")
                     .and_then(serde_json::Value::as_str)
             {
-                *item_types.entry(item_type.to_owned()).or_default() += 1;
+                let count = item_types.entry(item_type.to_owned()).or_default();
+                *count = count.saturating_add(1);
                 if item_type == "commandExecution" && method == "item/completed" {
                     aggregated_output_chars = aggregated_output_chars.saturating_add(
                         event
@@ -5798,11 +5805,10 @@ fn codex_observe(command_smoke: bool) -> Result<(), String> {
     Ok(())
 }
 
-fn hook(agent: String) -> Result<(), String> {
+fn hook(agent: &str) -> Result<(), String> {
     if agent != "codex" {
         return Err("only the Codex hook adapter is supported".to_owned());
     }
-    use std::io::Read as _;
     let mut input = Vec::new();
     let _read = std::io::stdin()
         .read_to_end(&mut input)
@@ -5817,7 +5823,6 @@ fn hook(agent: String) -> Result<(), String> {
     };
     let _recorded = record_hook_event(&input, output.is_some());
     if let Some(output) = output {
-        use std::io::Write as _;
         std::io::stdout()
             .write_all(&output)
             .map_err(|error| format!("cannot write hook output: {error}"))?;
@@ -5841,7 +5846,6 @@ fn record_hook_event(input: &[u8], rewritten: bool) -> Result<(), String> {
     let _options = options.create(true).append(true);
     #[cfg(unix)]
     let _mode = options.mode(0o600);
-    use std::io::Write as _;
     let mut file = options
         .open(root.join("hook-events.jsonl"))
         .map_err(|error| error.to_string())?;
@@ -5849,7 +5853,7 @@ fn record_hook_event(input: &[u8], rewritten: bool) -> Result<(), String> {
     file.write_all(b"\n").map_err(|error| error.to_string())
 }
 
-fn tool(config: &Config, args: Vec<String>) -> Result<(), String> {
+fn tool(config: &Config, args: &[String]) -> Result<(), String> {
     let command = args.join(" ");
     let ids = UuidV7Generator::new();
     let (stdout, stderr, metadata) = execute_passthrough(&command, &ids)
@@ -5857,7 +5861,6 @@ fn tool(config: &Config, args: Vec<String>) -> Result<(), String> {
     let shadow = (std::env::var("TRACEPRESS_SOURCE_REDUCER").ok().as_deref()
         == Some("cargo_test_v1_shadow"))
     .then(|| cargo_test_v1_shadow(&stdout, &stderr));
-    use std::io::Write as _;
     std::io::stdout()
         .write_all(&stdout)
         .map_err(|error| error.to_string())?;
@@ -5932,7 +5935,6 @@ fn record_source_execution(
     let _options = options.create(true).append(true);
     #[cfg(unix)]
     let _mode = options.mode(0o600);
-    use std::io::Write as _;
     let mut output = options.open(path).map_err(|error| error.to_string())?;
     serde_json::to_writer(&mut output, &record).map_err(|error| error.to_string())?;
     output.write_all(b"\n").map_err(|error| error.to_string())

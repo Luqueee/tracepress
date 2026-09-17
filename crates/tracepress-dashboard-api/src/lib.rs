@@ -22,6 +22,7 @@
 mod baseline;
 mod db;
 mod fixture;
+mod source;
 
 use std::{
     net::{IpAddr, Ipv4Addr, SocketAddr},
@@ -48,7 +49,7 @@ use tracepress_dashboard_types::{
     ApiError, ApiErrorResponse, BaselineDetail, BaselineSummary, CompressionCandidateSummary,
     CompressionExperimentDetail, CompressionExperimentSummary, ContextExplorer, OpportunitySummary,
     Overview, Page, ProviderRequestSummary, SessionContext, SessionDetail, SessionSummary,
-    UnknownSummary, WorkloadSummary,
+    SourceOptimizationSummary, UnknownSummary, WorkloadSummary,
 };
 
 /// Default local-only Observatory port.
@@ -209,6 +210,7 @@ pub fn router(database_path: PathBuf, reports_path: PathBuf) -> Router {
         .route("/baselines", get(baselines))
         .route("/baselines/{id}", get(baseline_detail))
         .route("/opportunities", get(opportunities))
+        .route("/source-optimization", get(source_optimization))
         .route("/compression/experiments", get(compression_experiments))
         .route("/compression/experiments/{id}", get(compression_experiment))
         .route(
@@ -447,6 +449,18 @@ async fn opportunities(
         .map_err(|_error| ApiFailure::Internal)
 }
 
+async fn source_optimization(
+    State(state): State<AppState>,
+) -> Result<Json<SourceOptimizationSummary>, ApiFailure> {
+    source::load(&state.reports_path)
+        .map_err(|_error| ApiFailure::Internal)?
+        .map(Json)
+        .ok_or(ApiFailure::NotFound(
+            "source_optimization_not_found",
+            "Source optimization evidence was not found",
+        ))
+}
+
 async fn compression_experiments(
     State(state): State<AppState>,
 ) -> Result<Json<Vec<CompressionExperimentSummary>>, ApiFailure> {
@@ -546,7 +560,7 @@ mod tests {
     use tower::ServiceExt as _;
     use tracepress_dashboard_types::{
         CompressionCandidateSummary, CompressionExperimentDetail, CompressionExperimentSummary,
-        Overview, Page, SessionSummary,
+        Overview, Page, SessionSummary, SourceOptimizationSummary,
     };
 
     use super::{db, fixture_database, router};
@@ -730,6 +744,25 @@ mod tests {
             serde_json::from_slice(&body).expect("compression candidates JSON");
         assert_eq!(page.items.len(), 2);
         assert_eq!(page.next_cursor.as_deref(), Some("2"));
+    }
+
+    #[tokio::test]
+    async fn source_optimization_keeps_candidate_and_provider_metrics_separate() {
+        let (status, body) = response("/api/v1/source-optimization", false).await;
+        assert_eq!(status, StatusCode::OK);
+        let report: SourceOptimizationSummary =
+            serde_json::from_slice(&body).expect("source optimization JSON");
+        assert_eq!(report.command_family, "cargo_test");
+        assert!(report.source.raw_output_bytes > report.source.candidate_output_bytes);
+        assert_eq!(report.source.forwarding_mutations, 0);
+        assert_eq!(report.source.recovery_rate_basis_points, None);
+        assert_eq!(report.downstream.len(), 2);
+        assert!(
+            report
+                .downstream
+                .iter()
+                .all(|arm| arm.sessions == arm.successful_sessions)
+        );
     }
 
     #[test]

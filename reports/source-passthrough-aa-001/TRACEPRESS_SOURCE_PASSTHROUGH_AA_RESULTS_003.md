@@ -13,7 +13,8 @@ Treatment made 23. Treatment recorded 342,947 total provider input tokens
 not attributable to a reducer because output forwarding was passthrough. It is
 therefore invalid to characterize these deltas as savings.
 
-Phase 5.0 must diagnose this wrapper-induced trajectory difference before
-Shadow Source Mode or `cargo_test_v1` can be enabled. The runner now carries
-allowlisted emitted-byte totals forward for that diagnosis; it still persists
-no commands, paths, stdout, stderr, prompts, or provider bodies.
+Follow-up source-byte telemetry found that a shared `CARGO_TARGET_DIR` could
+survive worktree isolation. Results 003 therefore remain rejected and are not
+evidence of a wrapper-induced trajectory difference. The runner now creates a
+target directory inside every ephemeral arm state; it still persists no
+commands, paths, stdout, stderr, prompts, or provider bodies.

@@ -5,7 +5,11 @@ use tracepress_dashboard_types::{
     SourceOptimizationArm, SourceOptimizationSource, SourceOptimizationSummary,
 };
 
-const REPORTS: [(&str, &str); 6] = [
+const REPORTS: [(&str, &str); 7] = [
+    (
+        "source-rg-active-001",
+        "TRACEPRESS_RG_ACTIVE_PARSEABLE_RESULTS_001.json",
+    ),
     (
         "source-cargo-check-active-001",
         "TRACEPRESS_CHECK_V2_ACTIVE_SUCCESS_RESULTS_001.json",
@@ -48,6 +52,7 @@ pub(crate) fn load(root: &Path) -> io::Result<Option<SourceOptimizationSummary>>
         .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "source report has no rows"))?;
     let reducer = report.get("reducer").and_then(Value::as_str);
     let (active, treatment_name, control_name, command_family) = match reducer {
+        Some("explicit-rg-active") => (true, "ExplicitRgActive", "ExplicitRgActiveControl", "rg"),
         Some("explicit-check-active-v2") => (
             true,
             "ExplicitCheckV2Active",

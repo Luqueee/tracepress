@@ -26,6 +26,8 @@ and intentionally do not include prompts, paths, tool arguments, raw results, or
 | `cargo_clippy_v1` Shadow | Pinned public `cargo clippy` paired smoke | Candidate -0.99%; 134,972 of 136,328 bytes remained because safe diagnostics dominated output | Reject active pilot and stop before N=10; do not add lossy grouping/dedup without a new evidence gate |
 | `rg_v1` ambiguous Shadow smoke | Pinned public `rg -n fn crates` paired smoke | Four of 2,981 lines had multiple numeric-colon boundaries; whole stream returned raw-equivalent | Correct fail-closed behavior; retain as an active safety workload |
 | `rg_v1` parseable Shadow | Pinned public `rg -n struct crates` N=10 paired | Lossless grouping candidate -31.19%, task success 10/10, no retries, raw still forwarded | Accept candidate for a separate active pilot; provider deltas are non-causal A/A noise |
+| `rg_v1_active` ambiguous safety cohort | Pinned public ambiguous-output workload N=10 paired | 10/10 whole-stream fail-open, byte-exact raw emission, no mutations, retries, or recoveries | Accept safety behavior; do not attribute provider A/A deltas to the reducer |
+| `rg_v1_active` parseable cohort | Pinned public parseable workload N=10 paired | Source -30.65%, uncached input -23.93% aggregate, paired median -8.5, task success 10/10, no retries or recalls | Accepted for this workload behind explicit opt-in; default remains passthrough |
 
 The evidence is workload-scoped. It closes generic deterministic/provider-readable expansion for
 the current cohorts; it does not claim that every future tool-family policy is impossible.

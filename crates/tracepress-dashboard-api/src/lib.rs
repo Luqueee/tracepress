@@ -752,7 +752,7 @@ mod tests {
         assert_eq!(status, StatusCode::OK);
         let report: SourceOptimizationSummary =
             serde_json::from_slice(&body).expect("source optimization JSON");
-        assert_eq!(report.command_family, "cargo_check");
+        assert_eq!(report.command_family, "rg");
         assert!(report.source.raw_output_bytes > report.source.candidate_output_bytes);
         assert!(report.provider_effect_active);
         assert_eq!(report.mode, "active_pilot");

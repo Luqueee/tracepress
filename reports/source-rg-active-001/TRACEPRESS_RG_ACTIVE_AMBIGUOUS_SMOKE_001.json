@@ -1,0 +1,451 @@
+{
+  "analysis": {
+    "active_gate": true,
+    "arms": {
+      "ExplicitRgActive": {
+        "active_evaluations": {
+          "median": 1,
+          "total": 1
+        },
+        "candidate_bytes": {
+          "median": 228262,
+          "total": 228262
+        },
+        "command_retries": {
+          "median": 0,
+          "total": 0
+        },
+        "duration_ms": {
+          "median": 10850,
+          "total": 10850
+        },
+        "estimated_candidate_tokens": {
+          "median": 57066,
+          "total": 57066
+        },
+        "estimated_raw_tokens": {
+          "median": 57066,
+          "total": 57066
+        },
+        "fail_open_executions": {
+          "median": 1,
+          "total": 1
+        },
+        "forwarding_mutations": {
+          "median": 0,
+          "total": 0
+        },
+        "grouped_match_lines": {
+          "median": 0,
+          "total": 0
+        },
+        "never_worse_accepted": {
+          "median": 0,
+          "total": 0
+        },
+        "provider_errors": {
+          "median": 0,
+          "total": 0
+        },
+        "provider_requests": {
+          "median": 2,
+          "total": 2
+        },
+        "provider_usage": {
+          "input_cached": 31232,
+          "input_total": 60467,
+          "input_uncached": 29235,
+          "output": 148,
+          "reasoning": 44
+        },
+        "recovered_bytes": {
+          "median": 0,
+          "total": 0
+        },
+        "recovery_hint_bytes": {
+          "median": 0,
+          "total": 0
+        },
+        "recovery_requests": {
+          "median": 0,
+          "total": 0
+        },
+        "reducer_duration_us": {
+          "median": 2806,
+          "total": 2806
+        },
+        "runs": 1,
+        "shadow_evaluations": {
+          "median": 0,
+          "total": 0
+        },
+        "source_emitted_bytes": {
+          "median": 228262,
+          "total": 228262
+        },
+        "source_executions": {
+          "median": 1,
+          "total": 1
+        },
+        "source_ids_present": {
+          "median": 1,
+          "total": 1
+        },
+        "source_sessions_linked": {
+          "median": 1,
+          "total": 1
+        },
+        "source_stderr_bytes": {
+          "median": 0,
+          "total": 0
+        },
+        "source_stdout_bytes": {
+          "median": 228262,
+          "total": 228262
+        },
+        "source_successful_executions": {
+          "median": 1,
+          "total": 1
+        },
+        "successful_runs": 1,
+        "task_success": 1,
+        "timed_out_runs": 0,
+        "tool_calls": {
+          "median": 1,
+          "total": 1
+        }
+      },
+      "ExplicitRgActiveControl": {
+        "active_evaluations": {
+          "median": 0,
+          "total": 0
+        },
+        "candidate_bytes": {
+          "median": 0,
+          "total": 0
+        },
+        "command_retries": {
+          "median": 0,
+          "total": 0
+        },
+        "duration_ms": {
+          "median": 10973,
+          "total": 10973
+        },
+        "estimated_candidate_tokens": {
+          "median": 0,
+          "total": 0
+        },
+        "estimated_raw_tokens": {
+          "median": 0,
+          "total": 0
+        },
+        "fail_open_executions": {
+          "median": 0,
+          "total": 0
+        },
+        "forwarding_mutations": {
+          "median": 0,
+          "total": 0
+        },
+        "grouped_match_lines": {
+          "median": 0,
+          "total": 0
+        },
+        "never_worse_accepted": {
+          "median": 0,
+          "total": 0
+        },
+        "provider_errors": {
+          "median": 0,
+          "total": 0
+        },
+        "provider_requests": {
+          "median": 2,
+          "total": 2
+        },
+        "provider_usage": {
+          "input_cached": 44544,
+          "input_total": 50646,
+          "input_uncached": 6102,
+          "output": 121,
+          "reasoning": 45
+        },
+        "recovered_bytes": {
+          "median": 0,
+          "total": 0
+        },
+        "recovery_hint_bytes": {
+          "median": 0,
+          "total": 0
+        },
+        "recovery_requests": {
+          "median": 0,
+          "total": 0
+        },
+        "reducer_duration_us": {
+          "median": 0,
+          "total": 0
+        },
+        "runs": 1,
+        "shadow_evaluations": {
+          "median": 0,
+          "total": 0
+        },
+        "source_emitted_bytes": {
+          "median": 228262,
+          "total": 228262
+        },
+        "source_executions": {
+          "median": 1,
+          "total": 1
+        },
+        "source_ids_present": {
+          "median": 1,
+          "total": 1
+        },
+        "source_sessions_linked": {
+          "median": 1,
+          "total": 1
+        },
+        "source_stderr_bytes": {
+          "median": 0,
+          "total": 0
+        },
+        "source_stdout_bytes": {
+          "median": 228262,
+          "total": 228262
+        },
+        "source_successful_executions": {
+          "median": 1,
+          "total": 1
+        },
+        "successful_runs": 1,
+        "task_success": 1,
+        "timed_out_runs": 0,
+        "tool_calls": {
+          "median": 1,
+          "total": 1
+        }
+      }
+    },
+    "control_arm": "ExplicitRgActiveControl",
+    "decision": "pass",
+    "interpretation": "active_fail_open_safety",
+    "invariant_gate": true,
+    "paired_treatment_minus_control": {
+      "duration_ms": {
+        "max": -123,
+        "median": -123,
+        "min": -123,
+        "negative": 1,
+        "positive": 0,
+        "values": [
+          -123
+        ],
+        "zero": 0
+      },
+      "provider_requests": {
+        "max": 0,
+        "median": 0,
+        "min": 0,
+        "negative": 0,
+        "positive": 0,
+        "values": [
+          0
+        ],
+        "zero": 1
+      },
+      "provider_usage.input_cached": {
+        "max": -13312,
+        "median": -13312,
+        "min": -13312,
+        "negative": 1,
+        "positive": 0,
+        "values": [
+          -13312
+        ],
+        "zero": 0
+      },
+      "provider_usage.input_total": {
+        "max": 9821,
+        "median": 9821,
+        "min": 9821,
+        "negative": 0,
+        "positive": 1,
+        "values": [
+          9821
+        ],
+        "zero": 0
+      },
+      "provider_usage.input_uncached": {
+        "max": 23133,
+        "median": 23133,
+        "min": 23133,
+        "negative": 0,
+        "positive": 1,
+        "values": [
+          23133
+        ],
+        "zero": 0
+      },
+      "provider_usage.output": {
+        "max": 27,
+        "median": 27,
+        "min": 27,
+        "negative": 0,
+        "positive": 1,
+        "values": [
+          27
+        ],
+        "zero": 0
+      },
+      "provider_usage.reasoning": {
+        "max": -1,
+        "median": -1,
+        "min": -1,
+        "negative": 1,
+        "positive": 0,
+        "values": [
+          -1
+        ],
+        "zero": 0
+      }
+    },
+    "positive_gate": null,
+    "shadow_gate": null,
+    "source_candidate_reduction": 0.0,
+    "treatment_arm": "ExplicitRgActive"
+  },
+  "assignment": "session_level",
+  "experiment_id": "source-rg-active-ambiguous-001",
+  "forwarding_mutation": false,
+  "infrastructure_gate": {
+    "decision": "instrumentation_valid",
+    "source_execution_per_passthrough_session": true
+  },
+  "pairs": 1,
+  "phase": "5.6",
+  "privacy": {
+    "commands_persisted": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false
+  },
+  "reducer": "explicit-rg-active",
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "rows": [
+    {
+      "active_evaluations": 0,
+      "actual_outcome": "passed",
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitRgActiveControl",
+      "candidate_bytes": 0,
+      "command_retries": 0,
+      "duration_ms": 10973,
+      "estimated_candidate_tokens": 0,
+      "estimated_raw_tokens": 0,
+      "fail_open_executions": 0,
+      "forwarding_mutations": 0,
+      "grouped_match_lines": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 44544,
+        "input_total": 50646,
+        "input_uncached": 6102,
+        "output": 121,
+        "reasoning": 45
+      },
+      "recovered_bytes": 0,
+      "recovery_hint_bytes": 0,
+      "recovery_requests": 0,
+      "reducer_duration_us": 0,
+      "reported_outcome": "passed",
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 228262,
+      "source_executions": 1,
+      "source_exit_status_counts": {
+        "nonzero": 0,
+        "signal": 0,
+        "success": 1,
+        "unknown": 0
+      },
+      "source_ids_present": 1,
+      "source_sessions_linked": 1,
+      "source_stderr_bytes": 0,
+      "source_stdout_bytes": 228262,
+      "source_successful_executions": 1,
+      "task_success": true,
+      "timed_out": false,
+      "tool_calls": 1
+    },
+    {
+      "active_evaluations": 1,
+      "actual_outcome": "passed",
+      "agent_error_class": null,
+      "agent_exit_status_class": "success",
+      "arm": "ExplicitRgActive",
+      "candidate_bytes": 228262,
+      "command_retries": 0,
+      "duration_ms": 10850,
+      "estimated_candidate_tokens": 57066,
+      "estimated_raw_tokens": 57066,
+      "fail_open_executions": 1,
+      "forwarding_mutations": 0,
+      "grouped_match_lines": 0,
+      "hook_events": 0,
+      "hook_rewrites": 0,
+      "never_worse_accepted": 0,
+      "omitted_passing_tests": 0,
+      "omitted_progress_lines": 0,
+      "provider_errors": 0,
+      "provider_requests": 2,
+      "provider_usage": {
+        "input_cached": 31232,
+        "input_total": 60467,
+        "input_uncached": 29235,
+        "output": 148,
+        "reasoning": 44
+      },
+      "recovered_bytes": 0,
+      "recovery_hint_bytes": 0,
+      "recovery_requests": 0,
+      "reducer_duration_us": 2806,
+      "reported_outcome": "passed",
+      "shadow_evaluations": 0,
+      "source_emitted_bytes": 228262,
+      "source_executions": 1,
+      "source_exit_status_counts": {
+        "nonzero": 0,
+        "signal": 0,
+        "success": 1,
+        "unknown": 0
+      },
+      "source_ids_present": 1,
+      "source_sessions_linked": 1,
+      "source_stderr_bytes": 0,
+      "source_stdout_bytes": 228262,
+      "source_successful_executions": 1,
+      "task_success": true,
+      "timed_out": false,
+      "tool_calls": 1
+    }
+  ],
+  "scenario": "ambiguous",
+  "status": "completed",
+  "workload_isolation": {
+    "arm_order": "alternating",
+    "per_arm_cargo_target_dir": true,
+    "per_arm_clean_git_worktree": true,
+    "rust_test_threads": 1
+  }
+}

@@ -503,9 +503,11 @@ fn rg_match_parts(line: &str) -> Option<(&str, &str, &str)> {
     found
 }
 
-/// Groups lossless `rg -n` matches under file headers without capping or truncating content.
-#[must_use]
-pub fn rg_v1_shadow(stdout: &[u8], stderr: &[u8]) -> SourceOutputCandidate {
+fn rg_v1_candidate(
+    stdout: &[u8],
+    stderr: &[u8],
+    active_recovery_command: Option<&str>,
+) -> SourceOutputCandidate {
     let started = Instant::now();
     let raw_bytes = u64::try_from(stdout.len().saturating_add(stderr.len())).unwrap_or(u64::MAX);
     let parsed = std::str::from_utf8(stdout).ok().and_then(|stdout| {
@@ -531,10 +533,24 @@ pub fn rg_v1_shadow(stdout: &[u8], stderr: &[u8]) -> SourceOutputCandidate {
         }
         (grouped_match_lines > 0).then_some((candidate, grouped_match_lines))
     });
-    let (candidate_stdout, grouped_match_lines, applicable) = parsed.map_or_else(
+    let (mut candidate_stdout, grouped_match_lines, applicable) = parsed.map_or_else(
         || (stdout.to_vec(), 0, false),
         |(candidate, lines)| (candidate, lines, true),
     );
+    let recovery_hint_bytes = if applicable {
+        active_recovery_command.map_or(0, |command| {
+            let hint = format!(
+                "[Tracepress: grouped {grouped_match_lines} matches by file. Exact output: {command}]\n"
+            );
+            let hint_bytes = u64::try_from(hint.len()).unwrap_or(u64::MAX);
+            let mut prefixed = hint.into_bytes();
+            prefixed.append(&mut candidate_stdout);
+            candidate_stdout = prefixed;
+            hint_bytes
+        })
+    } else {
+        0
+    };
     let candidate_stderr = stderr.to_vec();
     let candidate_bytes = u64::try_from(
         candidate_stdout
@@ -557,11 +573,23 @@ pub fn rg_v1_shadow(stdout: &[u8], stderr: &[u8]) -> SourceOutputCandidate {
         omitted_passing_tests: 0,
         omitted_progress_lines: 0,
         grouped_match_lines,
-        recovery_hint_bytes: 0,
+        recovery_hint_bytes,
         reducer_duration: started.elapsed(),
         applicable,
         never_worse_accepted,
     }
+}
+
+/// Groups lossless `rg -n` matches under file headers without capping or truncating content.
+#[must_use]
+pub fn rg_v1_shadow(stdout: &[u8], stderr: &[u8]) -> SourceOutputCandidate {
+    rg_v1_candidate(stdout, stderr, None)
+}
+
+/// Evaluates active `rg_v1` with exact raw-output recovery included in never-worse.
+#[must_use]
+pub fn rg_v1_active(stdout: &[u8], stderr: &[u8], recovery_command: &str) -> SourceOutputCandidate {
+    rg_v1_candidate(stdout, stderr, Some(recovery_command))
 }
 
 /// Executes a previously admitted simple command without filtering its bytes.
@@ -888,5 +916,39 @@ mod tests {
         assert!(!candidate.applicable);
         assert!(!candidate.never_worse_accepted);
         assert_eq!(candidate.candidate_stdout, stdout);
+    }
+
+    #[test]
+    fn rg_active_counts_exact_recovery_hint_in_never_worse() {
+        use std::fmt::Write as _;
+        let mut stdout = String::new();
+        for index in 1..=12 {
+            let _written = writeln!(
+                &mut stdout,
+                "crates/tracepress-example/src/lib.rs:{index}:struct Item{index};"
+            );
+        }
+        let candidate = rg_v1_active(stdout.as_bytes(), b"", "tracepress recall deadbeef");
+        let text = String::from_utf8_lossy(&candidate.candidate_stdout);
+        assert!(candidate.never_worse_accepted);
+        assert!(text.contains("tracepress recall deadbeef"));
+        assert_eq!(
+            candidate.recovery_hint_bytes,
+            u64::try_from(text.lines().next().map_or(0, |line| line.len() + 1)).unwrap_or(u64::MAX)
+        );
+    }
+
+    #[test]
+    fn rg_active_ambiguous_output_fails_open_without_recovery_hint() {
+        let stdout = b"path:12:value:34:other\n";
+        let candidate = rg_v1_active(stdout, b"diagnostic\n", "tracepress recall deadbeef");
+        assert!(!candidate.applicable);
+        assert!(!candidate.never_worse_accepted);
+        assert_eq!(candidate.recovery_hint_bytes, 0);
+        assert_eq!(candidate.candidate_stdout, stdout);
+        assert_eq!(candidate.candidate_stderr, b"diagnostic\n");
+        assert!(
+            !String::from_utf8_lossy(&candidate.candidate_stdout).contains("tracepress recall")
+        );
     }
 }

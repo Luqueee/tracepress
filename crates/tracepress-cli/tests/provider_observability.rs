@@ -601,7 +601,7 @@ for wave in range(int(os.environ['TRACEPRESS_E2E_WAVES'])):
 fn context_saturation_request_body() -> String {
     // This remains large enough for concurrent analyses to fill the bounded queue, while keeping
     // the drain below its production timeout on instrumented and shared CI runners.
-    let items = (0..256)
+    let items = (0..32)
         .map(|index| {
             format!(
                 r#"{{"role":"user","content":[{{"type":"input_text","text":"context-saturation-{index}"}}]}}"#

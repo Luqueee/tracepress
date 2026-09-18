@@ -161,6 +161,41 @@ pub struct Overview {
     pub quality: MeasurementQuality,
 }
 
+/// Metadata-only Shadow characterization of the tool-definition surface.
+#[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
+pub struct ToolSurfaceSummary {
+    /// Phase 6.0 never modifies provider requests.
+    pub mode: String,
+    /// Always false in Phase 6.0.
+    pub provider_effect_active: bool,
+    /// Latest context snapshots included in the characterization.
+    pub requests_observed: u64,
+    /// Snapshots carrying tool/schema aggregate metrics.
+    pub schema_observations: u64,
+    /// Coverage of schema aggregates over observed requests.
+    pub schema_observation_coverage_basis_points: Option<u16>,
+    /// Tool definitions exposed across observed requests.
+    pub tool_definitions_exposed: Metric<u64>,
+    /// Raw bytes occupied by observed tool schemas.
+    pub schema_bytes: Metric<u64>,
+    /// Locally estimated tokens occupied by observed tool schemas.
+    pub estimated_schema_tokens: Metric<u64>,
+    /// Locally estimated schema tokens repeated from earlier snapshots.
+    pub repeated_schema_tokens: Metric<u64>,
+    /// Repeated share within locally estimated schema tokens.
+    pub repeated_schema_share_basis_points: Option<u16>,
+    /// Tool-call blocks observed in explicit request context.
+    pub tool_calls_observed: u64,
+    /// Distinct session-scoped definition identities; identity material is never returned.
+    pub distinct_defined_tools: Option<u64>,
+    /// Distinct session-scoped used-tool identities; identity material is never returned.
+    pub distinct_used_tools: Option<u64>,
+    /// Conservative definition identities with no matching call in the same session.
+    pub unused_tools_lower_bound: Option<u64>,
+    /// Provider-reported usage retained separately from local schema estimates.
+    pub provider_usage: UsageSummary,
+}
+
 /// Compact session row.
 #[derive(Clone, Debug, Deserialize, PartialEq, Serialize)]
 pub struct SessionSummary {

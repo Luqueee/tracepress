@@ -49,7 +49,7 @@ use tracepress_dashboard_types::{
     ApiError, ApiErrorResponse, BaselineDetail, BaselineSummary, CompressionCandidateSummary,
     CompressionExperimentDetail, CompressionExperimentSummary, ContextExplorer, OpportunitySummary,
     Overview, Page, ProviderRequestSummary, SessionContext, SessionDetail, SessionSummary,
-    SourceOptimizationSummary, UnknownSummary, WorkloadSummary,
+    SourceOptimizationSummary, ToolSurfaceSummary, UnknownSummary, WorkloadSummary,
 };
 
 /// Default local-only Observatory port.
@@ -199,6 +199,7 @@ pub fn router(database_path: PathBuf, reports_path: PathBuf) -> Router {
     };
     let api = Router::new()
         .route("/overview", get(overview))
+        .route("/tool-surface", get(tool_surface))
         .route("/sessions", get(sessions))
         .route("/sessions/{id}", get(session_detail))
         .route("/sessions/{id}/requests", get(session_requests))
@@ -453,6 +454,14 @@ async fn opportunities(
         .map_err(|_error| ApiFailure::Internal)
 }
 
+async fn tool_surface(
+    State(state): State<AppState>,
+) -> Result<Json<ToolSurfaceSummary>, ApiFailure> {
+    db::run(state.database_path, db::tool_surface)
+        .await
+        .map(Json)
+}
+
 async fn source_optimization(
     State(state): State<AppState>,
 ) -> Result<Json<SourceOptimizationSummary>, ApiFailure> {
@@ -572,7 +581,7 @@ mod tests {
     use tower::ServiceExt as _;
     use tracepress_dashboard_types::{
         CompressionCandidateSummary, CompressionExperimentDetail, CompressionExperimentSummary,
-        Overview, Page, SessionSummary, SourceOptimizationSummary,
+        Overview, Page, SessionSummary, SourceOptimizationSummary, ToolSurfaceSummary,
     };
 
     use super::{db, fixture_database, router};
@@ -636,6 +645,220 @@ mod tests {
         for forbidden in ["authorization", "cookie", "raw_usage_json", "request_body"] {
             assert!(!text.contains(forbidden));
         }
+    }
+
+    #[tokio::test]
+    async fn tool_surface_is_metadata_only_shadow_evidence() {
+        let (status, body) = response("/api/v1/tool-surface", false).await;
+        assert_eq!(status, StatusCode::OK);
+        let summary: ToolSurfaceSummary = serde_json::from_slice(&body).expect("tool surface JSON");
+        assert_eq!(summary.mode, "shadow");
+        assert!(!summary.provider_effect_active);
+        assert_eq!(summary.requests_observed, 16);
+        assert_eq!(summary.schema_observations, 0);
+        assert_eq!(summary.provider_usage.input_tokens.value, Some(24_400));
+        let text = String::from_utf8(body).expect("UTF-8 JSON");
+        for forbidden in ["tool_name", "tool_name_hash", "schema_body", "arguments"] {
+            assert!(!text.contains(forbidden));
+        }
+    }
+
+    #[tokio::test]
+    async fn tool_surface_separates_schema_exposure_usage_and_unused_lower_bound() {
+        let fixture = fixture_database(false).expect("create synthetic fixture");
+        let connection = rusqlite::Connection::open(fixture.path()).expect("fixture writer");
+        let _rows = connection
+            .execute(
+                "UPDATE context_snapshots
+                 SET status = 'complete', explicit_request_complete = 1,
+                     logical_context_status = 'complete', correlation_status = 'correlated'",
+                [],
+            )
+            .expect("seed complete context cohort");
+        let _rows = connection
+            .execute(
+                "UPDATE context_analysis_metrics
+                 SET tool_count = 3, schema_bytes = 1200,
+                     estimated_schema_tokens = 300, repeated_schema_tokens = 200",
+                [],
+            )
+            .expect("seed schema aggregates");
+        connection
+            .execute_batch(
+                "INSERT INTO sessions VALUES (
+                    '00000000-0000-7000-8000-999999999999',
+                    '2026-09-13T13:00:00Z','2026-09-13T13:00:01Z','complete','fixture-extra'
+                 );
+                 INSERT INTO operations VALUES (
+                    'tool-surface-extra-operation',
+                    '00000000-0000-7000-8000-999999999999',
+                    'inference','2026-09-13T13:00:00Z','2026-09-13T13:00:01Z','complete'
+                 );
+                 INSERT INTO provider_requests(
+                    operation_id,request_id,route,method,request_bytes,provider,protocol,
+                    observation_status,model,reasoning_effort,transport,legacy_request_kind,
+                    request_kind
+                 ) VALUES (
+                    'tool-surface-extra-operation','tool-surface-extra-request','/responses','POST',
+                    1024,'openai','responses','complete','gpt-5','high',
+                    'chatgpt_codex_subscription','turn','turn'
+                 );
+                 INSERT INTO provider_attempts(
+                    attempt_id,request_id,ordinal,status_code,started_at,ended_at,status,duration_us
+                 ) VALUES (
+                    'tool-surface-extra-attempt','tool-surface-extra-request',0,200,
+                    '2026-09-13T13:00:00Z','2026-09-13T13:00:01Z','complete',1000
+                 );
+                 INSERT INTO provider_usage(
+                    attempt_id,input_total,input_uncached,input_cached,output_total,
+                    output_reasoning,usage_status
+                 ) VALUES (
+                    'tool-surface-extra-attempt',999999,999999,0,999999,999999,'final'
+                 );",
+            )
+            .expect("seed provider request outside the context-snapshot cohort");
+        for (ordinal, kind, tool_name) in [
+            (10_i64, "tool_definition", "search"),
+            (11_i64, "tool_definition", "shell"),
+            (12_i64, "tool_call", "search"),
+        ] {
+            let _rows = connection
+                .execute(
+                    "INSERT INTO context_block_occurrences(
+                        block_occurrence_id,snapshot_id,ordinal,kind,role,origin,
+                        raw_value_start,raw_value_end,locator_occurrence,raw_bytes,
+                        tool_name,tool_name_truncated
+                     ) VALUES (?1,'snapshot-0000-0000',?2,?3,'tool','tool_schema',0,1,0,1,?4,0)",
+                    rusqlite::params![format!("tool-surface-{ordinal}"), ordinal, kind, tool_name],
+                )
+                .expect("seed tool identity metadata");
+        }
+        drop(connection);
+
+        let reports = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../reports");
+        let response = router(fixture.path().to_path_buf(), reports)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/tool-surface")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let summary: ToolSurfaceSummary = serde_json::from_slice(&body).expect("tool surface JSON");
+        assert_eq!(summary.schema_observations, 16);
+        assert_eq!(
+            summary.schema_observation_coverage_basis_points,
+            Some(10_000)
+        );
+        assert_eq!(summary.tool_definitions_exposed.value, Some(48));
+        assert_eq!(summary.schema_bytes.value, Some(19_200));
+        assert_eq!(summary.estimated_schema_tokens.value, Some(4_800));
+        assert_eq!(summary.repeated_schema_tokens.value, Some(3_200));
+        assert_eq!(summary.repeated_schema_share_basis_points, Some(6_666));
+        assert_eq!(summary.tool_calls_observed, 1);
+        assert_eq!(summary.distinct_defined_tools, Some(2));
+        assert_eq!(summary.distinct_used_tools, Some(1));
+        assert_eq!(summary.unused_tools_lower_bound, Some(1));
+        assert_eq!(summary.provider_usage.input_tokens.value, Some(24_400));
+    }
+
+    #[tokio::test]
+    async fn tool_surface_withholds_incomplete_schema_and_identity_evidence() {
+        let fixture = fixture_database(false).expect("create synthetic fixture");
+        let connection = rusqlite::Connection::open(fixture.path()).expect("fixture writer");
+        connection
+            .execute_batch(
+                "UPDATE context_analysis_metrics
+                    SET tool_count = NULL, schema_bytes = NULL,
+                        estimated_schema_tokens = NULL, repeated_schema_tokens = NULL;
+                 UPDATE context_analysis_metrics SET estimated_schema_tokens = 100
+                    WHERE snapshot_id = 'snapshot-0000-0000';
+                 UPDATE context_analysis_metrics SET repeated_schema_tokens = 100
+                    WHERE snapshot_id = 'snapshot-0000-0001';
+                 INSERT INTO context_block_occurrences(
+                    block_occurrence_id,snapshot_id,ordinal,kind,role,origin,
+                    raw_value_start,raw_value_end,locator_occurrence,raw_bytes,
+                    tool_name,tool_name_truncated
+                 ) VALUES (
+                    'tool-surface-incomplete','snapshot-0000-0000',10,
+                    'tool_definition','tool','tool_schema',0,1,0,1,'search',0
+                 );",
+            )
+            .expect("seed incomplete evidence");
+        drop(connection);
+
+        let reports = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../reports");
+        let response = router(fixture.path().to_path_buf(), reports)
+            .oneshot(
+                Request::builder()
+                    .uri("/api/v1/tool-surface")
+                    .body(Body::empty())
+                    .expect("request"),
+            )
+            .await
+            .expect("response");
+        assert_eq!(response.status(), StatusCode::OK);
+        let body = response
+            .into_body()
+            .collect()
+            .await
+            .expect("body")
+            .to_bytes();
+        let summary: ToolSurfaceSummary = serde_json::from_slice(&body).expect("tool surface JSON");
+        assert_eq!(summary.schema_observations, 0);
+        assert_eq!(summary.estimated_schema_tokens.value, None);
+        assert_eq!(summary.repeated_schema_tokens.value, None);
+        assert_eq!(summary.repeated_schema_share_basis_points, None);
+        assert_eq!(summary.distinct_defined_tools, None);
+        assert_eq!(summary.distinct_used_tools, None);
+        assert_eq!(summary.unused_tools_lower_bound, None);
+    }
+
+    #[tokio::test]
+    async fn tool_surface_withholds_identity_counts_when_a_session_request_has_no_snapshot() {
+        let fixture = fixture_database(false).expect("create synthetic fixture");
+        let connection = rusqlite::Connection::open(fixture.path()).expect("fixture writer");
+        connection
+            .execute_batch(
+                "UPDATE context_snapshots
+                    SET status = 'complete', explicit_request_complete = 1,
+                        logical_context_status = 'complete', correlation_status = 'correlated';
+                 INSERT INTO context_block_occurrences(
+                    block_occurrence_id,snapshot_id,ordinal,kind,role,origin,
+                    raw_value_start,raw_value_end,locator_occurrence,raw_bytes,
+                    tool_name,tool_name_truncated
+                 ) VALUES (
+                    'tool-surface-definition','snapshot-0000-0000',10,
+                    'tool_definition','tool','tool_schema',0,1,0,1,'search',0
+                 );
+                 INSERT INTO operations VALUES (
+                    'tool-surface-missing-operation',
+                    '00000000-0000-7000-8000-000000000000',
+                    'inference','2026-09-13T13:00:00Z','2026-09-13T13:00:01Z','complete'
+                 );
+                 INSERT INTO provider_requests(
+                    operation_id,request_id,route,method,request_bytes,provider,protocol,
+                    observation_status,model,reasoning_effort,transport,legacy_request_kind,
+                    request_kind
+                 ) VALUES (
+                    'tool-surface-missing-operation','tool-surface-missing-request',
+                    '/responses','POST',1024,'openai','responses','complete','gpt-5','high',
+                    'chatgpt_codex_subscription','turn','turn'
+                 );",
+            )
+            .expect("seed a provider request without context analysis");
+        let summary = db::tool_surface(&connection).expect("tool surface summary");
+        assert_eq!(summary.distinct_defined_tools, None);
+        assert_eq!(summary.distinct_used_tools, None);
+        assert_eq!(summary.unused_tools_lower_bound, None);
     }
 
     #[tokio::test]

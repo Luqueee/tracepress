@@ -116,6 +116,7 @@ GET /api/v1/sessions/:id/context
 GET /api/v1/context/composition
 GET /api/v1/context/repetition
 GET /api/v1/context/unknown
+GET /api/v1/tool-surface
 GET /api/v1/health
 ```
 
@@ -164,6 +165,17 @@ Phase 5.9 adds the typed runtime policy registry behind this evidence. Only the 
 v1, Cargo Check v2, and ripgrep v1 active policies can select an active reducer, and only through an
 explicit session opt-in. Rejected policies fail open with a bounded reason; passthrough remains the
 default.
+
+Phase 6.0 adds a metadata-only Tool Surface Shadow view over existing context-analysis records. It
+aggregates schema exposure, locally estimated schema repetition, explicit tool-call observations,
+and session-scoped definition/use counts. Exact bounded names or truncated full-value hashes are
+used only to form ephemeral internal identities. The API never returns tool names, identity
+material, schema bodies, arguments, outputs, prompts, paths, or identifiers. Derived distinct/unused
+counts remain unavailable unless definition and call identity coverage is complete. Provider usage is shown
+separately for the same analyzed provider-request cohort and is explicitly not attributed to a
+hypothetical selection policy. Schema sums and repetition share use only complete schema-metric
+rows; incomplete context snapshots suppress derived identity counts, as do requests missing context
+snapshots within an observed session. No tool is removed and no provider request is modified.
 
 Compression Lab reads operational shadow metadata in SQLite read-only mode. It shows experiment
 quality, compressor applicability, addressable estimated-token share, local byte/token-estimate

@@ -26,7 +26,7 @@ use tracepress_dashboard_types::{
     CompressionExperimentSummary, CompressionHistogramBucket, ContextCategoryStats,
     ContextExplorer, ContextGrowthPoint, MeasurementQuality, Metric as WireMetric, MetricSource,
     OpportunitySummary, Overview, Page, SessionContext, SessionDetail, SessionSummary,
-    SourceOptimizationSummary, UnknownSummary, WorkloadSummary,
+    SourceOptimizationSummary, ToolSurfaceSummary, UnknownSummary, WorkloadSummary,
 };
 
 const MAIN_CSS: Asset = asset!("/assets/main.css");
@@ -77,6 +77,7 @@ enum Route {
         #[route("/compression")] CompressionPage {},
         #[route("/compression/:id")] CompressionDetailPage { id: String },
         #[route("/source-optimization")] SourceOptimizationPage {},
+        #[route("/tool-surface")] ToolSurfacePage {},
     #[end_layout]
     #[route("/:..route")] NotFoundPage { route: Vec<String> },
 }
@@ -101,6 +102,7 @@ fn Sidebar() -> Element {
             Link { class: "nav-link", to: Route::OpportunitiesPage {}, "Opportunities" }
             Link { class: "nav-link", to: Route::CompressionPage {}, "Compression" span { class: "badge success", "Shadow" } }
             Link { class: "nav-link", to: Route::SourceOptimizationPage {}, "Source Optimization" span { class: "badge warning", "Measured" } }
+            Link { class: "nav-link", to: Route::ToolSurfacePage {}, "Tool Surface" span { class: "badge success", "Shadow" } }
         }
     } }
 }
@@ -762,6 +764,57 @@ fn SourceOptimizationPage() -> Element {
             {render_source_optimization_comparison(&experiments.read())}
             div { class: "spacer-top", {render_source_optimization(&latest.read())} }
         }
+    }
+}
+
+#[component]
+fn ToolSurfacePage() -> Element {
+    let resource = use_resource(|| fetch::<ToolSurfaceSummary>("/api/v1/tool-surface"));
+    rsx! { PageHeader { title: "Tool Surface", subtitle: "Metadata-only exposure and usage characterization. No tool is removed and no provider request is modified." }
+        div { class: "page", {render_tool_surface(&resource.read())} }
+    }
+}
+
+fn render_tool_surface(state: &Option<Result<ToolSurfaceSummary, String>>) -> Element {
+    match state {
+        None => rsx! { Skeleton {} },
+        Some(Err(error)) => rsx! { ErrorState { message: error.clone() } },
+        Some(Ok(summary)) => rsx! {
+            div { class: "quality-banner", role: "status",
+                Badge { text: "SHADOW ONLY", tone: "success" }
+                span { class: "spacer-inline", "No provider effect is active. Missing tool-identity coverage remains unavailable, never zero." }
+            }
+            div { class: "spacer-top", Card { title: "Tool schema exposure",
+                MetricGroup {
+                    Metric { label: "Requests observed", value: compact_u64(summary.requests_observed), source: "latest snapshots" }
+                    Metric { label: "Schema observations", value: compact_u64(summary.schema_observations), source: format_basis_points(summary.schema_observation_coverage_basis_points) }
+                    MetricFromU64 { label: "Definitions exposed", metric: summary.tool_definitions_exposed.clone() }
+                    MetricFromU64 { label: "Schema bytes", metric: summary.schema_bytes.clone() }
+                    MetricFromU64 { label: "Estimated schema tokens", metric: summary.estimated_schema_tokens.clone() }
+                    MetricFromU64 { label: "Repeated schema tokens", metric: summary.repeated_schema_tokens.clone() }
+                    Metric { label: "Repeated schema share", value: format_basis_points(summary.repeated_schema_share_basis_points), source: "locally estimated" }
+                }
+            } }
+            div { class: "spacer-top", Card { title: "Observed tool usage",
+                MetricGroup {
+                    Metric { label: "Tool calls", value: compact_u64(summary.tool_calls_observed), source: "explicit context" }
+                    Metric { label: "Distinct definitions", value: format_optional_u64(summary.distinct_defined_tools), source: "session-scoped identities" }
+                    Metric { label: "Distinct used tools", value: format_optional_u64(summary.distinct_used_tools), source: "session-scoped identities" }
+                    Metric { label: "Unused lower bound", value: format_optional_u64(summary.unused_tools_lower_bound), source: "definitions without matching call" }
+                }
+                p { class: "muted spacer-top", "Counts are aggregate only. Tool names, identity material, schemas, arguments, and outputs are never returned." }
+            } }
+            div { class: "spacer-top", Card { title: "Downstream provider usage (observed, not attributed)",
+                MetricGroup {
+                    MetricFromU64 { label: "Input", metric: summary.provider_usage.input_tokens.clone() }
+                    MetricFromU64 { label: "Cached", metric: summary.provider_usage.cached_input_tokens.clone() }
+                    MetricFromU64 { label: "Uncached", metric: summary.provider_usage.uncached_input_tokens.clone() }
+                    MetricFromU64 { label: "Output", metric: summary.provider_usage.output_tokens.clone() }
+                    MetricFromU64 { label: "Reasoning", metric: summary.provider_usage.reasoning_tokens.clone() }
+                }
+                p { class: "muted spacer-top", "These provider totals use the analyzed request cohort. Shadow mode establishes no causal savings claim." }
+            } }
+        },
     }
 }
 

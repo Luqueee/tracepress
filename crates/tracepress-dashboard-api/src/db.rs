@@ -7,7 +7,7 @@ use tracepress_dashboard_types::{
     ContextCategoryStats, ContextComposition, ContextExplorer, ContextGrowthPoint,
     ContextMatrixCell, MeasurementQuality, Metric, MetricSource, Overview, Page, Percentiles,
     ProviderRequestSummary, RepetitionSummary, SessionContext, SessionDetail, SessionSummary,
-    UnknownSummary, UsageSummary,
+    ToolSurfaceSummary, UnknownSummary, UsageSummary,
 };
 
 use crate::{ApiFailure, SessionsQuery, SessionsSort};
@@ -83,6 +83,221 @@ pub(crate) fn overview(connection: &Connection) -> Result<Overview, rusqlite::Er
     })
 }
 
+pub(crate) fn tool_surface(connection: &Connection) -> Result<ToolSurfaceSummary, rusqlite::Error> {
+    let (
+        requests,
+        complete_observations,
+        tool_definitions,
+        schema_bytes,
+        schema_tokens,
+        repeated_schema_tokens,
+    ) = connection.query_row(
+        "WITH latest AS (
+            SELECT cs.snapshot_id
+            FROM context_snapshots cs
+            WHERE cs.analysis_version = (
+                SELECT MAX(cs2.analysis_version)
+                FROM context_snapshots cs2
+                WHERE cs2.provider_request_id = cs.provider_request_id
+            )
+        )
+        SELECT COUNT(*),
+               SUM(CASE WHEN cam.tool_count IS NOT NULL
+                              AND cam.schema_bytes IS NOT NULL
+                              AND cam.estimated_schema_tokens IS NOT NULL
+                              AND cam.repeated_schema_tokens IS NOT NULL
+                        THEN 1 ELSE 0 END),
+               SUM(CASE WHEN cam.tool_count IS NOT NULL
+                              AND cam.schema_bytes IS NOT NULL
+                              AND cam.estimated_schema_tokens IS NOT NULL
+                              AND cam.repeated_schema_tokens IS NOT NULL
+                        THEN cam.tool_count END),
+               SUM(CASE WHEN cam.tool_count IS NOT NULL
+                              AND cam.schema_bytes IS NOT NULL
+                              AND cam.estimated_schema_tokens IS NOT NULL
+                              AND cam.repeated_schema_tokens IS NOT NULL
+                        THEN cam.schema_bytes END),
+               SUM(CASE WHEN cam.tool_count IS NOT NULL
+                              AND cam.schema_bytes IS NOT NULL
+                              AND cam.estimated_schema_tokens IS NOT NULL
+                              AND cam.repeated_schema_tokens IS NOT NULL
+                        THEN cam.estimated_schema_tokens END),
+               SUM(CASE WHEN cam.tool_count IS NOT NULL
+                              AND cam.schema_bytes IS NOT NULL
+                              AND cam.estimated_schema_tokens IS NOT NULL
+                              AND cam.repeated_schema_tokens IS NOT NULL
+                        THEN cam.repeated_schema_tokens END)
+        FROM latest l
+        LEFT JOIN context_analysis_metrics cam ON cam.snapshot_id = l.snapshot_id",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, Option<i64>>(1)?,
+                row.get::<_, Option<i64>>(2)?,
+                row.get::<_, Option<i64>>(3)?,
+                row.get::<_, Option<i64>>(4)?,
+                row.get::<_, Option<i64>>(5)?,
+            ))
+        },
+    )?;
+    let (
+        snapshots,
+        complete_snapshots,
+        session_provider_requests,
+        definition_blocks,
+        identified_definition_blocks,
+        call_blocks,
+        identified_call_blocks,
+        distinct_definitions,
+        distinct_used,
+        unused_definitions,
+    ) = connection.query_row(
+        "WITH latest AS (
+            SELECT cs.snapshot_id, cs.session_id, cs.status, cs.explicit_request_complete,
+                   cs.logical_context_status, cs.correlation_status
+            FROM context_snapshots cs
+            WHERE cs.analysis_version = (
+                SELECT MAX(cs2.analysis_version)
+                FROM context_snapshots cs2
+                WHERE cs2.provider_request_id = cs.provider_request_id
+            )
+        ), observed_sessions AS (
+            SELECT DISTINCT session_id FROM latest
+        ), blocks AS (
+            SELECT l.session_id, cbo.kind,
+                   CASE
+                       WHEN cbo.tool_name_truncated = 0 AND cbo.tool_name IS NOT NULL
+                           THEN 'name:' || cbo.tool_name
+                       WHEN cbo.tool_name_truncated = 1 AND cbo.tool_name_hash IS NOT NULL
+                           THEN 'hash:' || hex(cbo.tool_name_hash)
+                       ELSE NULL
+                   END AS tool_identity
+            FROM latest l
+            JOIN context_block_occurrences cbo ON cbo.snapshot_id = l.snapshot_id
+            WHERE cbo.kind IN ('tool_definition', 'tool_call')
+        ), definitions AS (
+            SELECT DISTINCT session_id, tool_identity FROM blocks
+            WHERE kind = 'tool_definition' AND tool_identity IS NOT NULL
+        ), used AS (
+            SELECT DISTINCT session_id, tool_identity FROM blocks
+            WHERE kind = 'tool_call' AND tool_identity IS NOT NULL
+        )
+        SELECT
+            (SELECT COUNT(*) FROM latest),
+            (SELECT COUNT(*) FROM latest
+                WHERE status = 'complete'
+                  AND explicit_request_complete = 1
+                  AND logical_context_status = 'complete'
+                  AND correlation_status = 'correlated'),
+            (SELECT COUNT(*)
+                FROM provider_requests pr
+                JOIN operations o ON o.operation_id = pr.operation_id
+                JOIN observed_sessions os ON os.session_id = o.session_id),
+            (SELECT COUNT(*) FROM blocks WHERE kind = 'tool_definition'),
+            (SELECT COUNT(*) FROM blocks WHERE kind = 'tool_definition' AND tool_identity IS NOT NULL),
+            (SELECT COUNT(*) FROM blocks WHERE kind = 'tool_call'),
+            (SELECT COUNT(*) FROM blocks WHERE kind = 'tool_call' AND tool_identity IS NOT NULL),
+            (SELECT COUNT(*) FROM definitions),
+            (SELECT COUNT(*) FROM used),
+            (SELECT COUNT(*) FROM definitions d LEFT JOIN used u
+                ON u.session_id = d.session_id AND u.tool_identity = d.tool_identity
+                WHERE u.tool_identity IS NULL)",
+        [],
+        |row| {
+            Ok((
+                row.get::<_, i64>(0)?,
+                row.get::<_, i64>(1)?,
+                row.get::<_, i64>(2)?,
+                row.get::<_, i64>(3)?,
+                row.get::<_, i64>(4)?,
+                row.get::<_, i64>(5)?,
+                row.get::<_, i64>(6)?,
+                row.get::<_, i64>(7)?,
+                row.get::<_, i64>(8)?,
+                row.get::<_, i64>(9)?,
+            ))
+        },
+    )?;
+    let requests = nonnegative(requests);
+    let complete_observations = complete_observations.and_then(to_u64).unwrap_or(0);
+    let complete_metric = |value: Option<i64>| {
+        estimated_metric(
+            (complete_observations > 0)
+                .then(|| value.and_then(to_u64))
+                .flatten(),
+        )
+    };
+    let schema_tokens = (complete_observations > 0)
+        .then(|| schema_tokens.and_then(to_u64))
+        .flatten();
+    let repeated_schema_tokens = (complete_observations > 0)
+        .then(|| repeated_schema_tokens.and_then(to_u64))
+        .flatten();
+    let identity_coverage_complete = definition_blocks > 0
+        && snapshots > 0
+        && snapshots == complete_snapshots
+        && snapshots == session_provider_requests
+        && definition_blocks == identified_definition_blocks
+        && call_blocks == identified_call_blocks;
+    Ok(ToolSurfaceSummary {
+        mode: "shadow".to_owned(),
+        provider_effect_active: false,
+        requests_observed: requests,
+        schema_observations: complete_observations,
+        schema_observation_coverage_basis_points: ratio_basis_points(
+            complete_observations,
+            requests,
+        ),
+        tool_definitions_exposed: complete_metric(tool_definitions),
+        schema_bytes: complete_metric(schema_bytes),
+        estimated_schema_tokens: estimated_metric(schema_tokens),
+        repeated_schema_tokens: estimated_metric(repeated_schema_tokens),
+        repeated_schema_share_basis_points: schema_tokens
+            .zip(repeated_schema_tokens)
+            .and_then(|(total, repeated)| ratio_basis_points(repeated, total)),
+        tool_calls_observed: nonnegative(call_blocks),
+        distinct_defined_tools: identity_coverage_complete
+            .then(|| nonnegative(distinct_definitions)),
+        distinct_used_tools: identity_coverage_complete.then(|| nonnegative(distinct_used)),
+        unused_tools_lower_bound: identity_coverage_complete
+            .then(|| nonnegative(unused_definitions)),
+        provider_usage: aggregate_analyzed_usage(connection)?,
+    })
+}
+
+fn aggregate_analyzed_usage(connection: &Connection) -> Result<UsageSummary, rusqlite::Error> {
+    connection.query_row(
+        "WITH latest AS (
+            SELECT cs.provider_request_id
+            FROM context_snapshots cs
+            WHERE cs.analysis_version = (
+                SELECT MAX(cs2.analysis_version)
+                FROM context_snapshots cs2
+                WHERE cs2.provider_request_id = cs.provider_request_id
+            )
+        ), final_attempt AS (
+            SELECT pr.request_id, pa.attempt_id
+            FROM latest l
+            JOIN provider_requests pr ON pr.request_id = l.provider_request_id
+            LEFT JOIN provider_attempts pa ON pa.request_id = pr.request_id
+                AND pa.ordinal = (
+                    SELECT MAX(pa2.ordinal)
+                    FROM provider_attempts pa2
+                    WHERE pa2.request_id = pr.request_id
+                )
+        )
+        SELECT COUNT(*), COUNT(pu.input_total), SUM(pu.input_total),
+               COUNT(pu.input_cached), SUM(pu.input_cached),
+               COUNT(pu.input_uncached), SUM(pu.input_uncached),
+               COUNT(pu.output_total), SUM(pu.output_total),
+               COUNT(pu.output_reasoning), SUM(pu.output_reasoning)
+        FROM final_attempt fa LEFT JOIN provider_usage pu ON pu.attempt_id = fa.attempt_id",
+        [],
+        usage_summary,
+    )
+}
+
 fn aggregate_usage(
     connection: &Connection,
     session_id: Option<&str>,
@@ -108,26 +323,13 @@ fn aggregate_usage(
                COUNT(pu.output_reasoning), SUM(pu.output_reasoning)
         FROM final_attempt fa LEFT JOIN provider_usage pu ON pu.attempt_id = fa.attempt_id"
     );
-    let query = |row: &rusqlite::Row<'_>| {
-        Ok((
-            row.get::<_, i64>(0)?,
-            row.get::<_, i64>(1)?,
-            row.get::<_, Option<i64>>(2)?,
-            row.get::<_, i64>(3)?,
-            row.get::<_, Option<i64>>(4)?,
-            row.get::<_, i64>(5)?,
-            row.get::<_, Option<i64>>(6)?,
-            row.get::<_, i64>(7)?,
-            row.get::<_, Option<i64>>(8)?,
-            row.get::<_, i64>(9)?,
-            row.get::<_, Option<i64>>(10)?,
-        ))
-    };
-    let values = if let Some(id) = session_id {
-        connection.query_row(&sql, params![id], query)?
-    } else {
-        connection.query_row(&sql, [], query)?
-    };
+    session_id.map_or_else(
+        || connection.query_row(&sql, [], usage_summary),
+        |id| connection.query_row(&sql, params![id], usage_summary),
+    )
+}
+
+fn usage_summary(row: &rusqlite::Row<'_>) -> Result<UsageSummary, rusqlite::Error> {
     let (
         rows,
         input_rows,
@@ -140,7 +342,19 @@ fn aggregate_usage(
         output,
         reasoning_rows,
         reasoning,
-    ) = values;
+    ) = (
+        row.get::<_, i64>(0)?,
+        row.get::<_, i64>(1)?,
+        row.get::<_, Option<i64>>(2)?,
+        row.get::<_, i64>(3)?,
+        row.get::<_, Option<i64>>(4)?,
+        row.get::<_, i64>(5)?,
+        row.get::<_, Option<i64>>(6)?,
+        row.get::<_, i64>(7)?,
+        row.get::<_, Option<i64>>(8)?,
+        row.get::<_, i64>(9)?,
+        row.get::<_, Option<i64>>(10)?,
+    );
     let complete = |count: i64, value: Option<i64>| {
         (rows > 0 && count == rows)
             .then(|| value.and_then(to_u64))

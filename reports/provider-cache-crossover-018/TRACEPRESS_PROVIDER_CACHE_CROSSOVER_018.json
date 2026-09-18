@@ -1,0 +1,297 @@
+{
+  "codex_version": "codex-cli 0.155.0",
+  "crossover": {
+    "arms": {
+      "no_extensions_treatment": {
+        "complete_observations": 12,
+        "developer_estimated_tokens_total": {
+          "source": "locally_estimated",
+          "value": 87612
+        },
+        "developer_text_blocks": 48,
+        "measurement_complete": true,
+        "provider_usage": {
+          "cache_ratio": {
+            "source": "provider_reported",
+            "value": 0.8356111009005698
+          },
+          "cached_input_tokens": {
+            "source": "provider_reported",
+            "value": 113664
+          },
+          "input_tokens": {
+            "source": "provider_reported",
+            "value": 136025
+          },
+          "output_tokens": {
+            "source": "provider_reported",
+            "value": 3527
+          },
+          "reasoning_tokens": {
+            "source": "provider_reported",
+            "value": 2676
+          },
+          "uncached_input_tokens": {
+            "source": "provider_reported",
+            "value": 22361
+          }
+        },
+        "requests_observed": 12,
+        "runs_observed": 6,
+        "stable_block_classes": 4,
+        "stable_tokens_per_request": 7301,
+        "stable_weight_consistent": true
+      },
+      "no_hooks_null": {
+        "complete_observations": 12,
+        "developer_estimated_tokens_total": {
+          "source": "locally_estimated",
+          "value": 257340
+        },
+        "developer_text_blocks": 72,
+        "measurement_complete": true,
+        "provider_usage": {
+          "cache_ratio": {
+            "source": "provider_reported",
+            "value": 0.7776993346597352
+          },
+          "cached_input_tokens": {
+            "source": "provider_reported",
+            "value": 218112
+          },
+          "input_tokens": {
+            "source": "provider_reported",
+            "value": 280458
+          },
+          "output_tokens": {
+            "source": "provider_reported",
+            "value": 3191
+          },
+          "reasoning_tokens": {
+            "source": "provider_reported",
+            "value": 2321
+          },
+          "uncached_input_tokens": {
+            "source": "provider_reported",
+            "value": 62346
+          }
+        },
+        "requests_observed": 12,
+        "runs_observed": 6,
+        "stable_block_classes": 6,
+        "stable_tokens_per_request": 21445,
+        "stable_weight_consistent": true
+      },
+      "user_config_control": {
+        "complete_observations": 12,
+        "developer_estimated_tokens_total": {
+          "source": "locally_estimated",
+          "value": 258120
+        },
+        "developer_text_blocks": 84,
+        "measurement_complete": true,
+        "provider_usage": {
+          "cache_ratio": {
+            "source": "provider_reported",
+            "value": 0.9451308385570163
+          },
+          "cached_input_tokens": {
+            "source": "provider_reported",
+            "value": 265216
+          },
+          "input_tokens": {
+            "source": "provider_reported",
+            "value": 280613
+          },
+          "output_tokens": {
+            "source": "provider_reported",
+            "value": 3220
+          },
+          "reasoning_tokens": {
+            "source": "provider_reported",
+            "value": 2341
+          },
+          "uncached_input_tokens": {
+            "source": "provider_reported",
+            "value": 15397
+          }
+        },
+        "requests_observed": 12,
+        "runs_observed": 6,
+        "stable_block_classes": 6,
+        "stable_tokens_per_request": 21445,
+        "stable_weight_consistent": true
+      }
+    },
+    "cache_controls": {
+      "cache_split_comparison_reliable": false,
+      "input_total_threshold": 0.02,
+      "null_input_total_relative_delta": 0.0005525147441232928,
+      "null_uncached_aggregate_relative_delta": 1.2078000591693143,
+      "null_uncached_max_position_relative_delta": 1.2740483335965882,
+      "null_uncached_position_relative_deltas": {
+        "0": 1.2740483335965882,
+        "1": 1.1614083219021492,
+        "2": 1.1902196752626553
+      },
+      "provider_comparison_reliable": false,
+      "total_input_comparison_reliable": true,
+      "uncached_aggregate_threshold": 0.1,
+      "uncached_position_threshold": 0.2
+    },
+    "integrity": {
+      "all_arms_complete": true,
+      "common_weight_consistent": true,
+      "control_null_structural_match": true
+    },
+    "mode": "shadow",
+    "position_usage": {
+      "no_extensions_treatment": {
+        "0": {
+          "cached_input_tokens": 39936,
+          "input_tokens": 45378,
+          "output_tokens": 1163,
+          "reasoning_tokens": 840,
+          "uncached_input_tokens": 5442
+        },
+        "1": {
+          "cached_input_tokens": 38912,
+          "input_tokens": 45206,
+          "output_tokens": 1183,
+          "reasoning_tokens": 916,
+          "uncached_input_tokens": 6294
+        },
+        "2": {
+          "cached_input_tokens": 34816,
+          "input_tokens": 45441,
+          "output_tokens": 1181,
+          "reasoning_tokens": 920,
+          "uncached_input_tokens": 10625
+        }
+      },
+      "no_hooks_null": {
+        "0": {
+          "cached_input_tokens": 72704,
+          "input_tokens": 93432,
+          "output_tokens": 1006,
+          "reasoning_tokens": 686,
+          "uncached_input_tokens": 20728
+        },
+        "1": {
+          "cached_input_tokens": 72704,
+          "input_tokens": 93446,
+          "output_tokens": 1017,
+          "reasoning_tokens": 731,
+          "uncached_input_tokens": 20742
+        },
+        "2": {
+          "cached_input_tokens": 72704,
+          "input_tokens": 93580,
+          "output_tokens": 1168,
+          "reasoning_tokens": 904,
+          "uncached_input_tokens": 20876
+        }
+      },
+      "user_config_control": {
+        "0": {
+          "cached_input_tokens": 89088,
+          "input_tokens": 93684,
+          "output_tokens": 1288,
+          "reasoning_tokens": 1011,
+          "uncached_input_tokens": 4596
+        },
+        "1": {
+          "cached_input_tokens": 88064,
+          "input_tokens": 93566,
+          "output_tokens": 1131,
+          "reasoning_tokens": 845,
+          "uncached_input_tokens": 5502
+        },
+        "2": {
+          "cached_input_tokens": 88064,
+          "input_tokens": 93363,
+          "output_tokens": 801,
+          "reasoning_tokens": 485,
+          "uncached_input_tokens": 5299
+        }
+      }
+    },
+    "provider_effect_active": false,
+    "schedule": {
+      "design": "three_arm_williams_two_cycle_v1",
+      "directed_transitions_per_pair": 2,
+      "positions_per_arm": 2,
+      "positions_per_arm_per_task": 1,
+      "rounds": 6,
+      "rounds_per_task": 3,
+      "task_blocks": 2
+    },
+    "structural_treatment": {
+      "added_tokens_per_request": 1540,
+      "control_stable_tokens_per_request": 21445,
+      "removed_tokens_per_request": 15684,
+      "treatment_stable_tokens_per_request": 7301
+    },
+    "treatment_effect": {
+      "cached_input_relative_change": -0.5714285714285714,
+      "input_total_relative_change": -0.5152576680339115,
+      "interpretation": "blocked_by_cache_controls",
+      "output_relative_change": 0.0953416149068323,
+      "reasoning_relative_change": 0.14310123878684322,
+      "uncached_input_relative_change": 0.45229590179905177
+    }
+  },
+  "execution": {
+    "no_extensions_treatment": {
+      "configuration_and_schedule_contract_valid": true,
+      "runs_completed": 6,
+      "runs_requested": 6
+    },
+    "no_hooks_null": {
+      "configuration_and_schedule_contract_valid": true,
+      "runs_completed": 6,
+      "runs_requested": 6
+    },
+    "user_config_control": {
+      "configuration_and_schedule_contract_valid": true,
+      "runs_completed": 6,
+      "runs_requested": 6
+    }
+  },
+  "experiment_id": "provider-cache-crossover-018",
+  "gate": {
+    "cache_split_comparison_reliable": false,
+    "decision": "crossover_baseline_failed_provider_reliability",
+    "evidence_complete": true,
+    "instruction_policy_active": false,
+    "provider_comparison_reliable": false,
+    "provider_effect_active": false,
+    "task_quality_evaluated": false,
+    "total_input_comparison_reliable": true
+  },
+  "limitations": [
+    "Provider comparison reliability does not establish task quality or authorize a policy.",
+    "The public Search workload is narrow and results do not generalize to arbitrary tasks.",
+    "Feature ablation measures runtime composition effects, not literal config-file text.",
+    "No ordinary Tracepress instruction or provider request was modified."
+  ],
+  "mode": "shadow",
+  "model": "gpt-5.6-luna",
+  "phase": "6.5",
+  "privacy": {
+    "authentication_material_copied": false,
+    "commands_persisted": false,
+    "configuration_contents_in_report": false,
+    "identities_in_report": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false,
+    "report_contract": "aggregate_allowlist_only",
+    "responses_persisted": false
+  },
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "status": "completed",
+  "workspace_class": "public_controlled"
+}

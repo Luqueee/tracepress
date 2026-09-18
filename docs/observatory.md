@@ -152,6 +152,11 @@ The accepted Phase 5.7 `git_status_v1_shadow` cohort is also allowlisted as a fa
 does not displace the active `rg_v1` evidence while both artifacts exist. Its provider deltas remain
 A/A noise because Shadow returned the original bytes to the agent.
 
+The rejected Phase 5.8 `git_status_v1_active` dirty cohort is allowlisted ahead of its Shadow
+predecessor as fallback evidence. Its `reject` decision remains explicit and it does not displace
+the accepted `rg_v1_active` report while that artifact exists. The separate clean fail-open cohort
+stays in research artifacts rather than being mixed into reduction totals.
+
 Compression Lab reads operational shadow metadata in SQLite read-only mode. It shows experiment
 quality, compressor applicability, addressable estimated-token share, local byte/token-estimate
 reduction, recovery, determinism, latency, prefix evidence, cache risk, provider readability, and

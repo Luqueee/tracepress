@@ -5,10 +5,14 @@ use tracepress_dashboard_types::{
     SourceOptimizationArm, SourceOptimizationSource, SourceOptimizationSummary,
 };
 
-const REPORTS: [(&str, &str); 8] = [
+const REPORTS: [(&str, &str); 9] = [
     (
         "source-rg-active-001",
         "TRACEPRESS_RG_ACTIVE_PARSEABLE_RESULTS_001.json",
+    ),
+    (
+        "source-git-status-active-001",
+        "TRACEPRESS_GIT_STATUS_ACTIVE_DIRTY_RESULTS_001.json",
     ),
     (
         "source-git-status-shadow-001",
@@ -57,6 +61,12 @@ pub(crate) fn load(root: &Path) -> io::Result<Option<SourceOptimizationSummary>>
     let reducer = report.get("reducer").and_then(Value::as_str);
     let (active, treatment_name, control_name, command_family) = match reducer {
         Some("explicit-rg-active") => (true, "ExplicitRgActive", "ExplicitRgActiveControl", "rg"),
+        Some("explicit-git-status-active") => (
+            true,
+            "ExplicitGitStatusActive",
+            "ExplicitGitStatusActiveControl",
+            "git_status",
+        ),
         Some("explicit-git-status-shadow") => (
             false,
             "ExplicitGitStatusShadow",

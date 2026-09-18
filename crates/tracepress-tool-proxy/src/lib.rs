@@ -19,6 +19,6 @@ pub use model::{
 };
 pub use reducers::{
     cargo_check_v1_active, cargo_check_v1_shadow, cargo_check_v2_active, cargo_check_v2_shadow,
-    cargo_clippy_v1_shadow, cargo_test_v1_active, cargo_test_v1_shadow, git_status_v1_shadow,
-    rg_v1_active, rg_v1_shadow,
+    cargo_clippy_v1_shadow, cargo_test_v1_active, cargo_test_v1_shadow, git_status_v1_active,
+    git_status_v1_shadow, rg_v1_active, rg_v1_shadow,
 };

@@ -87,7 +87,7 @@ def analyze(report: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("expected exactly two experiment arms")
     arms = {name: [row for row in rows if row["arm"] == name] for name in arm_names}
     control_name, treatment_name = arm_names
-    if control_name in {"ExplicitB", "ExplicitShadow", "ExplicitActive", "ExplicitCheckShadow", "ExplicitCheckActive", "ExplicitCheckV2Shadow", "ExplicitCheckV2Active", "ExplicitClippyShadow", "ExplicitRgShadow", "ExplicitRgActive", "ExplicitGitStatusShadow"}:
+    if control_name in {"ExplicitB", "ExplicitShadow", "ExplicitActive", "ExplicitCheckShadow", "ExplicitCheckActive", "ExplicitCheckV2Shadow", "ExplicitCheckV2Active", "ExplicitClippyShadow", "ExplicitRgShadow", "ExplicitRgActive", "ExplicitGitStatusShadow", "ExplicitGitStatusActive"}:
         control_name, treatment_name = treatment_name, control_name
     control, treatment = arms[control_name], arms[treatment_name]
     if len(control) != len(treatment):
@@ -97,8 +97,8 @@ def analyze(report: dict[str, Any]) -> dict[str, Any]:
         f"provider_usage.{key}" for key in USAGE_KEYS
     ]
     deltas = {metric: paired_deltas(control, treatment, metric) for metric in metrics}
-    active = report.get("reducer") in {"explicit-active", "explicit-check-active", "explicit-check-active-v2", "explicit-rg-active"}
-    active_fail_open = active and report.get("scenario") in {"diagnostic-failure", "ambiguous"}
+    active = report.get("reducer") in {"explicit-active", "explicit-check-active", "explicit-check-active-v2", "explicit-rg-active", "explicit-git-status-active"}
+    active_fail_open = active and report.get("scenario") in {"diagnostic-failure", "ambiguous", "clean"}
     invariant_gate = all(
         left.get("agent_exit_status_class") == "success"
         and right.get("agent_exit_status_class") == "success"
@@ -246,7 +246,7 @@ def markdown(report: dict[str, Any], analysis: dict[str, Any]) -> str:
                 [
                     f"Active gate: **{str(analysis['active_gate']).lower()}**.",
                     f"Positive gate: **{str(analysis['positive_gate']).lower() if analysis['positive_gate'] is not None else 'pending full cohort'}**.",
-                    "Treatment fail-open preserved raw output; downstream deltas are safety A/A evidence." if report.get("scenario") in {"diagnostic-failure", "ambiguous"} else "Treatment forwarded the accepted candidate; downstream deltas are active-pilot evidence.",
+                    "Treatment fail-open preserved raw output; downstream deltas are safety A/A evidence." if report.get("scenario") in {"diagnostic-failure", "ambiguous", "clean"} else "Treatment forwarded the accepted candidate; downstream deltas are active-pilot evidence.",
                 ]
             )
         else:
@@ -272,7 +272,7 @@ def main() -> int:
     report = json.loads(args.report.read_text(encoding="utf-8"))
     analysis = analyze(report)
     report["analysis"] = analysis
-    if report.get("reducer") in {"explicit-active", "explicit-check-active", "explicit-check-active-v2", "explicit-rg-active"}:
+    if report.get("reducer") in {"explicit-active", "explicit-check-active", "explicit-check-active-v2", "explicit-rg-active", "explicit-git-status-active"}:
         report["assignment"] = "session_level"
     args.report.write_text(json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8")
     args.markdown.write_text(markdown(report, analysis), encoding="utf-8")

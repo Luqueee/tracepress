@@ -16,5 +16,5 @@ pub use cargo_diagnostics::{
     cargo_clippy_v1_shadow,
 };
 pub use cargo_test::{cargo_test_v1_active, cargo_test_v1_shadow};
-pub use git_status::git_status_v1_shadow;
+pub use git_status::{git_status_v1_active, git_status_v1_shadow};
 pub use ripgrep::{rg_v1_active, rg_v1_shadow};

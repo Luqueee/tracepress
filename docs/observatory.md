@@ -10,7 +10,7 @@ Build the frontend once, then start the API and static asset server:
 cd crates/tracepress-dashboard
 dx build --platform web --release
 cd ../..
-cargo run -p tracepress-cli -- ui
+cargo run -p tracepress-cli --bin tracepress -- ui
 ```
 
 Open `http://127.0.0.1:4319`. The command binds loopback only. Phase 4.0 rejects non-loopback binds rather than exposing an unauthenticated local database browser.
@@ -18,13 +18,13 @@ Open `http://127.0.0.1:4319`. The command binds loopback only. Phase 4.0 rejects
 For UI work without Codex or user data:
 
 ```bash
-cargo run -p tracepress-cli -- ui --fixture
+cargo run -p tracepress-cli --bin tracepress -- ui --fixture
 ```
 
 The large-data smoke fixture is also synthetic:
 
 ```bash
-cargo run -p tracepress-cli -- ui --fixture --large-fixture
+cargo run -p tracepress-cli --bin tracepress -- ui --fixture --large-fixture
 ```
 
 It contains 1,000 sessions, 10,000 requests, and 100,000 metadata-only context blocks. Temporary fixture databases are created outside the repository and deleted when the server exits.
@@ -37,7 +37,7 @@ Use two terminals for fast frontend iteration:
 
 ```bash
 # terminal 1, repository root
-cargo run -p tracepress-cli -- ui --fixture
+cargo run -p tracepress-cli --bin tracepress -- ui --fixture
 
 # terminal 2
 cd crates/tracepress-dashboard
@@ -147,6 +147,10 @@ derives its command family, arm names, experiment id, and active/shadow semantic
 allowlist and falls back to earlier Cargo Check and Cargo Test evidence when newer artifacts are
 absent. Ambiguous-output fail-open evidence remains in the research report rather than being mixed
 into source-reduction totals.
+
+The accepted Phase 5.7 `git_status_v1_shadow` cohort is also allowlisted as a fallback report, but
+does not displace the active `rg_v1` evidence while both artifacts exist. Its provider deltas remain
+A/A noise because Shadow returned the original bytes to the agent.
 
 Compression Lab reads operational shadow metadata in SQLite read-only mode. It shows experiment
 quality, compressor applicability, addressable estimated-token share, local byte/token-estimate

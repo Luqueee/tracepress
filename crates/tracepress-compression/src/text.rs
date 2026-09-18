@@ -577,10 +577,10 @@ fn lines(input: &[u8]) -> Vec<&[u8]> {
             start = end;
         }
     }
-    if start < input.len() {
-        if let Some(line) = input.get(start..) {
-            result.push(line);
-        }
+    if start < input.len()
+        && let Some(line) = input.get(start..)
+    {
+        result.push(line);
     }
     result
 }

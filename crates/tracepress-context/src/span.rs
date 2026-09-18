@@ -477,13 +477,13 @@ impl RawSpanIndex {
 
     /// Returns how many values were indexed.
     #[must_use]
-    pub fn len(&self) -> usize {
+    pub const fn len(&self) -> usize {
         self.nodes.len()
     }
 
     /// Returns whether no value was indexed.
     #[must_use]
-    pub fn is_empty(&self) -> bool {
+    pub const fn is_empty(&self) -> bool {
         self.nodes.is_empty()
     }
 
@@ -1124,10 +1124,10 @@ where
     fn advance_string(&mut self, node: Option<SpanNodeId>, bytes: usize) -> Result<(), Stop> {
         self.advance(bytes)?;
         let end = as_u64(self.cursor);
-        if let Some(id) = node {
-            if let Some(value) = self.node_mut(id) {
-                value.locator.raw_value_end = end;
-            }
+        if let Some(id) = node
+            && let Some(value) = self.node_mut(id)
+        {
+            value.locator.raw_value_end = end;
         }
         Ok(())
     }
@@ -1269,10 +1269,10 @@ where
             }
             None => return,
         };
-        if let Some(previous) = last_child {
-            if let Some(node) = self.node_mut(previous) {
-                node.next_sibling = Some(child);
-            }
+        if let Some(previous) = last_child
+            && let Some(node) = self.node_mut(previous)
+        {
+            node.next_sibling = Some(child);
         }
     }
 
@@ -1370,7 +1370,7 @@ where
         let mut units = JsonStringUnits::new(text);
         let mut position = 0_usize;
         while units.remaining_bytes() > 0 {
-            if position % 256 == 0 {
+            if position.is_multiple_of(256) {
                 self.poll_clock()?;
             }
             let inspect = units.remaining_bytes().min(MAX_JSON_STRING_UNIT_BYTES);
@@ -1415,7 +1415,7 @@ where
         let mut position = 0_usize;
         loop {
             self.charge_name_comparison()?;
-            if position % 256 == 0 {
+            if position.is_multiple_of(256) {
                 self.poll_clock()?;
             }
             let left_inspect = left_units.remaining_bytes().min(MAX_JSON_STRING_UNIT_BYTES);
@@ -1486,7 +1486,7 @@ where
         let mut units = JsonStringUnits::new(text);
         let mut position = 0_usize;
         while units.remaining_bytes() > 0 {
-            if position % 256 == 0 {
+            if position.is_multiple_of(256) {
                 self.poll_clock()?;
             }
             let inspect = units.remaining_bytes().min(MAX_JSON_STRING_UNIT_BYTES);
@@ -1706,15 +1706,14 @@ impl<'text> JsonStringUnits<'text> {
         };
         if (HIGH_SURROGATE_START..LOW_SURROGATE_START).contains(&first) {
             let mut lookahead = self.characters.clone();
-            if lookahead.next() == Some('\\') && lookahead.next() == Some('u') {
-                if let Some(second) = read_hex4(&mut lookahead) {
-                    if (LOW_SURROGATE_START..SURROGATE_END).contains(&second) {
-                        if let Some(combined) = combine_surrogates(first, second) {
-                            self.characters = lookahead;
-                            return Ok(StringUnit::Character(combined));
-                        }
-                    }
-                }
+            if lookahead.next() == Some('\\')
+                && lookahead.next() == Some('u')
+                && let Some(second) = read_hex4(&mut lookahead)
+                && (LOW_SURROGATE_START..SURROGATE_END).contains(&second)
+                && let Some(combined) = combine_surrogates(first, second)
+            {
+                self.characters = lookahead;
+                return Ok(StringUnit::Character(combined));
             }
             return Ok(StringUnit::UnpairedSurrogate(first));
         }

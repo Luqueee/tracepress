@@ -85,7 +85,7 @@ use tracepress_tool_proxy::{
     CargoOutputCandidate, CommandFamily, cargo_check_v1_active, cargo_check_v1_shadow,
     cargo_check_v2_active, cargo_check_v2_shadow, cargo_clippy_v1_shadow, cargo_test_v1_active,
     cargo_test_v1_shadow, codex_pre_tool_use_identity_rewrite, codex_pre_tool_use_rewrite,
-    execute_passthrough, rg_v1_active, rg_v1_shadow,
+    execute_passthrough, git_status_v1_shadow, rg_v1_active, rg_v1_shadow,
 };
 
 const FRAME_BYTES: u64 = 65_536;
@@ -981,18 +981,18 @@ fn bounded_record_provider_observation_request(
         body_fits && frame_fits
     };
 
-    if !fits(&observation) {
-        if let Some(response) = observation.response.as_mut() {
-            response.raw_usage = None;
-        }
+    if !fits(&observation)
+        && let Some(response) = observation.response.as_mut()
+    {
+        response.raw_usage = None;
     }
-    if !fits(&observation) {
-        if let Some(response) = observation.response.as_mut() {
-            response.provider_response_id = None;
-            response.model = None;
-            response.incomplete_reason = None;
-            response.error_code = None;
-        }
+    if !fits(&observation)
+        && let Some(response) = observation.response.as_mut()
+    {
+        response.provider_response_id = None;
+        response.model = None;
+        response.incomplete_reason = None;
+        response.error_code = None;
     }
     if !fits(&observation) {
         observation.request.model = None;
@@ -2060,10 +2060,10 @@ impl RunRecorder {
             (Some(admission), CorrelationStatus::Degraded(reason)) => admission == reason,
             _ => false,
         };
-        if let CorrelationStatus::Degraded(reason) = correlation {
-            if !admission_was_counted {
-                self.counters.degraded(reason);
-            }
+        if let CorrelationStatus::Degraded(reason) = correlation
+            && !admission_was_counted
+        {
+            self.counters.degraded(reason);
         }
         // The record carries its own correlation status, so the daemon commits the degradation
         // event in the very transaction that persists the evidence.
@@ -2194,11 +2194,11 @@ impl RunRecorder {
                 analysis_permit,
             }),
             None if self.analysis_enabled => {
-                if self.pending_context.len() >= IN_FLIGHT_FORWARDS {
-                    if let Some((evicted, _receipt)) = self.pending_context.pop_first() {
-                        self.context_counters
-                            .dropped(evicted, ContextAnalysisDropReason::CorrelationDegraded);
-                    }
+                if self.pending_context.len() >= IN_FLIGHT_FORWARDS
+                    && let Some((evicted, _receipt)) = self.pending_context.pop_first()
+                {
+                    self.context_counters
+                        .dropped(evicted, ContextAnalysisDropReason::CorrelationDegraded);
                 }
                 if self.pending_context.insert(forward, receipt).is_some() {
                     self.context_counters
@@ -4515,8 +4515,12 @@ fn credential(config: &Config) -> Result<Credential, String> {
     if text.len() != 64 {
         return Err("credential must contain exactly 32 bytes".to_owned());
     }
+    let (pairs, remainder) = text.as_bytes().as_chunks::<2>();
+    if !remainder.is_empty() {
+        return Err("credential must contain exactly 32 bytes".to_owned());
+    }
     let mut bytes = [0_u8; 32];
-    for (index, pair) in text.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in pairs.iter().enumerate() {
         bytes[index] = u8::from_str_radix(
             std::str::from_utf8(pair).map_err(|_| "credential is not UTF-8")?,
             16,
@@ -5087,12 +5091,9 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
             if let Some(task) = shadow_task.as_mut() {
                 task.abort();
             }
-            let _ = (&mut transport_task).await;
-            let _ = (&mut recorder_task).await;
-            let _ = (&mut context_task).await;
-            if let Some(task) = shadow_task.as_mut() {
-                let _ = task.await;
-            }
+            // The cancelled drain future may already have consumed one or more task outputs.
+            // Polling those JoinHandles again panics, so abort every remaining worker and let
+            // their handles drop without a second poll.
             (
                 Err(format!(
                     "provider observer/recorder drain exceeded {}s",
@@ -6072,6 +6073,7 @@ fn source_reducer_id(
         (Some("cargo_check_v2_shadow"), false, true) => "cargo_check_v2_shadow",
         (Some("cargo_clippy_v1_shadow"), false, true) => "cargo_clippy_v1_shadow",
         (Some("rg_v1_shadow"), false, true) => "rg_v1_shadow",
+        (Some("git_status_v1_shadow"), false, true) => "git_status_v1_shadow",
         _ => "passthrough",
     }
 }
@@ -6100,6 +6102,9 @@ fn shadow_source_candidate(input: SourceReducerInput<'_>) -> Option<CargoOutputC
         }
         (Some("rg_v1_shadow"), CommandFamily::Ripgrep) => {
             Some(rg_v1_shadow(input.stdout, input.stderr))
+        }
+        (Some("git_status_v1_shadow"), CommandFamily::GitStatus) => {
+            Some(git_status_v1_shadow(input.stdout, input.stderr))
         }
         _ => None,
     }
@@ -6260,6 +6265,7 @@ fn record_source_execution(
         CommandFamily::CargoCheck => "cargo_check",
         CommandFamily::CargoClippy => "cargo_clippy",
         CommandFamily::Ripgrep => "rg",
+        CommandFamily::GitStatus => "git_status",
         _ => "unknown",
     };
     let record = serde_json::json!({
@@ -6286,6 +6292,7 @@ fn record_source_execution(
         "never_worse_accepted": emission.candidate.map(|candidate| candidate.never_worse_accepted),
         "omitted_passing_tests": emission.candidate.map(|candidate| candidate.omitted_passing_tests),
         "omitted_progress_lines": emission.candidate.map(|candidate| candidate.omitted_progress_lines),
+        "omitted_advisory_lines": emission.candidate.map(|candidate| candidate.omitted_advisory_lines),
         "grouped_match_lines": emission.candidate.map(|candidate| candidate.grouped_match_lines),
         "recovery_hint_bytes": emission.candidate.map(|candidate| candidate.recovery_hint_bytes),
         "reducer_duration_us": emission.candidate.map(|candidate| {

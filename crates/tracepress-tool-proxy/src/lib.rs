@@ -100,6 +100,7 @@ pub enum CommandFamily {
     CargoCheck,
     CargoClippy,
     Ripgrep,
+    GitStatus,
 }
 
 /// Why a command was left untouched.
@@ -148,6 +149,10 @@ pub fn decide(command: &str) -> RewriteDecision {
             family: CommandFamily::Ripgrep,
             contract: OutputContract::AgentReadable,
         },
+        ["git", "status"] => RewriteDecision::Passthrough {
+            family: CommandFamily::GitStatus,
+            contract: OutputContract::AgentReadable,
+        },
         _ => RewriteDecision::FailOpen(FailOpenReason::Unsupported),
     }
 }
@@ -179,6 +184,8 @@ pub struct SourceOutputCandidate {
     pub estimated_candidate_tokens: u64,
     pub omitted_passing_tests: u64,
     pub omitted_progress_lines: u64,
+    /// Human-facing `git status` advice lines omitted without changing repository state facts.
+    pub omitted_advisory_lines: u64,
     /// Match lines rewritten under a file header without omitting their content.
     pub grouped_match_lines: u64,
     /// Bytes added by the recovery hint and included in the candidate comparison.
@@ -294,6 +301,7 @@ fn cargo_test_v1_candidate(
         estimated_candidate_tokens,
         omitted_passing_tests,
         omitted_progress_lines,
+        omitted_advisory_lines: 0,
         grouped_match_lines: 0,
         recovery_hint_bytes,
         reducer_duration: started.elapsed(),
@@ -394,6 +402,7 @@ fn cargo_check_candidate(
         estimated_candidate_tokens,
         omitted_passing_tests: 0,
         omitted_progress_lines,
+        omitted_advisory_lines: 0,
         grouped_match_lines: 0,
         recovery_hint_bytes,
         reducer_duration: started.elapsed(),
@@ -572,6 +581,7 @@ fn rg_v1_candidate(
         estimated_candidate_tokens,
         omitted_passing_tests: 0,
         omitted_progress_lines: 0,
+        omitted_advisory_lines: 0,
         grouped_match_lines,
         recovery_hint_bytes,
         reducer_duration: started.elapsed(),
@@ -590,6 +600,74 @@ pub fn rg_v1_shadow(stdout: &[u8], stderr: &[u8]) -> SourceOutputCandidate {
 #[must_use]
 pub fn rg_v1_active(stdout: &[u8], stderr: &[u8], recovery_command: &str) -> SourceOutputCandidate {
     rg_v1_candidate(stdout, stderr, Some(recovery_command))
+}
+
+/// Removes only Git's parenthesized human guidance from recognized long-form status output.
+#[must_use]
+pub fn git_status_v1_shadow(stdout: &[u8], stderr: &[u8]) -> SourceOutputCandidate {
+    let started = Instant::now();
+    let raw_bytes = u64::try_from(stdout.len().saturating_add(stderr.len())).unwrap_or(u64::MAX);
+    let parsed = std::str::from_utf8(stdout).ok().and_then(|stdout| {
+        let recognized_header = stdout.lines().next().is_some_and(|line| {
+            line.starts_with("On branch ")
+                || line.starts_with("HEAD detached at ")
+                || line.starts_with("HEAD detached from ")
+                || line == "Not currently on any branch."
+        });
+        let recognized_section = [
+            "Changes to be committed:\n",
+            "Changes not staged for commit:\n",
+            "Untracked files:\n",
+            "Unmerged paths:\n",
+        ]
+        .iter()
+        .any(|heading| stdout.contains(heading));
+        if !recognized_header || !recognized_section {
+            return None;
+        }
+        let mut candidate = Vec::new();
+        let mut omitted_advisory_lines = 0_u64;
+        for line in stdout.split_inclusive('\n') {
+            if line.starts_with("  (use \"") && line.trim_end().ends_with(')') {
+                omitted_advisory_lines = omitted_advisory_lines.saturating_add(1);
+            } else {
+                candidate.extend_from_slice(line.as_bytes());
+            }
+        }
+        (omitted_advisory_lines > 0).then_some((candidate, omitted_advisory_lines))
+    });
+    let (candidate_stdout, omitted_advisory_lines, applicable) = parsed.map_or_else(
+        || (stdout.to_vec(), 0, false),
+        |(candidate, lines)| (candidate, lines, true),
+    );
+    let candidate_stderr = stderr.to_vec();
+    let candidate_bytes = u64::try_from(
+        candidate_stdout
+            .len()
+            .saturating_add(candidate_stderr.len()),
+    )
+    .unwrap_or(u64::MAX);
+    let estimated_raw_tokens = estimated_tokens(raw_bytes);
+    let estimated_candidate_tokens = estimated_tokens(candidate_bytes);
+    let never_worse_accepted = applicable
+        && candidate_bytes < raw_bytes
+        && estimated_candidate_tokens < estimated_raw_tokens;
+    SourceOutputCandidate {
+        candidate_stdout,
+        candidate_stderr,
+        raw_bytes,
+        candidate_bytes,
+        estimated_raw_tokens,
+        estimated_candidate_tokens,
+        omitted_passing_tests: 0,
+        omitted_progress_lines: 0,
+        omitted_advisory_lines,
+        grouped_match_lines: 0,
+        recovery_hint_bytes: 0,
+        reducer_duration: started.elapsed(),
+        applicable,
+        never_worse_accepted,
+    }
 }
 
 /// Executes a previously admitted simple command without filtering its bytes.
@@ -650,7 +728,7 @@ pub fn execute_passthrough(
 mod tests {
     use super::*;
     #[test]
-    fn admits_only_supported_standalone_cargo_commands() {
+    fn admits_only_supported_standalone_commands() {
         assert!(matches!(
             decide("cargo test -q"),
             RewriteDecision::Passthrough {
@@ -679,6 +757,17 @@ mod tests {
                 ..
             }
         ));
+        assert!(matches!(
+            decide("git status"),
+            RewriteDecision::Passthrough {
+                family: CommandFamily::GitStatus,
+                contract: OutputContract::AgentReadable,
+            }
+        ));
+        assert_eq!(
+            decide("git status --short"),
+            RewriteDecision::FailOpen(FailOpenReason::Unsupported)
+        );
         assert_eq!(
             decide("cargo build"),
             RewriteDecision::FailOpen(FailOpenReason::Unsupported)
@@ -723,6 +812,21 @@ mod tests {
             Some("allow")
         );
         assert!(codex_pre_tool_use_rewrite(br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"cargo test | tail"}}"#).is_none());
+        let Some(git_status) = codex_pre_tool_use_rewrite(
+            br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status"}}"#,
+        ) else {
+            panic!("exact git status must rewrite through the source wrapper");
+        };
+        let Ok(value): Result<serde_json::Value, _> = serde_json::from_slice(&git_status) else {
+            panic!("git status rewrite response must be valid JSON");
+        };
+        assert!(
+            value
+                .pointer("/hookSpecificOutput/updatedInput/command")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|command| command.ends_with(" tool git status"))
+        );
+        assert!(codex_pre_tool_use_rewrite(br#"{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git status --short"}}"#).is_none());
     }
 
     #[test]
@@ -950,5 +1054,41 @@ mod tests {
         assert!(
             !String::from_utf8_lossy(&candidate.candidate_stdout).contains("tracepress recall")
         );
+    }
+
+    #[test]
+    fn git_status_shadow_removes_only_advisory_lines() {
+        let stdout = b"On branch main\n\nChanges to be committed:\n  (use \"git restore --staged <file>...\" to unstage)\n\n\tnew file:   staged.txt\n\nChanges not staged for commit:\n  (use \"git add <file>...\" to update what will be committed)\n  (use \"git restore <file>...\" to discard changes in working directory)\n\n\tmodified:   tracked.txt\n\nUntracked files:\n  (use \"git add <file>...\" to include in what will be committed)\n\n\tuntracked.txt\n\nno changes added to commit (use \"git add\" and/or \"git commit -a\")\n";
+        let expected = b"On branch main\n\nChanges to be committed:\n\n\tnew file:   staged.txt\n\nChanges not staged for commit:\n\n\tmodified:   tracked.txt\n\nUntracked files:\n\n\tuntracked.txt\n\nno changes added to commit (use \"git add\" and/or \"git commit -a\")\n";
+        let candidate = git_status_v1_shadow(stdout, b"diagnostic\n");
+        assert!(candidate.applicable);
+        assert!(candidate.never_worse_accepted);
+        assert_eq!(candidate.omitted_advisory_lines, 4);
+        assert_eq!(candidate.candidate_stdout, expected);
+        assert_eq!(candidate.candidate_stderr, b"diagnostic\n");
+    }
+
+    #[test]
+    fn git_status_shadow_supports_detached_head_but_not_clean_or_unknown_output() {
+        let detached = b"HEAD detached at 3fce3b5b\nUntracked files:\n  (use \"git add <file>...\" to include in what will be committed)\n\n\tscratch.txt\n\nnothing added to commit but untracked files present (use \"git add\" to track)\n";
+        let candidate = git_status_v1_shadow(detached, b"");
+        assert!(candidate.applicable);
+        assert!(candidate.never_worse_accepted);
+        assert_eq!(candidate.omitted_advisory_lines, 1);
+        assert_eq!(
+            candidate.candidate_stdout,
+            b"HEAD detached at 3fce3b5b\nUntracked files:\n\n\tscratch.txt\n\nnothing added to commit but untracked files present (use \"git add\" to track)\n"
+        );
+
+        for raw in [
+            b"On branch main\nnothing to commit, working tree clean\n".as_slice(),
+            b"etat de la copie de travail inconnu\n".as_slice(),
+            &[0xff, b'\n'],
+        ] {
+            let candidate = git_status_v1_shadow(raw, b"");
+            assert!(!candidate.applicable);
+            assert!(!candidate.never_worse_accepted);
+            assert_eq!(candidate.candidate_stdout, raw);
+        }
     }
 }

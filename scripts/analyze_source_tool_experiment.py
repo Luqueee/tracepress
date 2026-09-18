@@ -44,6 +44,7 @@ def aggregate(rows: list[dict[str, Any]]) -> dict[str, Any]:
         "estimated_candidate_tokens",
         "never_worse_accepted",
         "recovery_hint_bytes",
+        "omitted_advisory_lines",
         "grouped_match_lines",
         "reducer_duration_us",
         "recovery_requests",
@@ -86,7 +87,7 @@ def analyze(report: dict[str, Any]) -> dict[str, Any]:
         raise ValueError("expected exactly two experiment arms")
     arms = {name: [row for row in rows if row["arm"] == name] for name in arm_names}
     control_name, treatment_name = arm_names
-    if control_name in {"ExplicitB", "ExplicitShadow", "ExplicitActive", "ExplicitCheckShadow", "ExplicitCheckActive", "ExplicitCheckV2Shadow", "ExplicitCheckV2Active", "ExplicitClippyShadow", "ExplicitRgShadow", "ExplicitRgActive"}:
+    if control_name in {"ExplicitB", "ExplicitShadow", "ExplicitActive", "ExplicitCheckShadow", "ExplicitCheckActive", "ExplicitCheckV2Shadow", "ExplicitCheckV2Active", "ExplicitClippyShadow", "ExplicitRgShadow", "ExplicitRgActive", "ExplicitGitStatusShadow"}:
         control_name, treatment_name = treatment_name, control_name
     control, treatment = arms[control_name], arms[treatment_name]
     if len(control) != len(treatment):
@@ -114,7 +115,7 @@ def analyze(report: dict[str, Any]) -> dict[str, Any]:
         and (active or value(left, "source_emitted_bytes") == value(right, "source_emitted_bytes"))
         for left, right in zip(control, treatment)
     )
-    shadow = report.get("reducer") in {"explicit-shadow", "explicit-check-shadow", "explicit-check-shadow-v2", "explicit-clippy-shadow", "explicit-rg-shadow"}
+    shadow = report.get("reducer") in {"explicit-shadow", "explicit-check-shadow", "explicit-check-shadow-v2", "explicit-clippy-shadow", "explicit-rg-shadow", "explicit-git-status-shadow"}
     shadow_gate = True
     active_gate = True
     positive_gate = None

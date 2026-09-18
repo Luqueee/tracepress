@@ -21,7 +21,7 @@ struct CountingClock {
 }
 
 impl CountingClock {
-    fn calls(&self) -> u64 {
+    const fn calls(&self) -> u64 {
         self.calls.get()
     }
 }

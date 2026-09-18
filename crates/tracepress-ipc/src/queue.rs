@@ -110,7 +110,7 @@ pub fn bounded_connections<Connection>(
 
 fn queue_capacity(maximum: MaxIpcQueueItems) -> Result<usize, IpcError> {
     let requested = maximum.get();
-    let supported = u64::try_from(Semaphore::MAX_PERMITS).map_or(u64::MAX, std::convert::identity);
+    let supported = u64::try_from(Semaphore::MAX_PERMITS).unwrap_or(u64::MAX);
     if requested > supported {
         return Err(IpcError::QueueCapacityUnrepresentable);
     }

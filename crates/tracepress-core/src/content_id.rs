@@ -44,15 +44,17 @@ impl FromStr for ContentId {
             });
         }
 
+        let (pairs, remainder) = value.as_bytes().as_chunks::<2>();
+        if !remainder.is_empty() {
+            return Err(ContentIdParseError::InvalidLength {
+                actual: value.len(),
+            });
+        }
+
         let mut digest = [0; SHA256_BYTES];
-        for (output, pair) in digest.iter_mut().zip(value.as_bytes().chunks_exact(2)) {
-            let [high_byte, low_byte] = pair else {
-                return Err(ContentIdParseError::InvalidLength {
-                    actual: value.len(),
-                });
-            };
-            let high = decode_nibble(*high_byte)?;
-            let low = decode_nibble(*low_byte)?;
+        for (output, &[high_byte, low_byte]) in digest.iter_mut().zip(pairs) {
+            let high = decode_nibble(high_byte)?;
+            let low = decode_nibble(low_byte)?;
             *output = (high << 4) | low;
         }
         Ok(Self(digest))

@@ -2,15 +2,41 @@ name: CI
 
 on:
   push:
+    branches:
+      - main
   pull_request:
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
 
 permissions:
   contents: read
 
 jobs:
+  msrv:
+    name: Minimum supported Rust 1.88
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install minimum supported Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+        with:
+          toolchain: 1.88.0
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Compile all workspace targets on the MSRV
+        run: cargo check --workspace --all-targets --all-features --locked
+
   required-gates:
     name: Required gates (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       fail-fast: false
       matrix:
@@ -19,10 +45,18 @@ jobs:
           - macos-latest
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install repository Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+
+      - name: Install pinned test runner
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2
+        with:
+          tool: cargo-nextest@0.9.145
 
       - name: Validate locked dependency metadata
         run: cargo metadata --locked --no-deps
@@ -34,43 +68,75 @@ jobs:
         run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
 
       - name: Run workspace tests
-        run: cargo test --workspace --all-features --locked
+        run: cargo nextest run --workspace --all-features --locked --profile ci
+
+      - name: Run documentation tests
+        run: cargo test --workspace --all-features --locked --doc
+
+      - name: Upload test report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: nextest-${{ matrix.os }}
+          path: target/nextest/ci/junit.xml
+          if-no-files-found: ignore
 
       - name: Build workspace
         run: cargo build --workspace --all-features --locked
 
   windows-compile-only:
-    name: Windows compile-only (runtime unsupported)
+    name: Portable crates compile on Windows
     runs-on: windows-latest
-    # Windows is intentionally best-effort: Phase 2 has no Windows runtime support.
-    continue-on-error: true
+    timeout-minutes: 20
+    # The CLI and daemon are Unix-only runtime surfaces. Windows checks the portable libraries.
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install repository Rust toolchain
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Compile workspace targets
-        run: cargo check --workspace --all-targets --all-features --locked
+        run: >-
+          cargo check --workspace --all-targets --all-features --locked
+          --exclude tracepress-cli --exclude tracepress-daemon
 
   observatory-web:
     name: Observatory WASM and frontend build
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
       - name: Check out repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install repository Rust toolchain with WASM target
-        uses: actions-rust-lang/setup-rust-toolchain@v1
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
         with:
           target: wasm32-unknown-unknown
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Compile dashboard for WASM
         run: cargo build -p tracepress-dashboard --target wasm32-unknown-unknown --release --locked
 
       - name: Install matching Dioxus CLI
-        run: cargo install dioxus-cli --version 0.7.10 --locked
+        env:
+          DIOXUS_CLI_VERSION: 0.7.10
+          DIOXUS_CLI_SHA256: 4363e4ed2a3f1eb7f4d38d2d59aed59ce43271c44c16b425e92c89a64761fbe7
+        run: |
+          set -euo pipefail
+          archive="dx-x86_64-unknown-linux-gnu.tar.gz"
+          url="https://github.com/DioxusLabs/dioxus/releases/download/v${DIOXUS_CLI_VERSION}/${archive}"
+          curl --fail --location --retry 3 --output "${RUNNER_TEMP}/${archive}" "${url}"
+          echo "${DIOXUS_CLI_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum --check
+          mkdir --parents "${RUNNER_TEMP}/dioxus-cli"
+          tar --extract --gzip --file "${RUNNER_TEMP}/${archive}" --directory "${RUNNER_TEMP}/dioxus-cli"
+          install "${RUNNER_TEMP}/dioxus-cli/dx" "${HOME}/.cargo/bin/dx"
+          dx --version
 
       - name: Build static Observatory assets
         working-directory: crates/tracepress-dashboard

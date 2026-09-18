@@ -935,21 +935,20 @@ fn validate_finalize(
             snapshot_id: summary.snapshot_id,
         });
     }
-    if let Some(delta) = summary.delta.as_ref() {
-        if delta.current_snapshot_id != summary.snapshot_id
-            || delta.previous_snapshot_id == summary.snapshot_id
-        {
-            return Err(DaemonError::ContextFinalizeMismatch {
-                snapshot_id: summary.snapshot_id,
-            });
-        }
+    if let Some(delta) = summary.delta.as_ref()
+        && (delta.current_snapshot_id != summary.snapshot_id
+            || delta.previous_snapshot_id == summary.snapshot_id)
+    {
+        return Err(DaemonError::ContextFinalizeMismatch {
+            snapshot_id: summary.snapshot_id,
+        });
     }
-    if let Some(count) = summary.explicit_block_count {
-        if count != u64::from(active.next_ordinal) {
-            return Err(DaemonError::InvalidContextFinalize {
-                snapshot_id: summary.snapshot_id,
-            });
-        }
+    if let Some(count) = summary.explicit_block_count
+        && count != u64::from(active.next_ordinal)
+    {
+        return Err(DaemonError::InvalidContextFinalize {
+            snapshot_id: summary.snapshot_id,
+        });
     }
     if matches!(summary.status, AnalyzerAnalysisStatus::Complete)
         && matches!(

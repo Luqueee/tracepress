@@ -198,7 +198,7 @@ fn compaction_trigger_is_lifecycle_metadata_and_does_not_reduce_structural_cover
 
 #[test]
 fn malformed_input_preserves_the_request_hash_and_does_not_panic() {
-    let request = [b'{', b'\xff'];
+    let request = *b"{\xff";
 
     let analysis = analyze_responses(&request, limits());
 

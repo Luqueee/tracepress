@@ -3,6 +3,10 @@
 Tracepress keeps fast correctness checks on every change and moves expensive ecosystem checks to
 dedicated CI jobs. The commands below mirror the repository workflows.
 
+The workflows use only standard GitHub Actions infrastructure and open-source tooling. They do not
+depend on paid coverage, security, build-cache, or deployment services. Coverage reports and test
+diagnostics are retained as GitHub Actions artifacts.
+
 ## Required local checks
 
 ```console
@@ -24,7 +28,8 @@ silently raise it.
 The forwarding-path latency regressions and the bounded-analysis deadline regression reserve the
 complete nextest thread pool and run last. Their assertions measure forwarding behavior or a fixed
 work budget, so competing test processes must not supply the load being measured; this is resource
-isolation, not a retry or relaxed threshold.
+isolation, not a retry or relaxed threshold. The response hot-path latency budget is calibrated and
+gated on Linux; other operating systems still compile it but do not claim a comparable timing gate.
 
 ## Coverage
 
@@ -37,7 +42,7 @@ cargo llvm-cov report --workspace --html
 ```
 
 CI publishes the text summary and LCOV data as a build artifact. The current whole-workspace baseline
-is 81.96% line coverage, so CI enforces a conservative 80% floor. Raise the threshold as coverage
+is 81.91% line coverage, so CI enforces a conservative 80% floor. Raise the threshold as coverage
 improves; do not lower it to merge untested behavior.
 
 ## Dependency policy

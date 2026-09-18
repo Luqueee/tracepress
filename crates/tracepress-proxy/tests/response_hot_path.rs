@@ -76,6 +76,10 @@ fn large_document_response() -> Bytes {
 }
 
 #[tokio::test]
+#[cfg_attr(
+    not(target_os = "linux"),
+    ignore = "latency budget is calibrated for Linux CI runners"
+)]
 async fn semantic_response_parsing_never_occupies_the_runtime_worker() -> TestResult {
     let response_body = large_document_response();
     let upstream = Upstream::spawn(response_body.clone()).await?;

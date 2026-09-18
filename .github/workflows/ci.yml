@@ -85,11 +85,10 @@ jobs:
         run: cargo build --workspace --all-features --locked
 
   windows-compile-only:
-    name: Windows compile-only (runtime unsupported)
+    name: Portable crates compile on Windows
     runs-on: windows-latest
     timeout-minutes: 20
-    # Windows is intentionally best-effort: Phase 2 has no Windows runtime support.
-    continue-on-error: true
+    # The CLI and daemon are Unix-only runtime surfaces. Windows checks the portable libraries.
     steps:
       - name: Check out repository
         uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -101,7 +100,9 @@ jobs:
         uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
 
       - name: Compile workspace targets
-        run: cargo check --workspace --all-targets --all-features --locked
+        run: >-
+          cargo check --workspace --all-targets --all-features --locked
+          --exclude tracepress-cli --exclude tracepress-daemon
 
   observatory-web:
     name: Observatory WASM and frontend build
@@ -123,7 +124,19 @@ jobs:
         run: cargo build -p tracepress-dashboard --target wasm32-unknown-unknown --release --locked
 
       - name: Install matching Dioxus CLI
-        run: cargo install dioxus-cli --version 0.7.10 --locked
+        env:
+          DIOXUS_CLI_VERSION: 0.7.10
+          DIOXUS_CLI_SHA256: 4363e4ed2a3f1eb7f4d38d2d59aed59ce43271c44c16b425e92c89a64761fbe7
+        run: |
+          set -euo pipefail
+          archive="dx-x86_64-unknown-linux-gnu.tar.gz"
+          url="https://github.com/DioxusLabs/dioxus/releases/download/v${DIOXUS_CLI_VERSION}/${archive}"
+          curl --fail --location --retry 3 --output "${RUNNER_TEMP}/${archive}" "${url}"
+          echo "${DIOXUS_CLI_SHA256}  ${RUNNER_TEMP}/${archive}" | sha256sum --check
+          mkdir --parents "${RUNNER_TEMP}/dioxus-cli"
+          tar --extract --gzip --file "${RUNNER_TEMP}/${archive}" --directory "${RUNNER_TEMP}/dioxus-cli"
+          install "${RUNNER_TEMP}/dioxus-cli/dx" "${HOME}/.cargo/bin/dx"
+          dx --version
 
       - name: Build static Observatory assets
         working-directory: crates/tracepress-dashboard

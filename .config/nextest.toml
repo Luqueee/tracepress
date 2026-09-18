@@ -5,7 +5,7 @@ fail-fast = true
 slow-timeout = { period = "60s" }
 
 [[profile.default.overrides]]
-filter = "test(/(block_limit_preserves_maximum_prefix_after_structural_owner_slots|semantic_request_parsing_never_delays_upstream_dispatch|semantic_response_parsing_never_occupies_the_runtime_worker)/)"
+filter = "test(/(block_limit_preserves_maximum_prefix_after_structural_owner_slots|context_queue_overflow_drops_only_analysis_after_all_provider_receipts_commit|semantic_request_parsing_never_delays_upstream_dispatch|semantic_response_parsing_never_occupies_the_runtime_worker)/)"
 priority = -100
 threads-required = "num-test-threads"
 

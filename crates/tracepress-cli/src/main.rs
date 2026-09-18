@@ -5091,12 +5091,9 @@ async fn run_agent(config: &Config, agent: String, args: Vec<String>) -> Result<
             if let Some(task) = shadow_task.as_mut() {
                 task.abort();
             }
-            let _ = (&mut transport_task).await;
-            let _ = (&mut recorder_task).await;
-            let _ = (&mut context_task).await;
-            if let Some(task) = shadow_task.as_mut() {
-                let _ = task.await;
-            }
+            // The cancelled drain future may already have consumed one or more task outputs.
+            // Polling those JoinHandles again panics, so abort every remaining worker and let
+            // their handles drop without a second poll.
             (
                 Err(format!(
                     "provider observer/recorder drain exceeded {}s",

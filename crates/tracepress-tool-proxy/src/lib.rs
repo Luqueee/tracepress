@@ -99,6 +99,7 @@ pub enum CommandFamily {
     CargoTest,
     CargoCheck,
     CargoClippy,
+    Ripgrep,
 }
 
 /// Why a command was left untouched.
@@ -143,6 +144,10 @@ pub fn decide(command: &str) -> RewriteDecision {
             family: CommandFamily::CargoClippy,
             contract: OutputContract::AgentReadable,
         },
+        ["rg", ..] => RewriteDecision::Passthrough {
+            family: CommandFamily::Ripgrep,
+            contract: OutputContract::AgentReadable,
+        },
         _ => RewriteDecision::FailOpen(FailOpenReason::Unsupported),
     }
 }
@@ -165,7 +170,7 @@ pub struct SourceExecutionMetadata {
 
 #[derive(Clone, Debug, Eq, PartialEq)]
 #[non_exhaustive]
-pub struct CargoOutputCandidate {
+pub struct SourceOutputCandidate {
     pub candidate_stdout: Vec<u8>,
     pub candidate_stderr: Vec<u8>,
     pub raw_bytes: u64,
@@ -174,6 +179,8 @@ pub struct CargoOutputCandidate {
     pub estimated_candidate_tokens: u64,
     pub omitted_passing_tests: u64,
     pub omitted_progress_lines: u64,
+    /// Match lines rewritten under a file header without omitting their content.
+    pub grouped_match_lines: u64,
     /// Bytes added by the recovery hint and included in the candidate comparison.
     pub recovery_hint_bytes: u64,
     /// Wall-clock time spent constructing and evaluating the candidate.
@@ -183,7 +190,9 @@ pub struct CargoOutputCandidate {
 }
 
 /// Backwards-compatible Phase 5.0 name for the generalized Cargo candidate.
-pub type CargoTestShadowCandidate = CargoOutputCandidate;
+pub type CargoOutputCandidate = SourceOutputCandidate;
+/// Backwards-compatible Phase 5.0 name for the generalized source candidate.
+pub type CargoTestShadowCandidate = SourceOutputCandidate;
 
 const fn estimated_tokens(bytes: u64) -> u64 {
     bytes.saturating_add(3) / 4
@@ -285,6 +294,7 @@ fn cargo_test_v1_candidate(
         estimated_candidate_tokens,
         omitted_passing_tests,
         omitted_progress_lines,
+        grouped_match_lines: 0,
         recovery_hint_bytes,
         reducer_duration: started.elapsed(),
         applicable,
@@ -384,6 +394,7 @@ fn cargo_check_candidate(
         estimated_candidate_tokens,
         omitted_passing_tests: 0,
         omitted_progress_lines,
+        grouped_match_lines: 0,
         recovery_hint_bytes,
         reducer_duration: started.elapsed(),
         applicable,
@@ -464,6 +475,95 @@ pub fn cargo_clippy_v1_shadow(stdout: &[u8], stderr: &[u8]) -> CargoOutputCandid
     )
 }
 
+fn rg_match_parts(line: &str) -> Option<(&str, &str, &str)> {
+    let bytes = line.as_bytes();
+    let mut found = None;
+    for first in bytes
+        .iter()
+        .enumerate()
+        .filter_map(|(index, byte)| (*byte == b':').then_some(index))
+    {
+        let tail = bytes.get(first.saturating_add(1)..)?;
+        let Some(second_offset) = tail.iter().position(|byte| *byte == b':') else {
+            continue;
+        };
+        let second = first.saturating_add(1).saturating_add(second_offset);
+        let number = line.get(first.saturating_add(1)..second)?;
+        if !number.is_empty() && number.bytes().all(|byte| byte.is_ascii_digit()) {
+            if found.is_some() {
+                return None;
+            }
+            found = Some((
+                line.get(..first)?,
+                number,
+                line.get(second.saturating_add(1)..)?,
+            ));
+        }
+    }
+    found
+}
+
+/// Groups lossless `rg -n` matches under file headers without capping or truncating content.
+#[must_use]
+pub fn rg_v1_shadow(stdout: &[u8], stderr: &[u8]) -> SourceOutputCandidate {
+    let started = Instant::now();
+    let raw_bytes = u64::try_from(stdout.len().saturating_add(stderr.len())).unwrap_or(u64::MAX);
+    let parsed = std::str::from_utf8(stdout).ok().and_then(|stdout| {
+        let mut candidate = Vec::new();
+        let mut current_file: Option<&str> = None;
+        let mut grouped_match_lines = 0_u64;
+        for raw_line in stdout.split_inclusive('\n') {
+            let (line, ending) = raw_line
+                .strip_suffix('\n')
+                .map_or((raw_line, ""), |line| (line, "\n"));
+            let (path, number, content) = rg_match_parts(line)?;
+            if current_file != Some(path) {
+                candidate.extend_from_slice(path.as_bytes());
+                candidate.extend_from_slice(b":\n");
+                current_file = Some(path);
+            }
+            candidate.extend_from_slice(b"  ");
+            candidate.extend_from_slice(number.as_bytes());
+            candidate.push(b':');
+            candidate.extend_from_slice(content.as_bytes());
+            candidate.extend_from_slice(ending.as_bytes());
+            grouped_match_lines = grouped_match_lines.saturating_add(1);
+        }
+        (grouped_match_lines > 0).then_some((candidate, grouped_match_lines))
+    });
+    let (candidate_stdout, grouped_match_lines, applicable) = parsed.map_or_else(
+        || (stdout.to_vec(), 0, false),
+        |(candidate, lines)| (candidate, lines, true),
+    );
+    let candidate_stderr = stderr.to_vec();
+    let candidate_bytes = u64::try_from(
+        candidate_stdout
+            .len()
+            .saturating_add(candidate_stderr.len()),
+    )
+    .unwrap_or(u64::MAX);
+    let estimated_raw_tokens = estimated_tokens(raw_bytes);
+    let estimated_candidate_tokens = estimated_tokens(candidate_bytes);
+    let never_worse_accepted = applicable
+        && candidate_bytes < raw_bytes
+        && estimated_candidate_tokens < estimated_raw_tokens;
+    SourceOutputCandidate {
+        candidate_stdout,
+        candidate_stderr,
+        raw_bytes,
+        candidate_bytes,
+        estimated_raw_tokens,
+        estimated_candidate_tokens,
+        omitted_passing_tests: 0,
+        omitted_progress_lines: 0,
+        grouped_match_lines,
+        recovery_hint_bytes: 0,
+        reducer_duration: started.elapsed(),
+        applicable,
+        never_worse_accepted,
+    }
+}
+
 /// Executes a previously admitted simple command without filtering its bytes.
 ///
 /// # Errors
@@ -541,6 +641,13 @@ mod tests {
             decide("cargo clippy --workspace"),
             RewriteDecision::Passthrough {
                 family: CommandFamily::CargoClippy,
+                ..
+            }
+        ));
+        assert!(matches!(
+            decide("rg -n fn crates"),
+            RewriteDecision::Passthrough {
+                family: CommandFamily::Ripgrep,
                 ..
             }
         ));
@@ -746,5 +853,40 @@ mod tests {
         assert!(text.contains("src/lib.rs:2:3"));
         assert!(text.contains("Finished dev profile"));
         assert!(!text.contains("Checking dependency"));
+    }
+
+    #[test]
+    fn rg_shadow_groups_matches_without_losing_content() {
+        use std::fmt::Write as _;
+        let mut stdout = String::new();
+        for index in 1..=12 {
+            let _written = writeln!(
+                &mut stdout,
+                "crates/tracepress-example/src/lib.rs:{index}:fn case_{index}() {{}}"
+            );
+        }
+        let candidate = rg_v1_shadow(stdout.as_bytes(), b"diagnostic\n");
+        assert!(candidate.applicable);
+        assert!(candidate.never_worse_accepted);
+        assert_eq!(candidate.grouped_match_lines, 12);
+        assert_eq!(candidate.candidate_stderr, b"diagnostic\n");
+        let text = String::from_utf8_lossy(&candidate.candidate_stdout);
+        assert_eq!(
+            text.matches("crates/tracepress-example/src/lib.rs:\n")
+                .count(),
+            1
+        );
+        for index in 1..=12 {
+            assert!(text.contains(&format!("  {index}:fn case_{index}() {{}}")));
+        }
+    }
+
+    #[test]
+    fn rg_shadow_fails_closed_on_ambiguous_machine_shape() {
+        let stdout = b"path:12:value:34:other\n";
+        let candidate = rg_v1_shadow(stdout, b"");
+        assert!(!candidate.applicable);
+        assert!(!candidate.never_worse_accepted);
+        assert_eq!(candidate.candidate_stdout, stdout);
     }
 }

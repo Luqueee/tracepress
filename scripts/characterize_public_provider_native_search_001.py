@@ -50,6 +50,7 @@ SEARCH_PATTERNS = (
     "match ",
     "use ",
 )
+CONTROLLED_FEATURE_ABLATIONS = ("plugins", "memories", "hooks")
 
 
 def parse_args() -> argparse.Namespace:
@@ -95,6 +96,38 @@ def parse_args() -> argparse.Namespace:
         "--controlled-developer-instructions-v1",
         action="store_true",
         help="inject the fixed public Phase 6.3 developer marker through strict Codex config",
+    )
+    parser.add_argument(
+        "--disable-codex-feature",
+        action="append",
+        choices=CONTROLLED_FEATURE_ABLATIONS,
+        default=[],
+        help="disable one allowlisted Codex feature for a controlled attribution arm",
+    )
+    parser.add_argument(
+        "--search-pattern-start",
+        type=int,
+        choices=range(len(SEARCH_PATTERNS)),
+        default=0,
+        metavar="0-9",
+        help="start index for the bounded public Search pattern window",
+    )
+    parser.add_argument(
+        "--codex-ephemeral",
+        action="store_true",
+        help="avoid persisting the controlled public Codex session",
+    )
+    parser.add_argument(
+        "--experiment-round",
+        type=int,
+        choices=range(10),
+        help="safe ordinal for a controlled interleaved experiment round",
+    )
+    parser.add_argument(
+        "--schedule-position",
+        type=int,
+        choices=range(10),
+        help="safe ordinal for a controlled interleaved experiment position",
     )
     return parser.parse_args()
 
@@ -214,6 +247,17 @@ def prompt(pattern: str) -> str:
     )
 
 
+def selected_search_patterns(sessions: int, start_index: int = 0) -> tuple[str, ...]:
+    if sessions < 1 or sessions > len(SEARCH_PATTERNS):
+        raise ValueError("sessions must fit the controlled search pattern set")
+    if start_index < 0 or start_index >= len(SEARCH_PATTERNS):
+        raise ValueError("search pattern start index is outside the controlled set")
+    return tuple(
+        SEARCH_PATTERNS[(start_index + offset) % len(SEARCH_PATTERNS)]
+        for offset in range(sessions)
+    )
+
+
 def lifetime_prompt() -> str:
     # Public execution input only. It intentionally never crosses the report boundary.
     return (
@@ -231,8 +275,13 @@ def codex_exec_command(
     *,
     ignore_user_config: bool,
     controlled_developer_instructions: bool = False,
+    disabled_features: tuple[str, ...] = (),
+    ephemeral: bool = False,
 ) -> list[str]:
-    command = [str(cli), "run", "codex", "exec"]
+    unknown_features = set(disabled_features) - set(CONTROLLED_FEATURE_ABLATIONS)
+    if unknown_features:
+        raise ValueError("unsupported controlled Codex feature ablation")
+    command = [str(cli), "run", "codex", "--", "-a", "never", "exec"]
     if ignore_user_config:
         command.append("--ignore-user-config")
     if controlled_developer_instructions:
@@ -243,6 +292,10 @@ def codex_exec_command(
                 f"developer_instructions={json.dumps(CONTROLLED_DEVELOPER_INSTRUCTIONS_V1)}",
             ]
         )
+    for feature in disabled_features:
+        command.extend(["--disable", feature])
+    if ephemeral:
+        command.append("--ephemeral")
     command.extend(
         [
             "-m",
@@ -339,8 +392,15 @@ def main() -> int:
         else:
             raise RuntimeError("daemon did not become ready")
         executions: list[tuple[int, bool]] = []
-        requests = (lifetime_prompt(),) * options.sessions if options.lifetime_chain else tuple(
-            prompt(pattern) for pattern in SEARCH_PATTERNS[:options.sessions]
+        requests = (
+            (lifetime_prompt(),) * options.sessions
+            if options.lifetime_chain
+            else tuple(
+                prompt(pattern)
+                for pattern in selected_search_patterns(
+                    options.sessions, options.search_pattern_start
+                )
+            )
         )
         for request_prompt in requests:
             try:
@@ -352,6 +412,8 @@ def main() -> int:
                         controlled_developer_instructions=(
                             options.controlled_developer_instructions_v1
                         ),
+                        disabled_features=tuple(options.disable_codex_feature),
+                        ephemeral=options.codex_ephemeral,
                     ),
                     cwd=public_repo, env=environment, capture_output=True, text=True,
                     timeout=options.timeout,
@@ -410,6 +472,13 @@ def main() -> int:
                 if options.controlled_developer_instructions_v1
                 else "none"
             ),
+            "codex_disabled_features": sorted(set(options.disable_codex_feature)),
+            "codex_ephemeral": options.codex_ephemeral,
+            "codex_sandbox_profile": "read_only",
+            "codex_approval_policy": "never",
+            "search_pattern_start": options.search_pattern_start,
+            "experiment_round": options.experiment_round,
+            "schedule_position": options.schedule_position,
             "forwarding_mutations": 0,
             "active_compression": "off",
             "shadow_compression": options.shadow_compression,

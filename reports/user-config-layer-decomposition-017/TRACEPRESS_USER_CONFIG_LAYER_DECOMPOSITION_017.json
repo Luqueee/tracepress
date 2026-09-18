@@ -1,0 +1,397 @@
+{
+  "codex_version": "codex-cli 0.155.0",
+  "execution": {
+    "ignore_user_config": {
+      "configuration_contract_valid": true,
+      "runs_completed": 3,
+      "runs_requested": 3
+    },
+    "no_extensions": {
+      "configuration_contract_valid": true,
+      "runs_completed": 3,
+      "runs_requested": 3
+    },
+    "no_hooks": {
+      "configuration_contract_valid": true,
+      "runs_completed": 3,
+      "runs_requested": 3
+    },
+    "no_memories": {
+      "configuration_contract_valid": true,
+      "runs_completed": 3,
+      "runs_requested": 3
+    },
+    "no_plugins": {
+      "configuration_contract_valid": true,
+      "runs_completed": 3,
+      "runs_requested": 3
+    },
+    "user_config_a": {
+      "configuration_contract_valid": true,
+      "runs_completed": 3,
+      "runs_requested": 3
+    },
+    "user_config_b": {
+      "configuration_contract_valid": true,
+      "runs_completed": 3,
+      "runs_requested": 3
+    }
+  },
+  "experiment_id": "user-config-layer-decomposition-017",
+  "gate": {
+    "baseline_aa_structural_match": true,
+    "decision": "structural_decomposition_complete_policy_blocked",
+    "evidence_complete": true,
+    "instruction_policy_active": false,
+    "provider_cache_aa_within_threshold": true,
+    "provider_cache_null_control_within_threshold": false,
+    "provider_comparison_reliable": false,
+    "provider_effect_active": false
+  },
+  "layer_decomposition": {
+    "arms": {
+      "ignore_user_config": {
+        "complete_observations": 6,
+        "developer_estimated_tokens_total": {
+          "source": "locally_estimated",
+          "value": 44727
+        },
+        "developer_text_blocks": 27,
+        "measurement_complete": true,
+        "provider_usage": {
+          "cache_ratio": {
+            "source": "provider_reported",
+            "value": 0.8064334374839932
+          },
+          "cached_input_tokens": {
+            "source": "provider_reported",
+            "value": 62976
+          },
+          "input_tokens": {
+            "source": "provider_reported",
+            "value": 78092
+          },
+          "output_tokens": {
+            "source": "provider_reported",
+            "value": 1799
+          },
+          "reasoning_tokens": {
+            "source": "provider_reported",
+            "value": 1361
+          },
+          "uncached_input_tokens": {
+            "source": "provider_reported",
+            "value": 15116
+          }
+        },
+        "requests_observed": 6,
+        "runs_observed": 3,
+        "stable_block_classes": 4,
+        "stable_tokens_per_request": 7301,
+        "stable_weight_consistent": true
+      },
+      "no_extensions": {
+        "complete_observations": 6,
+        "developer_estimated_tokens_total": {
+          "source": "locally_estimated",
+          "value": 43806
+        },
+        "developer_text_blocks": 24,
+        "measurement_complete": true,
+        "provider_usage": {
+          "cache_ratio": {
+            "source": "provider_reported",
+            "value": 0.5792447046114769
+          },
+          "cached_input_tokens": {
+            "source": "provider_reported",
+            "value": 39680
+          },
+          "input_tokens": {
+            "source": "provider_reported",
+            "value": 68503
+          },
+          "output_tokens": {
+            "source": "provider_reported",
+            "value": 1589
+          },
+          "reasoning_tokens": {
+            "source": "provider_reported",
+            "value": 1115
+          },
+          "uncached_input_tokens": {
+            "source": "provider_reported",
+            "value": 28823
+          }
+        },
+        "requests_observed": 6,
+        "runs_observed": 3,
+        "stable_block_classes": 4,
+        "stable_tokens_per_request": 7301,
+        "stable_weight_consistent": true
+      },
+      "no_hooks": {
+        "complete_observations": 6,
+        "developer_estimated_tokens_total": {
+          "source": "locally_estimated",
+          "value": 128670
+        },
+        "developer_text_blocks": 36,
+        "measurement_complete": true,
+        "provider_usage": {
+          "cache_ratio": {
+            "source": "provider_reported",
+            "value": 0.9533634398476125
+          },
+          "cached_input_tokens": {
+            "source": "provider_reported",
+            "value": 133632
+          },
+          "input_tokens": {
+            "source": "provider_reported",
+            "value": 140169
+          },
+          "output_tokens": {
+            "source": "provider_reported",
+            "value": 1803
+          },
+          "reasoning_tokens": {
+            "source": "provider_reported",
+            "value": 1327
+          },
+          "uncached_input_tokens": {
+            "source": "provider_reported",
+            "value": 6537
+          }
+        },
+        "requests_observed": 6,
+        "runs_observed": 3,
+        "stable_block_classes": 6,
+        "stable_tokens_per_request": 21445,
+        "stable_weight_consistent": true
+      },
+      "no_memories": {
+        "complete_observations": 6,
+        "developer_estimated_tokens_total": {
+          "source": "locally_estimated",
+          "value": 94794
+        },
+        "developer_text_blocks": 36,
+        "measurement_complete": true,
+        "provider_usage": {
+          "cache_ratio": {
+            "source": "provider_reported",
+            "value": 0.6425735727275056
+          },
+          "cached_input_tokens": {
+            "source": "provider_reported",
+            "value": 75264
+          },
+          "input_tokens": {
+            "source": "provider_reported",
+            "value": 117129
+          },
+          "output_tokens": {
+            "source": "provider_reported",
+            "value": 1859
+          },
+          "reasoning_tokens": {
+            "source": "provider_reported",
+            "value": 1358
+          },
+          "uncached_input_tokens": {
+            "source": "provider_reported",
+            "value": 41865
+          }
+        },
+        "requests_observed": 6,
+        "runs_observed": 3,
+        "stable_block_classes": 5,
+        "stable_tokens_per_request": 15734,
+        "stable_weight_consistent": true
+      },
+      "no_plugins": {
+        "complete_observations": 6,
+        "developer_estimated_tokens_total": {
+          "source": "locally_estimated",
+          "value": 78072
+        },
+        "developer_text_blocks": 30,
+        "measurement_complete": true,
+        "provider_usage": {
+          "cache_ratio": {
+            "source": "provider_reported",
+            "value": 0.7106914114586749
+          },
+          "cached_input_tokens": {
+            "source": "provider_reported",
+            "value": 65024
+          },
+          "input_tokens": {
+            "source": "provider_reported",
+            "value": 91494
+          },
+          "output_tokens": {
+            "source": "provider_reported",
+            "value": 2030
+          },
+          "reasoning_tokens": {
+            "source": "provider_reported",
+            "value": 1576
+          },
+          "uncached_input_tokens": {
+            "source": "provider_reported",
+            "value": 26470
+          }
+        },
+        "requests_observed": 6,
+        "runs_observed": 3,
+        "stable_block_classes": 5,
+        "stable_tokens_per_request": 13012,
+        "stable_weight_consistent": true
+      },
+      "user_config_a": {
+        "complete_observations": 6,
+        "developer_estimated_tokens_total": {
+          "source": "locally_estimated",
+          "value": 129060
+        },
+        "developer_text_blocks": 42,
+        "measurement_complete": true,
+        "provider_usage": {
+          "cache_ratio": {
+            "source": "provider_reported",
+            "value": 0.7406119511465177
+          },
+          "cached_input_tokens": {
+            "source": "provider_reported",
+            "value": 103936
+          },
+          "input_tokens": {
+            "source": "provider_reported",
+            "value": 140338
+          },
+          "output_tokens": {
+            "source": "provider_reported",
+            "value": 1621
+          },
+          "reasoning_tokens": {
+            "source": "provider_reported",
+            "value": 1189
+          },
+          "uncached_input_tokens": {
+            "source": "provider_reported",
+            "value": 36402
+          }
+        },
+        "requests_observed": 6,
+        "runs_observed": 3,
+        "stable_block_classes": 6,
+        "stable_tokens_per_request": 21445,
+        "stable_weight_consistent": true
+      },
+      "user_config_b": {
+        "complete_observations": 6,
+        "developer_estimated_tokens_total": {
+          "source": "locally_estimated",
+          "value": 129060
+        },
+        "developer_text_blocks": 42,
+        "measurement_complete": true,
+        "provider_usage": {
+          "cache_ratio": {
+            "source": "provider_reported",
+            "value": 0.7412140575079872
+          },
+          "cached_input_tokens": {
+            "source": "provider_reported",
+            "value": 103936
+          },
+          "input_tokens": {
+            "source": "provider_reported",
+            "value": 140224
+          },
+          "output_tokens": {
+            "source": "provider_reported",
+            "value": 2021
+          },
+          "reasoning_tokens": {
+            "source": "provider_reported",
+            "value": 1552
+          },
+          "uncached_input_tokens": {
+            "source": "provider_reported",
+            "value": 36288
+          }
+        },
+        "requests_observed": 6,
+        "runs_observed": 3,
+        "stable_block_classes": 6,
+        "stable_tokens_per_request": 21445,
+        "stable_weight_consistent": true
+      }
+    },
+    "attribution": {
+      "combined_added_tokens_per_request": 1540,
+      "combined_interaction_only_removed_tokens_per_request": 0,
+      "combined_removal_explained_by_independent_layers_tokens_per_request": 15684,
+      "combined_removed_tokens_per_request": 15684,
+      "common_all_arms_tokens_per_request": 5761,
+      "configured_no_extensions_only_tokens_per_request": 0,
+      "hooks_added_tokens_per_request": 0,
+      "hooks_removed_tokens_per_request": 0,
+      "ignored_config_only_tokens_per_request": 0,
+      "memories_added_tokens_per_request": 0,
+      "memories_removed_tokens_per_request": 5711,
+      "plugins_added_tokens_per_request": 1540,
+      "plugins_removed_tokens_per_request": 9973
+    },
+    "baseline_aa": {
+      "a_only_tokens_per_request": 0,
+      "b_only_tokens_per_request": 0
+    },
+    "cache_aa": {
+      "structural_null_control_input_relative_delta": 0.000798716348725263,
+      "structural_null_control_match": true,
+      "structural_null_control_uncached_relative_delta": 1.3902336644746047,
+      "structural_null_control_within_threshold": false,
+      "threshold": 0.1,
+      "uncached_input_relative_delta": 0.0031366075113495664,
+      "within_threshold": true
+    },
+    "integrity": {
+      "all_arms_complete": true,
+      "baseline_aa_structural_match": true,
+      "common_weight_consistent": true
+    },
+    "mode": "shadow",
+    "provider_effect_active": false
+  },
+  "limitations": [
+    "Feature ablation flags measure runtime composition effects, not literal config-file text.",
+    "Layer effects can interact and are not assumed additive.",
+    "Provider cache comparisons are descriptive unless the A/A uncached-input gate passes.",
+    "No ordinary Tracepress instruction or provider request was modified."
+  ],
+  "mode": "shadow",
+  "model": "gpt-5.6-luna",
+  "phase": "6.4",
+  "privacy": {
+    "authentication_material_copied": false,
+    "commands_persisted": false,
+    "configuration_contents_in_report": false,
+    "identities_in_report": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false,
+    "report_contract": "aggregate_allowlist_only",
+    "responses_persisted": false
+  },
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "rounds": 3,
+  "schedule": "interleaved_round_robin_v1",
+  "status": "completed",
+  "workspace_class": "public_controlled"
+}

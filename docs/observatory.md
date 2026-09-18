@@ -127,6 +127,7 @@ GET /api/v1/baselines
 GET /api/v1/baselines/:id
 GET /api/v1/opportunities
 GET /api/v1/source-optimization
+GET /api/v1/source-optimization/experiments
 GET /api/v1/compression/experiments
 GET /api/v1/compression/experiments/:id
 GET /api/v1/compression/experiments/:id/candidates?limit=50&cursor=...
@@ -136,8 +137,10 @@ Sessions accept `limit`, opaque `cursor`, `model`, `transport`, `status`, `has_c
 
 The baseline/workload/opportunity endpoints read reproducible JSON report artifacts. They do not replace or modify those artifacts, and official convergence status is projected rather than recalculated.
 
-Source Optimization reads the latest bounded Phase 5 report and keeps source-output measurements
-separate from downstream provider and trajectory measurements. It exposes only allowlisted
+Source Optimization reads bounded Phase 5 reports and keeps source-output measurements separate
+from downstream provider and trajectory measurements. The compatible preferred-report endpoint is
+joined by a five-family comparison endpoint for Cargo Test, Cargo Check, Cargo Clippy, ripgrep, and
+Git Status. It exposes only allowlisted
 aggregates: raw/emitted bytes, never-worse, recovery rate, provider usage, task success, tool calls,
 retries, recoveries, and duration. Active-pilot evidence is labeled explicitly; no command, output,
 prompt, path, recovery token, or provider body crosses the API.
@@ -156,6 +159,11 @@ The rejected Phase 5.8 `git_status_v1_active` dirty cohort is allowlisted ahead 
 predecessor as fallback evidence. Its `reject` decision remains explicit and it does not displace
 the accepted `rg_v1_active` report while that artifact exists. The separate clean fail-open cohort
 stays in research artifacts rather than being mixed into reduction totals.
+
+Phase 5.9 adds the typed runtime policy registry behind this evidence. Only the accepted Cargo Test
+v1, Cargo Check v2, and ripgrep v1 active policies can select an active reducer, and only through an
+explicit session opt-in. Rejected policies fail open with a bounded reason; passthrough remains the
+default.
 
 Compression Lab reads operational shadow metadata in SQLite read-only mode. It shows experiment
 quality, compressor applicability, addressable estimated-token share, local byte/token-estimate

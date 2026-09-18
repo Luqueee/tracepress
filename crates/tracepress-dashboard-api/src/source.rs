@@ -44,6 +44,29 @@ const REPORTS: [(&str, &str); 9] = [
     ),
 ];
 
+const COMPARISON_REPORTS: [(&str, &str); 5] = [
+    (
+        "source-active-pilot-001",
+        "TRACEPRESS_ACTIVE_RESULTS_001.json",
+    ),
+    (
+        "source-cargo-check-active-001",
+        "TRACEPRESS_CHECK_V2_ACTIVE_SUCCESS_RESULTS_001.json",
+    ),
+    (
+        "source-cargo-clippy-shadow-001",
+        "TRACEPRESS_CLIPPY_SHADOW_SMOKE_001.json",
+    ),
+    (
+        "source-rg-active-001",
+        "TRACEPRESS_RG_ACTIVE_PARSEABLE_RESULTS_001.json",
+    ),
+    (
+        "source-git-status-active-001",
+        "TRACEPRESS_GIT_STATUS_ACTIVE_DIRTY_RESULTS_001.json",
+    ),
+];
+
 pub(crate) fn load(root: &Path) -> io::Result<Option<SourceOptimizationSummary>> {
     let Some(path) = REPORTS
         .iter()
@@ -52,6 +75,19 @@ pub(crate) fn load(root: &Path) -> io::Result<Option<SourceOptimizationSummary>>
     else {
         return Ok(None);
     };
+    parse_report(&path).map(Some)
+}
+
+pub(crate) fn load_all(root: &Path) -> io::Result<Vec<SourceOptimizationSummary>> {
+    COMPARISON_REPORTS
+        .iter()
+        .map(|(directory, name)| root.join(directory).join(name))
+        .filter(|path| path.is_file())
+        .map(|path| parse_report(&path))
+        .collect()
+}
+
+fn parse_report(path: &Path) -> io::Result<SourceOptimizationSummary> {
     let report: Value = serde_json::from_slice(&fs::read(path)?)
         .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error))?;
     let rows = report
@@ -72,6 +108,12 @@ pub(crate) fn load(root: &Path) -> io::Result<Option<SourceOptimizationSummary>>
             "ExplicitGitStatusShadow",
             "ExplicitGitStatusControl",
             "git_status",
+        ),
+        Some("explicit-clippy-shadow") => (
+            false,
+            "ExplicitClippyShadow",
+            "ExplicitClippyControl",
+            "cargo_clippy",
         ),
         Some("explicit-check-active-v2") => (
             true,
@@ -116,7 +158,7 @@ pub(crate) fn load(root: &Path) -> io::Result<Option<SourceOptimizationSummary>>
         Some("reject") => "reject",
         _ => "pending",
     };
-    Ok(Some(SourceOptimizationSummary {
+    Ok(SourceOptimizationSummary {
         experiment_id: report
             .get("experiment_id")
             .and_then(Value::as_str)
@@ -156,7 +198,7 @@ pub(crate) fn load(root: &Path) -> io::Result<Option<SourceOptimizationSummary>>
             forwarding_mutations: sum(&treatment, "forwarding_mutations"),
         },
         downstream,
-    }))
+    })
 }
 
 fn arm_summary(arm: &str, rows: &[Value]) -> SourceOptimizationArm {

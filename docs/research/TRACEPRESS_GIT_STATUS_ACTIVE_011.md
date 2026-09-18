@@ -4,8 +4,9 @@
 
 **REJECT `git_status_v1_active` for the measured workload.**
 
-The reducer remains an explicit experimental path for reproducibility, but it is not promoted as an
-accepted policy and default runtime behavior remains passthrough.
+The reducer was retained as an explicit experimental path for the original reproduction. Phase 5.9
+subsequently preserved its implementation but blocked CLI runtime selection through the typed
+policy registry. It is not an accepted policy and default runtime behavior remains passthrough.
 
 ## Dirty active cohort
 

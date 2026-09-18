@@ -8,6 +8,7 @@ mod admission;
 mod codex_hook;
 mod execution;
 mod model;
+mod policy;
 mod reducers;
 
 pub use admission::decide;
@@ -16,6 +17,10 @@ pub use execution::execute_passthrough;
 pub use model::{
     CargoOutputCandidate, CargoTestShadowCandidate, CommandFamily, FailOpenReason, OutputContract,
     RewriteDecision, SourceExecutionMetadata, SourceOutputCandidate,
+};
+pub use policy::{
+    SourcePolicyDecision, SourcePolicyMode, SourceReducerPolicy, active_source_policy_allowed,
+    source_reducer_policies, source_reducer_policy,
 };
 pub use reducers::{
     cargo_check_v1_active, cargo_check_v1_shadow, cargo_check_v2_active, cargo_check_v2_shadow,

@@ -211,6 +211,10 @@ pub fn router(database_path: PathBuf, reports_path: PathBuf) -> Router {
         .route("/baselines/{id}", get(baseline_detail))
         .route("/opportunities", get(opportunities))
         .route("/source-optimization", get(source_optimization))
+        .route(
+            "/source-optimization/experiments",
+            get(source_optimization_experiments),
+        )
         .route("/compression/experiments", get(compression_experiments))
         .route("/compression/experiments/{id}", get(compression_experiment))
         .route(
@@ -459,6 +463,14 @@ async fn source_optimization(
             "source_optimization_not_found",
             "Source optimization evidence was not found",
         ))
+}
+
+async fn source_optimization_experiments(
+    State(state): State<AppState>,
+) -> Result<Json<Vec<SourceOptimizationSummary>>, ApiFailure> {
+    source::load_all(&state.reports_path)
+        .map(Json)
+        .map_err(|_error| ApiFailure::Internal)
 }
 
 async fn compression_experiments(
@@ -764,6 +776,36 @@ mod tests {
                 .downstream
                 .iter()
                 .all(|arm| arm.sessions == arm.successful_sessions)
+        );
+    }
+
+    #[tokio::test]
+    async fn source_optimization_experiments_compare_all_measured_families() {
+        let (status, body) = response("/api/v1/source-optimization/experiments", false).await;
+        assert_eq!(status, StatusCode::OK);
+        let reports: Vec<SourceOptimizationSummary> =
+            serde_json::from_slice(&body).expect("source optimization experiment JSON");
+        let families: std::collections::BTreeSet<_> = reports
+            .iter()
+            .map(|report| report.command_family.as_str())
+            .collect();
+        assert_eq!(
+            families,
+            std::collections::BTreeSet::from([
+                "cargo_test",
+                "cargo_check",
+                "cargo_clippy",
+                "rg",
+                "git_status",
+            ])
+        );
+        assert_eq!(reports.len(), 5);
+        assert_eq!(
+            reports
+                .iter()
+                .find(|report| report.command_family == "git_status")
+                .map(|report| report.decision.as_str()),
+            Some("reject")
         );
     }
 

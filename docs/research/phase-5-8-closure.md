@@ -18,4 +18,4 @@ Phase 5.8 closes with a rejected active policy and a passing clean-output safety
 `git_status_v1_active` is not accepted because provider uncached input failed the positive gate. No
 broader or lossier Git status reducer is authorized from this result. A future retry requires new
 evidence, a materially different workload, or a reduced recovery-overhead design—not periodic
-reruns of the same cohort.
+reruns of the same cohort. Phase 5.9 subsequently blocks this reducer from CLI runtime selection.

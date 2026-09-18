@@ -82,10 +82,11 @@ use tracepress_storage::{
 };
 use tracepress_storage::{ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus};
 use tracepress_tool_proxy::{
-    CargoOutputCandidate, CommandFamily, cargo_check_v1_active, cargo_check_v1_shadow,
-    cargo_check_v2_active, cargo_check_v2_shadow, cargo_clippy_v1_shadow, cargo_test_v1_active,
-    cargo_test_v1_shadow, codex_pre_tool_use_identity_rewrite, codex_pre_tool_use_rewrite,
-    execute_passthrough, git_status_v1_active, git_status_v1_shadow, rg_v1_active, rg_v1_shadow,
+    CargoOutputCandidate, CommandFamily, SourcePolicyDecision, SourcePolicyMode,
+    active_source_policy_allowed, cargo_check_v1_shadow, cargo_check_v2_active,
+    cargo_check_v2_shadow, cargo_clippy_v1_shadow, cargo_test_v1_active, cargo_test_v1_shadow,
+    codex_pre_tool_use_identity_rewrite, codex_pre_tool_use_rewrite, execute_passthrough,
+    git_status_v1_shadow, rg_v1_active, rg_v1_shadow, source_reducer_policy,
 };
 
 const FRAME_BYTES: u64 = 65_536;
@@ -5887,6 +5888,7 @@ struct SourceRecoveryWrite<'a> {
 struct SourceEmissionRecord<'a> {
     candidate: Option<&'a CargoOutputCandidate>,
     reducer_id: &'static str,
+    policy_decision: &'static str,
     emitted_bytes: u64,
     active: bool,
     recovery_available: bool,
@@ -6058,24 +6060,21 @@ fn recall_source_output(config: &Config, recovery_id: &str) -> Result<(), String
     record_source_recovery(config, &session_id, &metadata)
 }
 
-fn source_reducer_id(
-    requested: Option<&str>,
-    active: bool,
-    candidate_present: bool,
-) -> &'static str {
-    match (requested, active, candidate_present) {
-        (Some("cargo_test_v1_active"), true, _) => "cargo_test_v1_active",
-        (Some("cargo_check_v1_active"), true, _) => "cargo_check_v1_active",
-        (Some("cargo_check_v2_active"), true, _) => "cargo_check_v2_active",
-        (Some("rg_v1_active"), true, _) => "rg_v1_active",
-        (Some("git_status_v1_active"), true, _) => "git_status_v1_active",
-        (Some("cargo_test_v1_shadow"), false, true) => "cargo_test_v1_shadow",
-        (Some("cargo_check_v1_shadow"), false, true) => "cargo_check_v1_shadow",
-        (Some("cargo_check_v2_shadow"), false, true) => "cargo_check_v2_shadow",
-        (Some("cargo_clippy_v1_shadow"), false, true) => "cargo_clippy_v1_shadow",
-        (Some("rg_v1_shadow"), false, true) => "rg_v1_shadow",
-        (Some("git_status_v1_shadow"), false, true) => "git_status_v1_shadow",
-        _ => "passthrough",
+fn source_reducer_id(requested: Option<&str>) -> &'static str {
+    requested
+        .and_then(source_reducer_policy)
+        .map_or("passthrough", |policy| policy.reducer_id)
+}
+
+fn source_policy_decision(requested: Option<&str>) -> &'static str {
+    let Some(requested) = requested else {
+        return "passthrough";
+    };
+    match source_reducer_policy(requested).map(|policy| policy.decision) {
+        Some(SourcePolicyDecision::ShadowOnly) => "shadow_only",
+        Some(SourcePolicyDecision::AcceptedOptIn) => "accepted_opt_in",
+        Some(SourcePolicyDecision::Rejected) => "rejected",
+        Some(_) | None => "unknown",
     }
 }
 
@@ -6117,14 +6116,31 @@ fn active_source_reducer(
     requested: Option<&str>,
     family: CommandFamily,
 ) -> Option<ActiveSourceReducer> {
+    let requested = requested?;
+    if !active_source_policy_allowed(requested, family) {
+        return None;
+    }
     match (requested, family) {
-        (Some("cargo_test_v1_active"), CommandFamily::CargoTest) => Some(cargo_test_v1_active),
-        (Some("cargo_check_v1_active"), CommandFamily::CargoCheck) => Some(cargo_check_v1_active),
-        (Some("cargo_check_v2_active"), CommandFamily::CargoCheck) => Some(cargo_check_v2_active),
-        (Some("rg_v1_active"), CommandFamily::Ripgrep) => Some(rg_v1_active),
-        (Some("git_status_v1_active"), CommandFamily::GitStatus) => Some(git_status_v1_active),
+        ("cargo_test_v1_active", CommandFamily::CargoTest) => Some(cargo_test_v1_active),
+        ("cargo_check_v2_active", CommandFamily::CargoCheck) => Some(cargo_check_v2_active),
+        ("rg_v1_active", CommandFamily::Ripgrep) => Some(rg_v1_active),
         _ => None,
     }
+}
+
+fn source_policy_fail_open_reason(
+    requested: Option<&str>,
+    family: CommandFamily,
+) -> Option<&'static str> {
+    let requested = requested?;
+    let Some(policy) = source_reducer_policy(requested) else {
+        return Some("unknown_reducer");
+    };
+    if policy.command_family != family {
+        return Some("policy_family_mismatch");
+    }
+    (policy.mode == SourcePolicyMode::Active && policy.decision == SourcePolicyDecision::Rejected)
+        .then_some("policy_rejected")
 }
 
 #[derive(Clone, Copy)]
@@ -6186,10 +6202,12 @@ fn tool(config: &Config, args: &[String]) -> Result<(), String> {
     });
     let mut active = false;
     let mut recovery_available = false;
-    let mut fail_open_reason = None;
+    let mut fail_open_reason =
+        source_policy_fail_open_reason(reducer.as_deref(), metadata.command_family);
     if let Some(evaluate) = active_source_reducer(reducer.as_deref(), metadata.command_family) {
         active = true;
-        (candidate, recovery_available, fail_open_reason) = prepare_active_source_candidate(
+        let active_fail_open_reason;
+        (candidate, recovery_available, active_fail_open_reason) = prepare_active_source_candidate(
             ActiveSourceInput {
                 config,
                 metadata: &metadata,
@@ -6198,6 +6216,7 @@ fn tool(config: &Config, args: &[String]) -> Result<(), String> {
             },
             |recovery_command| evaluate(&stdout, &stderr, recovery_command),
         );
+        fail_open_reason = active_fail_open_reason.or(fail_open_reason);
     }
     let active_candidate = active
         .then_some(candidate.as_ref())
@@ -6215,13 +6234,15 @@ fn tool(config: &Config, args: &[String]) -> Result<(), String> {
         .map_err(|error| error.to_string())?;
     let emitted_bytes = u64::try_from(emitted_stdout.len().saturating_add(emitted_stderr.len()))
         .unwrap_or(u64::MAX);
-    let reducer_id = source_reducer_id(reducer.as_deref(), active, candidate.is_some());
+    let reducer_id = source_reducer_id(reducer.as_deref());
+    let policy_decision = source_policy_decision(reducer.as_deref());
     let _recorded = record_source_execution(
         config,
         &metadata,
         SourceEmissionRecord {
             candidate: candidate.as_ref(),
             reducer_id,
+            policy_decision,
             emitted_bytes,
             active,
             recovery_available,
@@ -6275,6 +6296,7 @@ fn record_source_execution(
         "session_id": session_id,
         "command_family": command_family,
         "reducer_id": emission.reducer_id,
+        "policy_decision": emission.policy_decision,
         "reducer_version": "v1",
         "output_contract": "agent_readable",
         "raw_stdout_bytes": metadata.raw_stdout_bytes,
@@ -6372,23 +6394,71 @@ mod tests {
     };
 
     use super::{
-        AnalysisSequence, BackgroundTaskSpawner, CONTEXT_INGESTION_QUEUE_HARD_CAP,
+        AnalysisSequence, BackgroundTaskSpawner, CONTEXT_INGESTION_QUEUE_HARD_CAP, CommandFamily,
         CompressionCandidateId, Config, ContextAnalysisDropReason, ContextAnalysisInput,
         ContextCounters, ContextReceipt, ContextSnapshotId, ContextSnapshotStatus, ControlRequest,
         CorrelationCounters, CorrelationStatus, DeferredAnalysisMetrics, DurableEventIngress,
         ObservationRecord, OperationId, PendingAnalysisEvidence, RECORDER_QUEUE_ITEMS, RequestId,
         RunRecorder, SessionId, ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus,
         SourceExecutionId, SourceRecoveryMetadata, SourceRecoveryWrite,
-        TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator, bounded_record_provider_observation_request,
-        cleanup_expired_source_recoveries, configure_codex_subscription,
-        context_ingestion_queue_capacity, measurement_metadata_line,
+        TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator, active_source_reducer,
+        bounded_record_provider_observation_request, cleanup_expired_source_recoveries,
+        configure_codex_subscription, context_ingestion_queue_capacity, measurement_metadata_line,
         reconcile_pending_context_with, safe_source_recovery_executable, scheduler_metrics_line,
-        shadow_candidate_batch_fits, source_recovery_token, store_source_recovery,
-        valid_source_recovery_token,
+        shadow_candidate_batch_fits, source_policy_fail_open_reason, source_recovery_token,
+        source_reducer_id, store_source_recovery, valid_source_recovery_token,
     };
 
     use tracepress_provider::{ObservationInput, ObservationLimits, parse_request, parse_response};
     use tracepress_proxy::{ContextAnalysisOutcome, ForwardId};
+
+    #[test]
+    fn rejected_source_policies_cannot_select_an_active_reducer() {
+        assert!(
+            active_source_reducer(Some("cargo_test_v1_active"), CommandFamily::CargoTest).is_some()
+        );
+        assert!(
+            active_source_reducer(Some("cargo_check_v2_active"), CommandFamily::CargoCheck)
+                .is_some()
+        );
+        assert!(active_source_reducer(Some("rg_v1_active"), CommandFamily::Ripgrep).is_some());
+        assert!(
+            active_source_reducer(Some("cargo_check_v1_active"), CommandFamily::CargoCheck)
+                .is_none()
+        );
+        assert!(
+            active_source_reducer(Some("git_status_v1_active"), CommandFamily::GitStatus).is_none()
+        );
+    }
+
+    #[test]
+    fn source_policy_fail_open_reasons_are_explicit() {
+        assert_eq!(
+            source_policy_fail_open_reason(Some("git_status_v1_active"), CommandFamily::GitStatus),
+            Some("policy_rejected")
+        );
+        assert_eq!(
+            source_policy_fail_open_reason(Some("rg_v1_active"), CommandFamily::CargoTest),
+            Some("policy_family_mismatch")
+        );
+        assert_eq!(
+            source_policy_fail_open_reason(Some("unknown"), CommandFamily::CargoTest),
+            Some("unknown_reducer")
+        );
+        assert_eq!(
+            source_policy_fail_open_reason(Some("cargo_test_v1_active"), CommandFamily::CargoTest),
+            None
+        );
+        assert_eq!(
+            source_policy_fail_open_reason(None, CommandFamily::CargoTest),
+            None
+        );
+        assert_eq!(
+            source_reducer_id(Some("git_status_v1_active")),
+            "git_status_v1_active"
+        );
+        assert_eq!(source_reducer_id(Some("unknown")), "passthrough");
+    }
 
     #[test]
     #[allow(

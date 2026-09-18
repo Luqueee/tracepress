@@ -753,11 +753,87 @@ fn render_opportunities(state: &Option<Result<Vec<OpportunitySummary>, String>>)
 
 #[component]
 fn SourceOptimizationPage() -> Element {
-    let resource =
-        use_resource(|| fetch::<SourceOptimizationSummary>("/api/v1/source-optimization"));
+    let latest = use_resource(|| fetch::<SourceOptimizationSummary>("/api/v1/source-optimization"));
+    let experiments = use_resource(|| {
+        fetch::<Vec<SourceOptimizationSummary>>("/api/v1/source-optimization/experiments")
+    });
     rsx! { PageHeader { title: "Source Optimization", subtitle: "Candidate output reduction and downstream provider behavior are deliberately separate." }
-        div { class: "page", {render_source_optimization(&resource.read())} }
+        div { class: "page",
+            {render_source_optimization_comparison(&experiments.read())}
+            div { class: "spacer-top", {render_source_optimization(&latest.read())} }
+        }
     }
+}
+
+fn render_source_optimization_comparison(
+    state: &Option<Result<Vec<SourceOptimizationSummary>, String>>,
+) -> Element {
+    match state {
+        None => rsx! { Skeleton {} },
+        Some(Err(error)) => rsx! { ErrorState { message: error.clone() } },
+        Some(Ok(reports)) if reports.is_empty() => rsx! { Card {
+            title: "Measured policy comparison",
+            EmptyState { title: "No source experiments found.", message: "Add bounded public-workload reports before selecting a policy." }
+        } },
+        Some(Ok(reports)) => rsx! { Card { title: "Measured policy comparison",
+            DataTable {
+                thead { tr {
+                    th { "Family" }
+                    th { "Mode" }
+                    th { "Decision" }
+                    th { class: "numeric", "Pairs" }
+                    th { class: "numeric", "Source reduction" }
+                    th { class: "numeric", "Uncached input C → T" }
+                    th { class: "numeric", "Task success" }
+                    th { class: "numeric", "Tool calls C → T" }
+                    th { class: "numeric", "Retries" }
+                    th { class: "numeric", "Recoveries" }
+                } }
+                tbody { for report in reports { {render_source_optimization_comparison_row(report)} } }
+            }
+            p { class: "muted spacer-top", "Accepted and rejected decisions remain workload-scoped. Passthrough stays the default runtime policy." }
+        } },
+    }
+}
+
+fn render_source_optimization_comparison_row(report: &SourceOptimizationSummary) -> Element {
+    let control = report.downstream.first();
+    let treatment = report.downstream.get(1);
+    let uncached = format!(
+        "{} → {}",
+        compact_u64(control.map_or(0, |arm| arm.uncached_input)),
+        compact_u64(treatment.map_or(0, |arm| arm.uncached_input))
+    );
+    let success = treatment.map_or_else(
+        || "—".to_owned(),
+        |arm| format!("{}/{}", arm.successful_sessions, arm.sessions),
+    );
+    let tool_calls = format!(
+        "{} → {}",
+        compact_u64(control.map_or(0, |arm| arm.tool_calls)),
+        compact_u64(treatment.map_or(0, |arm| arm.tool_calls))
+    );
+    let retries = treatment.and_then(|arm| arm.command_retries);
+    let recoveries = treatment.map_or(0, |arm| arm.recovery_requests);
+    let decision_tone = if report.decision == "pass" {
+        "success"
+    } else if report.decision == "reject" {
+        "danger"
+    } else {
+        "warning"
+    };
+    rsx! { tr {
+        td { "{humanize(&report.command_family)}" }
+        td { Badge { text: report.mode.clone(), tone: if report.provider_effect_active { "warning" } else { "neutral" } } }
+        td { Badge { text: report.decision.clone(), tone: decision_tone } }
+        td { class: "numeric mono", "{compact_u64(report.pairs)}" }
+        td { class: "numeric mono", "{format_basis_points(report.source.reduction_basis_points)}" }
+        td { class: "numeric mono", "{uncached}" }
+        td { class: "numeric mono", "{success}" }
+        td { class: "numeric mono", "{tool_calls}" }
+        td { class: "numeric mono", "{format_optional_u64(retries)}" }
+        td { class: "numeric mono", "{compact_u64(recoveries)}" }
+    } }
 }
 
 fn render_source_optimization(

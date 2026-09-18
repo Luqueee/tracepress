@@ -1,0 +1,97 @@
+{
+  "execution": {
+    "sessions_completed": 10,
+    "sessions_requested": 10,
+    "sessions_return_code_nonzero": 0,
+    "sessions_return_code_zero": 10,
+    "sessions_timed_out": 0
+  },
+  "experiment_id": "tool-surface-shadow-pilot-014",
+  "limitations": [
+    "Shadow mode does not remove, rewrite, reorder, or select tools.",
+    "Provider usage is observational and does not establish causal savings.",
+    "The bounded public Search workload does not establish general tool-surface behavior.",
+    "An active experiment requires objective task-quality and trajectory evaluation."
+  ],
+  "mode": "shadow",
+  "model": "gpt-5.6-luna",
+  "phase": "6.1",
+  "privacy": {
+    "commands_persisted": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false,
+    "report_contract": "aggregate_allowlist_only",
+    "responses_persisted": false,
+    "tool_identity_material_persisted": false,
+    "tool_names_persisted": false
+  },
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "shadow_gate": {
+    "decision": "reject_active_tool_selection_no_observed_schema_surface",
+    "identity_evidence_available": false,
+    "material_schema_exposure_observed": false,
+    "provider_effect_active": false,
+    "provider_usage_available": true,
+    "schema_coverage_complete": true,
+    "tool_selection_active": false
+  },
+  "status": "completed",
+  "tool_surface": {
+    "distinct_defined_tools": null,
+    "distinct_used_tools": null,
+    "estimated_schema_tokens": {
+      "source": "locally_estimated",
+      "value": 0
+    },
+    "mode": "shadow",
+    "provider_effect_active": false,
+    "provider_usage": {
+      "cache_ratio": {
+        "source": "provider_reported",
+        "value": 0.8881696767497342
+      },
+      "cached_input_tokens": {
+        "source": "provider_reported",
+        "value": 427008
+      },
+      "input_tokens": {
+        "source": "provider_reported",
+        "value": 480773
+      },
+      "output_tokens": {
+        "source": "provider_reported",
+        "value": 5545
+      },
+      "reasoning_tokens": {
+        "source": "provider_reported",
+        "value": 3957
+      },
+      "uncached_input_tokens": {
+        "source": "provider_reported",
+        "value": 53765
+      }
+    },
+    "repeated_schema_share_basis_points": null,
+    "repeated_schema_tokens": {
+      "source": "locally_estimated",
+      "value": 0
+    },
+    "requests_observed": 20,
+    "schema_bytes": {
+      "source": "locally_estimated",
+      "value": 0
+    },
+    "schema_observation_coverage_basis_points": 10000,
+    "schema_observations": 20,
+    "tool_calls_observed": 10,
+    "tool_definitions_exposed": {
+      "source": "locally_estimated",
+      "value": 0
+    },
+    "unused_tools_lower_bound": null
+  },
+  "workspace_class": "public_controlled"
+}

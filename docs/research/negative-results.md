@@ -30,6 +30,7 @@ and intentionally do not include prompts, paths, tool arguments, raw results, or
 | `rg_v1_active` parseable cohort | Pinned public parseable workload N=10 paired | Source -30.65%, uncached input -23.93% aggregate, paired median -8.5, task success 10/10, no retries or recalls | Accepted for this workload behind explicit opt-in; default remains passthrough |
 | `git_status_v1` Shadow | Pinned public dirty-worktree workload N=10 paired | Candidate -55.19%, task success 10/10, no retries/recoveries, raw still forwarded | Accept candidate for a separate active pilot; provider deltas are non-causal A/A noise |
 | `git_status_v1_active` | Dirty and clean cohorts, each N=10 paired | Dirty source -23.84%, but uncached input +3.32% aggregate despite paired median -9.5; clean 10/10 raw fail-open; no retries/recalls | Reject active policy for this workload; runtime selection blocked by the Phase 5.9 policy registry |
+| `tool-surface-shadow-pilot-014` | Pinned public Search workload, N=10 | 20/20 complete request analyses and 10 observed tool calls, but the intercepted provider surface exposed 0 tool definitions, 0 schema bytes, and 0 estimated schema tokens | Reject active tool selection on this surface; do not build a selector without a materially different integration or workload |
 
 The evidence is workload-scoped. It closes generic deterministic/provider-readable expansion for
 the current cohorts; it does not claim that every future tool-family policy is impossible.

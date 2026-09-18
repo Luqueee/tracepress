@@ -4052,8 +4052,8 @@ fn context_metrics(
             *sum = sum.saturating_add(value);
         }
     }
-    let estimated_schema_tokens = if tool_count == 0 {
-        None
+    let estimated_schema_tokens = if tool_count == 0 && analysis_complete {
+        Some(0)
     } else {
         aggregate_total(&schema_aggregate)
     };
@@ -6396,14 +6396,15 @@ mod tests {
     use super::{
         AnalysisSequence, BackgroundTaskSpawner, CONTEXT_INGESTION_QUEUE_HARD_CAP, CommandFamily,
         CompressionCandidateId, Config, ContextAnalysisDropReason, ContextAnalysisInput,
-        ContextCounters, ContextReceipt, ContextSnapshotId, ContextSnapshotStatus, ControlRequest,
-        CorrelationCounters, CorrelationStatus, DeferredAnalysisMetrics, DurableEventIngress,
-        ObservationRecord, OperationId, PendingAnalysisEvidence, RECORDER_QUEUE_ITEMS, RequestId,
-        RunRecorder, SessionId, ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus,
-        SourceExecutionId, SourceRecoveryMetadata, SourceRecoveryWrite,
-        TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator, active_source_reducer,
-        bounded_record_provider_observation_request, cleanup_expired_source_recoveries,
-        configure_codex_subscription, context_ingestion_queue_capacity, measurement_metadata_line,
+        ContextAnalysisStatus, ContextCounters, ContextReceipt, ContextSnapshotId,
+        ContextSnapshotStatus, ControlRequest, CorrelationCounters, CorrelationStatus,
+        DeferredAnalysisMetrics, DurableEventIngress, ObservationRecord, OperationId,
+        PendingAnalysisEvidence, RECORDER_QUEUE_ITEMS, RequestId, RunRecorder, SessionId,
+        ShadowCacheRisk, ShadowCandidateRecord, ShadowCandidateStatus, SourceExecutionId,
+        SourceRecoveryMetadata, SourceRecoveryWrite, TERMINAL_ANALYSIS_IDENTITIES, UuidV7Generator,
+        active_source_reducer, bounded_record_provider_observation_request,
+        cleanup_expired_source_recoveries, configure_codex_subscription,
+        context_ingestion_queue_capacity, context_metrics, measurement_metadata_line,
         reconcile_pending_context_with, safe_source_recovery_executable, scheduler_metrics_line,
         shadow_candidate_batch_fits, source_policy_fail_open_reason, source_recovery_token,
         source_reducer_id, store_source_recovery, valid_source_recovery_token,
@@ -6411,6 +6412,16 @@ mod tests {
 
     use tracepress_provider::{ObservationInput, ObservationLimits, parse_request, parse_response};
     use tracepress_proxy::{ContextAnalysisOutcome, ForwardId};
+
+    #[test]
+    fn complete_context_without_tool_definitions_records_known_zero_schema_tokens() {
+        let (metrics, _) = context_metrics(&[], ContextAnalysisStatus::Complete, None);
+
+        assert_eq!(metrics.tool_count, Some(0));
+        assert_eq!(metrics.schema_bytes, Some(0));
+        assert_eq!(metrics.estimated_schema_tokens, Some(0));
+        assert_eq!(metrics.repeated_schema_tokens, Some(0));
+    }
 
     #[test]
     fn rejected_source_policies_cannot_select_an_active_reducer() {

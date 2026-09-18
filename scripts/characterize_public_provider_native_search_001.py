@@ -9,6 +9,7 @@ transient. The report is built from an explicit aggregate allowlist only.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import json
 import os
 from pathlib import Path
@@ -25,6 +26,18 @@ SHADOW_EXPERIMENT_ID = "public-provider-native-search-envelope-shadow-001"
 RIPGREP_URL = "https://github.com/BurntSushi/ripgrep"
 RIPGREP_SHA = "3fce3b5bb0236da2df6d99672afb8a719642eca7"
 MODEL = "gpt-5.6-luna"
+WORKSPACE_INSTRUCTION_MARKER_V1 = """# Tracepress public attribution marker v1
+
+This temporary public measurement workspace is read-only.
+
+- Use exactly the bounded shell search requested by the user.
+- Do not modify repository files.
+- Return only the requested aggregate counts.
+"""
+CONTROLLED_DEVELOPER_INSTRUCTIONS_V1 = """Tracepress public developer marker v1.
+Keep this temporary public measurement task read-only, use only the requested bounded shell search,
+and return only the requested aggregate counts.
+"""
 SEARCH_PATTERNS = (
     "Result<",
     "fn ",
@@ -68,6 +81,21 @@ def parse_args() -> argparse.Namespace:
         action="store_true",
         help="evaluate bounded shadow candidates without mutating forwarding",
     )
+    parser.add_argument(
+        "--ignore-user-config",
+        action="store_true",
+        help="pass Codex --ignore-user-config while retaining CODEX_HOME authentication",
+    )
+    parser.add_argument(
+        "--workspace-instruction-marker-v1",
+        action="store_true",
+        help="install the fixed public Phase 6.3 AGENTS.md marker in the temporary checkout",
+    )
+    parser.add_argument(
+        "--controlled-developer-instructions-v1",
+        action="store_true",
+        help="inject the fixed public Phase 6.3 developer marker through strict Codex config",
+    )
     return parser.parse_args()
 
 
@@ -77,7 +105,7 @@ def scalar(connection: sqlite3.Connection, query: str) -> int:
 
 def characterize(database: Path, shadow_experiment_id: str | None) -> dict[str, Any]:
     uri = f"file:{database}?mode=ro"
-    with sqlite3.connect(uri, uri=True) as connection:
+    with closing(sqlite3.connect(uri, uri=True)) as connection:
         connection.execute("PRAGMA query_only=ON")
         rows = connection.execute(
             """SELECT COALESCE(origin, 'unavailable'), COALESCE(kind, 'unavailable'),
@@ -197,6 +225,43 @@ def lifetime_prompt() -> str:
     )
 
 
+def codex_exec_command(
+    cli: Path,
+    request_prompt: str,
+    *,
+    ignore_user_config: bool,
+    controlled_developer_instructions: bool = False,
+) -> list[str]:
+    command = [str(cli), "run", "codex", "exec"]
+    if ignore_user_config:
+        command.append("--ignore-user-config")
+    if controlled_developer_instructions:
+        command.extend(
+            [
+                "--strict-config",
+                "-c",
+                f"developer_instructions={json.dumps(CONTROLLED_DEVELOPER_INSTRUCTIONS_V1)}",
+            ]
+        )
+    command.extend(
+        [
+            "-m",
+            MODEL,
+            "-s",
+            "read-only",
+            "--skip-git-repo-check",
+            request_prompt,
+        ]
+    )
+    return command
+
+
+def install_workspace_instruction_marker(public_repo: Path) -> None:
+    (public_repo / "AGENTS.md").write_text(
+        WORKSPACE_INSTRUCTION_MARKER_V1, encoding="utf-8"
+    )
+
+
 def main() -> int:
     options = parse_args()
     repo_root = options.repo_root.resolve()
@@ -227,6 +292,8 @@ def main() -> int:
             text=True,
             timeout=30,
         )
+        if options.workspace_instruction_marker_v1:
+            install_workspace_instruction_marker(public_repo)
         environment = os.environ.copy()
         environment.update(
             {
@@ -278,8 +345,14 @@ def main() -> int:
         for request_prompt in requests:
             try:
                 execution = subprocess.run(
-                    [str(cli), "run", "codex", "exec", "-m", MODEL, "-s", "read-only",
-                     "--skip-git-repo-check", request_prompt],
+                    codex_exec_command(
+                        cli,
+                        request_prompt,
+                        ignore_user_config=options.ignore_user_config,
+                        controlled_developer_instructions=(
+                            options.controlled_developer_instructions_v1
+                        ),
+                    ),
                     cwd=public_repo, env=environment, capture_output=True, text=True,
                     timeout=options.timeout,
                 )
@@ -290,7 +363,11 @@ def main() -> int:
         # flushed candidate set merely because snapshots are complete.
         deadline = time.monotonic() + 15
         while time.monotonic() < deadline:
-            with sqlite3.connect(f"file:{state_root / 'tracepress.sqlite3'}?mode=ro", uri=True) as connection:
+            with closing(
+                sqlite3.connect(
+                    f"file:{state_root / 'tracepress.sqlite3'}?mode=ro", uri=True
+                )
+            ) as connection:
                 pending = scalar(connection, "SELECT COUNT(*) FROM context_snapshots WHERE status <> 'complete'")
                 shadow_complete = not options.shadow_compression
                 if options.shadow_compression:
@@ -312,8 +389,10 @@ def main() -> int:
             # newest committed pages, so use SQLite's consistent online-backup API instead.
             if options.metadata_database_output.exists():
                 options.metadata_database_output.unlink()
-            with sqlite3.connect(state_root / "tracepress.sqlite3") as source:
-                with sqlite3.connect(options.metadata_database_output) as destination:
+            with closing(sqlite3.connect(state_root / "tracepress.sqlite3")) as source:
+                with closing(
+                    sqlite3.connect(options.metadata_database_output)
+                ) as destination:
                     source.backup(destination)
         report = {
             "experiment_id": SHADOW_EXPERIMENT_ID if options.shadow_compression else EXPERIMENT_ID,
@@ -322,6 +401,15 @@ def main() -> int:
             "workspace_class": "public_controlled",
             "repository_pin": {"repository": "BurntSushi/ripgrep", "commit_sha": RIPGREP_SHA},
             "model": MODEL,
+            "codex_user_config_loaded": not options.ignore_user_config,
+            "workspace_instruction_profile": (
+                "public_marker_v1" if options.workspace_instruction_marker_v1 else "none"
+            ),
+            "developer_instruction_profile": (
+                "public_marker_v1"
+                if options.controlled_developer_instructions_v1
+                else "none"
+            ),
             "forwarding_mutations": 0,
             "active_compression": "off",
             "shadow_compression": options.shadow_compression,

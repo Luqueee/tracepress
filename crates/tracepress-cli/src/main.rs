@@ -85,7 +85,7 @@ use tracepress_tool_proxy::{
     CargoOutputCandidate, CommandFamily, cargo_check_v1_active, cargo_check_v1_shadow,
     cargo_check_v2_active, cargo_check_v2_shadow, cargo_clippy_v1_shadow, cargo_test_v1_active,
     cargo_test_v1_shadow, codex_pre_tool_use_identity_rewrite, codex_pre_tool_use_rewrite,
-    execute_passthrough, rg_v1_active, rg_v1_shadow,
+    execute_passthrough, git_status_v1_shadow, rg_v1_active, rg_v1_shadow,
 };
 
 const FRAME_BYTES: u64 = 65_536;
@@ -6072,6 +6072,7 @@ fn source_reducer_id(
         (Some("cargo_check_v2_shadow"), false, true) => "cargo_check_v2_shadow",
         (Some("cargo_clippy_v1_shadow"), false, true) => "cargo_clippy_v1_shadow",
         (Some("rg_v1_shadow"), false, true) => "rg_v1_shadow",
+        (Some("git_status_v1_shadow"), false, true) => "git_status_v1_shadow",
         _ => "passthrough",
     }
 }
@@ -6100,6 +6101,9 @@ fn shadow_source_candidate(input: SourceReducerInput<'_>) -> Option<CargoOutputC
         }
         (Some("rg_v1_shadow"), CommandFamily::Ripgrep) => {
             Some(rg_v1_shadow(input.stdout, input.stderr))
+        }
+        (Some("git_status_v1_shadow"), CommandFamily::GitStatus) => {
+            Some(git_status_v1_shadow(input.stdout, input.stderr))
         }
         _ => None,
     }
@@ -6260,6 +6264,7 @@ fn record_source_execution(
         CommandFamily::CargoCheck => "cargo_check",
         CommandFamily::CargoClippy => "cargo_clippy",
         CommandFamily::Ripgrep => "rg",
+        CommandFamily::GitStatus => "git_status",
         _ => "unknown",
     };
     let record = serde_json::json!({
@@ -6286,6 +6291,7 @@ fn record_source_execution(
         "never_worse_accepted": emission.candidate.map(|candidate| candidate.never_worse_accepted),
         "omitted_passing_tests": emission.candidate.map(|candidate| candidate.omitted_passing_tests),
         "omitted_progress_lines": emission.candidate.map(|candidate| candidate.omitted_progress_lines),
+        "omitted_advisory_lines": emission.candidate.map(|candidate| candidate.omitted_advisory_lines),
         "grouped_match_lines": emission.candidate.map(|candidate| candidate.grouped_match_lines),
         "recovery_hint_bytes": emission.candidate.map(|candidate| candidate.recovery_hint_bytes),
         "reducer_duration_us": emission.candidate.map(|candidate| {

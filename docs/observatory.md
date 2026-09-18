@@ -148,6 +148,10 @@ allowlist and falls back to earlier Cargo Check and Cargo Test evidence when new
 absent. Ambiguous-output fail-open evidence remains in the research report rather than being mixed
 into source-reduction totals.
 
+The accepted Phase 5.7 `git_status_v1_shadow` cohort is also allowlisted as a fallback report, but
+does not displace the active `rg_v1` evidence while both artifacts exist. Its provider deltas remain
+A/A noise because Shadow returned the original bytes to the agent.
+
 Compression Lab reads operational shadow metadata in SQLite read-only mode. It shows experiment
 quality, compressor applicability, addressable estimated-token share, local byte/token-estimate
 reduction, recovery, determinism, latency, prefix evidence, cache risk, provider readability, and

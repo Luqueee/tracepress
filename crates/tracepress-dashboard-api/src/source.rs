@@ -5,10 +5,14 @@ use tracepress_dashboard_types::{
     SourceOptimizationArm, SourceOptimizationSource, SourceOptimizationSummary,
 };
 
-const REPORTS: [(&str, &str); 7] = [
+const REPORTS: [(&str, &str); 8] = [
     (
         "source-rg-active-001",
         "TRACEPRESS_RG_ACTIVE_PARSEABLE_RESULTS_001.json",
+    ),
+    (
+        "source-git-status-shadow-001",
+        "TRACEPRESS_GIT_STATUS_SHADOW_RESULTS_001.json",
     ),
     (
         "source-cargo-check-active-001",
@@ -53,6 +57,12 @@ pub(crate) fn load(root: &Path) -> io::Result<Option<SourceOptimizationSummary>>
     let reducer = report.get("reducer").and_then(Value::as_str);
     let (active, treatment_name, control_name, command_family) = match reducer {
         Some("explicit-rg-active") => (true, "ExplicitRgActive", "ExplicitRgActiveControl", "rg"),
+        Some("explicit-git-status-shadow") => (
+            false,
+            "ExplicitGitStatusShadow",
+            "ExplicitGitStatusControl",
+            "git_status",
+        ),
         Some("explicit-check-active-v2") => (
             true,
             "ExplicitCheckV2Active",
@@ -184,4 +194,54 @@ fn sum_pointer(rows: &[&Value], pointer: &str) -> u64 {
     rows.iter()
         .filter_map(|row| row.pointer(pointer).and_then(Value::as_u64))
         .fold(0, u64::saturating_add)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn loads_git_status_shadow_as_a_non_active_fallback() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let root = tempfile::tempdir()?;
+        let directory = root.path().join("source-git-status-shadow-001");
+        fs::create_dir(&directory)?;
+        let report = serde_json::json!({
+            "experiment_id": "source-git-status-shadow-001",
+            "reducer": "explicit-git-status-shadow",
+            "pairs": 1,
+            "analysis": { "decision": "pass" },
+            "rows": [
+                {
+                    "arm": "ExplicitGitStatusControl",
+                    "task_success": true,
+                    "source_stdout_bytes": 453,
+                    "source_emitted_bytes": 453,
+                    "provider_usage": {}
+                },
+                {
+                    "arm": "ExplicitGitStatusShadow",
+                    "task_success": true,
+                    "source_stdout_bytes": 453,
+                    "source_emitted_bytes": 453,
+                    "candidate_bytes": 203,
+                    "shadow_evaluations": 1,
+                    "never_worse_accepted": 1,
+                    "provider_usage": {}
+                }
+            ]
+        });
+        fs::write(
+            directory.join("TRACEPRESS_GIT_STATUS_SHADOW_RESULTS_001.json"),
+            serde_json::to_vec(&report)?,
+        )?;
+        let summary = load(root.path())?.ok_or("git status fallback report must load")?;
+        assert_eq!(summary.command_family, "git_status");
+        assert_eq!(summary.mode, "shadow");
+        assert!(!summary.provider_effect_active);
+        assert_eq!(summary.source.raw_output_bytes, 453);
+        assert_eq!(summary.source.candidate_output_bytes, 203);
+        assert_eq!(summary.source.forwarding_mutations, 0);
+        Ok(())
+    }
 }

@@ -28,6 +28,7 @@ and intentionally do not include prompts, paths, tool arguments, raw results, or
 | `rg_v1` parseable Shadow | Pinned public `rg -n struct crates` N=10 paired | Lossless grouping candidate -31.19%, task success 10/10, no retries, raw still forwarded | Accept candidate for a separate active pilot; provider deltas are non-causal A/A noise |
 | `rg_v1_active` ambiguous safety cohort | Pinned public ambiguous-output workload N=10 paired | 10/10 whole-stream fail-open, byte-exact raw emission, no mutations, retries, or recoveries | Accept safety behavior; do not attribute provider A/A deltas to the reducer |
 | `rg_v1_active` parseable cohort | Pinned public parseable workload N=10 paired | Source -30.65%, uncached input -23.93% aggregate, paired median -8.5, task success 10/10, no retries or recalls | Accepted for this workload behind explicit opt-in; default remains passthrough |
+| `git_status_v1` Shadow | Pinned public dirty-worktree workload N=10 paired | Candidate -55.19%, task success 10/10, no retries/recoveries, raw still forwarded | Accept candidate for a separate active pilot; provider deltas are non-causal A/A noise |
 
 The evidence is workload-scoped. It closes generic deterministic/provider-readable expansion for
 the current cohorts; it does not claim that every future tool-family policy is impossible.

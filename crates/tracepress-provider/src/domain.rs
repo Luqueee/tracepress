@@ -466,6 +466,10 @@ pub const MAX_RETAINED_USAGE_BYTES: usize = 64 * 1024;
 
 /// Byte bound the durable schema itself declares for `provider_usage.raw_usage_json` in migration
 /// `0002_provider_observability.sql`.
+#[allow(
+    dead_code,
+    reason = "Rust 1.88 does not count the compile-time assertion below as a use"
+)]
 const DURABLE_USAGE_COLUMN_BOUND: usize = 65_536;
 
 /// A retained usage object above the durable column bound would be rejected by the schema and roll

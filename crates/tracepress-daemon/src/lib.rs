@@ -1081,13 +1081,13 @@ impl DaemonService {
                 state: record.state,
             });
         }
-        if let Some((parent_id, _relationship)) = parent {
-            if !record.operations.contains_key(&parent_id) {
-                return Err(DaemonError::UnknownOperation {
-                    session_id,
-                    operation_id: parent_id,
-                });
-            }
+        if let Some((parent_id, _relationship)) = parent
+            && !record.operations.contains_key(&parent_id)
+        {
+            return Err(DaemonError::UnknownOperation {
+                session_id,
+                operation_id: parent_id,
+            });
         }
         let ids = self.ids.lock().await;
         let operation_id = OperationId::generate(&ids);

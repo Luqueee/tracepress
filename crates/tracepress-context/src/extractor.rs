@@ -481,12 +481,10 @@ where
         }
     }
 
-    let mut model = None;
-    if let Some(root) = root.filter(|node| node.kind() == JsonValueKind::Object) {
-        if let Some(model_node) = first_named(index, request, root.id(), "model") {
-            model = decode_json_string(request, model_node.span(), limits).ok();
-        }
-    }
+    let model = root
+        .filter(|node| node.kind() == JsonValueKind::Object)
+        .and_then(|root| first_named(index, request, root.id(), "model"))
+        .and_then(|model_node| decode_json_string(request, model_node.span(), limits).ok());
 
     let mut candidates = std::mem::take(&mut state.candidates);
     candidates.sort_by_key(|candidate| {

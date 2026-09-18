@@ -1324,14 +1324,11 @@ async fn forward_inner(
     {
         Ok(upstream) => upstream,
         Err(error) => {
-            if context_enabled {
-                if let Some(observation) = observation {
-                    if let Some(trigger) =
-                        queue_context_analysis(proxy, forward, observation).trigger
-                    {
-                        trigger.start();
-                    }
-                }
+            if context_enabled
+                && let Some(observation) = observation
+                && let Some(trigger) = queue_context_analysis(proxy, forward, observation).trigger
+            {
+                trigger.start();
             }
             if compaction {
                 queue_compaction_failure(
@@ -2176,10 +2173,10 @@ fn queue_observation(
     dropped: &Arc<AtomicBool>,
     message: ObservationMessage,
 ) {
-    if let Some(sender) = sender {
-        if sender.try_send(message).is_err() {
-            dropped.store(true, Ordering::Relaxed);
-        }
+    if let Some(sender) = sender
+        && sender.try_send(message).is_err()
+    {
+        dropped.store(true, Ordering::Relaxed);
     }
 }
 

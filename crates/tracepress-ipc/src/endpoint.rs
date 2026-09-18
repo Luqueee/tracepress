@@ -135,3 +135,72 @@ pub enum Endpoint {
     /// Authenticated loopback TCP fallback endpoint.
     Tcp(TcpEndpoint),
 }
+
+#[cfg(test)]
+mod tests {
+    use std::{net::SocketAddr, path::PathBuf};
+
+    use super::*;
+
+    #[test]
+    fn socket_owner_equality_works_without_debug_disclosure() {
+        let owner = SocketOwner::new([7; SOCKET_OWNER_BYTES]);
+        let same = SocketOwner::new([7; SOCKET_OWNER_BYTES]);
+        let different = SocketOwner::new([8; SOCKET_OWNER_BYTES]);
+
+        assert_eq!(owner, same);
+        assert_ne!(owner, different);
+        assert_eq!(format!("{owner:?}"), "SocketOwner([REDACTED])");
+    }
+
+    #[test]
+    fn unix_endpoint_rejects_nul_and_preserves_valid_path() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let valid_path = PathBuf::from("/tmp/tracepress.sock");
+        let endpoint = UnixEndpoint::new(valid_path.clone())?;
+        let with_nul = UnixEndpoint::new(PathBuf::from("/tmp/tracepress\0.sock"));
+
+        assert_eq!(endpoint.path(), valid_path);
+        assert!(matches!(with_nul, Err(IpcError::EndpointContainsNul)));
+        Ok(())
+    }
+
+    #[test]
+    fn tcp_endpoint_accepts_assigned_ipv4_and_ipv6_loopback_addresses()
+    -> Result<(), Box<dyn std::error::Error>> {
+        let ipv4 = SocketAddr::from(([127, 0, 0, 1], 4319));
+        let ipv6 = SocketAddr::from(([0, 0, 0, 0, 0, 0, 0, 1], 4319));
+
+        assert_eq!(TcpEndpoint::new(ipv4)?.address(), ipv4);
+        assert_eq!(TcpEndpoint::new(ipv6)?.address(), ipv6);
+        Ok(())
+    }
+
+    #[test]
+    fn tcp_endpoint_rejects_non_loopback_and_unassigned_ports() {
+        let non_loopback = SocketAddr::from(([192, 0, 2, 1], 4319));
+        let unassigned = SocketAddr::from(([127, 0, 0, 1], 0));
+
+        assert!(matches!(
+            TcpEndpoint::new(non_loopback),
+            Err(IpcError::TcpMustBeLoopback)
+        ));
+        assert!(matches!(
+            TcpEndpoint::new(unassigned),
+            Err(IpcError::TcpPortUnassigned)
+        ));
+    }
+
+    #[test]
+    fn named_pipe_endpoint_prefixes_name_and_rejects_nul() -> Result<(), Box<dyn std::error::Error>>
+    {
+        let endpoint = NamedPipeEndpoint::new("tracepress-test")?;
+
+        assert_eq!(endpoint.name(), r"\\.\pipe\tracepress-test");
+        assert!(matches!(
+            NamedPipeEndpoint::new("tracepress\0test"),
+            Err(IpcError::EndpointContainsNul)
+        ));
+        Ok(())
+    }
+}

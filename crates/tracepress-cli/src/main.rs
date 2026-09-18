@@ -981,18 +981,18 @@ fn bounded_record_provider_observation_request(
         body_fits && frame_fits
     };
 
-    if !fits(&observation) {
-        if let Some(response) = observation.response.as_mut() {
-            response.raw_usage = None;
-        }
+    if !fits(&observation)
+        && let Some(response) = observation.response.as_mut()
+    {
+        response.raw_usage = None;
     }
-    if !fits(&observation) {
-        if let Some(response) = observation.response.as_mut() {
-            response.provider_response_id = None;
-            response.model = None;
-            response.incomplete_reason = None;
-            response.error_code = None;
-        }
+    if !fits(&observation)
+        && let Some(response) = observation.response.as_mut()
+    {
+        response.provider_response_id = None;
+        response.model = None;
+        response.incomplete_reason = None;
+        response.error_code = None;
     }
     if !fits(&observation) {
         observation.request.model = None;
@@ -2060,10 +2060,10 @@ impl RunRecorder {
             (Some(admission), CorrelationStatus::Degraded(reason)) => admission == reason,
             _ => false,
         };
-        if let CorrelationStatus::Degraded(reason) = correlation {
-            if !admission_was_counted {
-                self.counters.degraded(reason);
-            }
+        if let CorrelationStatus::Degraded(reason) = correlation
+            && !admission_was_counted
+        {
+            self.counters.degraded(reason);
         }
         // The record carries its own correlation status, so the daemon commits the degradation
         // event in the very transaction that persists the evidence.
@@ -2194,11 +2194,11 @@ impl RunRecorder {
                 analysis_permit,
             }),
             None if self.analysis_enabled => {
-                if self.pending_context.len() >= IN_FLIGHT_FORWARDS {
-                    if let Some((evicted, _receipt)) = self.pending_context.pop_first() {
-                        self.context_counters
-                            .dropped(evicted, ContextAnalysisDropReason::CorrelationDegraded);
-                    }
+                if self.pending_context.len() >= IN_FLIGHT_FORWARDS
+                    && let Some((evicted, _receipt)) = self.pending_context.pop_first()
+                {
+                    self.context_counters
+                        .dropped(evicted, ContextAnalysisDropReason::CorrelationDegraded);
                 }
                 if self.pending_context.insert(forward, receipt).is_some() {
                     self.context_counters

@@ -1,0 +1,102 @@
+{
+  "codex_version": "codex-cli 0.155.0",
+  "execution": {
+    "sessions_completed": 10,
+    "sessions_requested": 10,
+    "sessions_return_code_nonzero": 0,
+    "sessions_return_code_zero": 10,
+    "sessions_timed_out": 0
+  },
+  "experiment_id": "instruction-surface-shadow-pilot-015",
+  "instruction_surface": {
+    "complete_observations": 21,
+    "cross_request_recurring_tokens": {
+      "source": "locally_estimated",
+      "value": 451710
+    },
+    "cross_session_recurring_tokens": {
+      "source": "locally_estimated",
+      "value": 451710
+    },
+    "developer_text_blocks": 147,
+    "developer_text_bytes": {
+      "source": "locally_measured",
+      "value": 1240344
+    },
+    "developer_text_estimated_tokens": {
+      "source": "locally_estimated",
+      "value": 451710
+    },
+    "mode": "shadow",
+    "observation_coverage_basis_points": 10000,
+    "provider_effect_active": false,
+    "provider_usage": {
+      "cache_ratio": {
+        "source": "provider_reported",
+        "value": 0.9685163298153504
+      },
+      "cached_input_tokens": {
+        "source": "provider_reported",
+        "value": 489216
+      },
+      "input_tokens": {
+        "source": "provider_reported",
+        "value": 505119
+      },
+      "output_tokens": {
+        "source": "provider_reported",
+        "value": 5704
+      },
+      "reasoning_tokens": {
+        "source": "provider_reported",
+        "value": 4147
+      },
+      "uncached_input_tokens": {
+        "source": "provider_reported",
+        "value": 15903
+      }
+    },
+    "repeat_exposure_share_basis_points": 9524,
+    "repeat_exposure_tokens": {
+      "source": "locally_estimated",
+      "value": 430200
+    },
+    "requests_observed": 21,
+    "unknown_developer_blocks": 21,
+    "unknown_developer_bytes": 653457
+  },
+  "limitations": [
+    "Developer text is a leaf-only lower bound; parent message bytes are excluded to avoid overlap.",
+    "Unknown developer blocks are measured only by count and bytes, without estimating tokens.",
+    "Exact fingerprints are used ephemerally for aggregation and never leave the local database query.",
+    "Provider cache usage is adjacent observational evidence, not attributed savings.",
+    "Shadow mode does not remove, rewrite, reorder, or select instructions."
+  ],
+  "mode": "shadow",
+  "model": "gpt-5.6-luna",
+  "phase": "6.2",
+  "privacy": {
+    "commands_persisted": false,
+    "fingerprints_in_report": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false,
+    "report_contract": "aggregate_allowlist_only",
+    "responses_persisted": false,
+    "semantic_paths_in_report": false,
+    "session_or_request_ids_in_report": false
+  },
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "shadow_gate": {
+    "cross_session_repetition_observed": true,
+    "decision": "source_attribution_required_before_policy_design",
+    "instruction_policy_active": false,
+    "measurement_complete": true,
+    "provider_effect_active": false,
+    "source_attribution_complete": false
+  },
+  "status": "completed",
+  "workspace_class": "public_controlled"
+}

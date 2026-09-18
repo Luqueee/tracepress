@@ -234,10 +234,9 @@ fn unmatched_previous_semantics(
     for (index, block) in previous.iter().enumerate() {
         if !consumed_previous.get(index).copied().unwrap_or(true)
             && take_one(&mut exact_consumed, &block.exact_fingerprint)
+            && let Some(consumed) = consumed_previous.get_mut(index)
         {
-            if let Some(consumed) = consumed_previous.get_mut(index) {
-                *consumed = true;
-            }
+            *consumed = true;
         }
     }
 

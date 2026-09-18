@@ -227,15 +227,14 @@ impl SearchResultModel {
             }
             if let Some(file) = grouped_file
                 && let Some((line_number, text)) = line.split_once('\t')
+                && let Ok(line_number) = line_number.parse::<u64>()
             {
-                if let Ok(line_number) = line_number.parse::<u64>() {
-                    matches.push(SearchMatch {
-                        file: file.to_owned(),
-                        line: line_number,
-                        text: text.replace("\\n", "\n"),
-                    });
-                    continue;
-                }
+                matches.push(SearchMatch {
+                    file: file.to_owned(),
+                    line: line_number,
+                    text: text.replace("\\n", "\n"),
+                });
+                continue;
             }
             if let Ok(value) = serde_json::from_str::<Value>(line) {
                 if value.get("type").and_then(Value::as_str) == Some("match") {

@@ -1,0 +1,85 @@
+name: Mutation testing
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: Workspace package to mutate
+        required: true
+        default: tracepress-core
+        type: choice
+        options:
+          - tracepress-core
+          - tracepress-provider
+          - tracepress-compression
+      shard:
+        description: Deterministic eighth of the package mutation set
+        required: true
+        default: 0/8
+        type: choice
+        options:
+          - 0/8
+          - 1/8
+          - 2/8
+          - 3/8
+          - 4/8
+          - 5/8
+          - 6/8
+          - 7/8
+
+concurrency:
+  group: ${{ github.workflow }}-${{ inputs.package }}-${{ inputs.shard }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  mutants:
+    name: ${{ inputs.package }} shard ${{ inputs.shard }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    env:
+      MUTATION_PACKAGE: ${{ inputs.package }}
+      MUTATION_SHARD: ${{ inputs.shard }}
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install repository Rust toolchain
+        uses: actions-rust-lang/setup-rust-toolchain@166cdcfd11aee3cb47222f9ddb555ce30ddb9659 # v1
+
+      - name: Cache Rust build artifacts
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2
+        with:
+          save-if: false
+
+      - name: Install pinned mutation and test runners
+        uses: taiki-e/install-action@76c2e6406e52637deed7160d77bded76bd83e06e # v2
+        with:
+          tool: cargo-mutants@27.1.0,cargo-nextest@0.9.145
+
+      - name: Verify the unmodified package
+        run: cargo nextest run --package "$MUTATION_PACKAGE" --all-features --locked
+
+      - name: Test mutation shard
+        run: |
+          cargo mutants \
+            --package "$MUTATION_PACKAGE" \
+            --all-features \
+            --shard "$MUTATION_SHARD" \
+            --baseline skip \
+            --test-tool nextest \
+            --timeout 300 \
+            --build-timeout 300 \
+            --cargo-arg=--locked \
+            --output mutants-output
+
+      - name: Upload mutation report
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: mutants-${{ inputs.package }}-${{ github.run_attempt }}
+          path: mutants-output
+          if-no-files-found: warn
+          retention-days: 14

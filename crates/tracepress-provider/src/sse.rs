@@ -228,10 +228,10 @@ impl SseFramer {
         );
         match field {
             b"event" => {
-                if let Ok(value) = std::str::from_utf8(value) {
-                    if value.len() <= self.limits.max_string_bytes {
-                        self.event_name = Some(value.to_owned());
-                    }
+                if let Ok(value) = std::str::from_utf8(value)
+                    && value.len() <= self.limits.max_string_bytes
+                {
+                    self.event_name = Some(value.to_owned());
                 }
             }
             b"data" => {
@@ -564,15 +564,15 @@ impl StreamingObserver {
             if self.response.model.is_none() {
                 self.response.model = extraction.extract(object, "model");
             }
-            if self.response.incomplete_reason.is_none() {
-                if let Some(Value::Object(details)) = object.get("incomplete_details") {
-                    self.response.incomplete_reason = extraction.extract(details, "reason");
-                }
+            if self.response.incomplete_reason.is_none()
+                && let Some(Value::Object(details)) = object.get("incomplete_details")
+            {
+                self.response.incomplete_reason = extraction.extract(details, "reason");
             }
-            if self.response.error_code.is_none() {
-                if let Some(Value::Object(error)) = object.get("error") {
-                    self.response.error_code = extraction.extract(error, "code");
-                }
+            if self.response.error_code.is_none()
+                && let Some(Value::Object(error)) = object.get("error")
+            {
+                self.response.error_code = extraction.extract(error, "code");
             }
             if extraction.partial {
                 self.degrade(ObservationStatus::Partial);

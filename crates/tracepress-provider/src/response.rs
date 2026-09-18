@@ -302,15 +302,15 @@ pub fn normalize_usage(raw: &RawProviderUsage) -> NormalizedUsage {
         }
         _ => None,
     };
-    if let (Some(output), Some(reasoning)) = (output_total, output_reasoning) {
-        if reasoning > output {
-            anomalies.reasoning_exceeds_output = true;
-        }
+    if let (Some(output), Some(reasoning)) = (output_total, output_reasoning)
+        && reasoning > output
+    {
+        anomalies.reasoning_exceeds_output = true;
     }
-    if let (Some(total_tokens), Some(input), Some(output)) = (total, input_total, output_total) {
-        if input.checked_add(output) != Some(total_tokens) {
-            anomalies.inconsistent_total = true;
-        }
+    if let (Some(total_tokens), Some(input), Some(output)) = (total, input_total, output_total)
+        && input.checked_add(output) != Some(total_tokens)
+    {
+        anomalies.inconsistent_total = true;
     }
     let reported = [
         input_total,

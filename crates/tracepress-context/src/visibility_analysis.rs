@@ -307,3 +307,114 @@ impl ObservedResponseIdLookup for NoObservedResponseIds {
         false
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use std::collections::{BTreeSet, HashSet};
+
+    use super::*;
+
+    #[test]
+    fn lookup_implementations_report_only_membership() {
+        let hash = HashSet::from([String::from("response-known")]);
+        let tree = BTreeSet::from([String::from("response-known")]);
+        let slice: &[&str] = &["response-known"];
+        let array = ["response-known"];
+        let closure = |candidate: &str| candidate == "response-known";
+
+        assert!(hash.contains_response_id("response-known"));
+        assert!(tree.contains_response_id("response-known"));
+        assert!(slice.contains_response_id("response-known"));
+        assert!(array.contains_response_id("response-known"));
+        assert!(closure.contains_response_id("response-known"));
+        assert!(!NoObservedResponseIds.contains_response_id("response-known"));
+    }
+
+    #[test]
+    fn provider_reference_retains_a_digest_but_debug_never_retains_the_id() {
+        let response_id = "response-private-canary";
+        let reference = ProviderStateReference::from_response_id(response_id, Some(true));
+        let rendered = format!("{reference:?}");
+
+        assert!(reference.present);
+        assert_eq!(
+            reference.reference_hash,
+            Some(ContextDigest::from_bytes(response_id.as_bytes()))
+        );
+        assert!(!rendered.contains(response_id));
+        assert!(rendered.contains("observed_response_id_match: Some(true)"));
+    }
+
+    #[test]
+    fn derivation_records_local_linkage_without_retaining_the_response_id() {
+        let response_id = "response-private-canary";
+        let lookup = [response_id];
+        let observation = VisibilityObservation {
+            explicit_request_complete: true,
+            uses_previous_response: true,
+            previous_response_id: Some(response_id),
+            ..VisibilityObservation::default()
+        };
+
+        let analysis = derive_visibility(observation, Some(&lookup));
+        let reference = analysis
+            .facts
+            .provider_state_reference
+            .as_ref()
+            .ok_or("provider reference must be recorded");
+
+        assert!(analysis.facts.reference_resolved_locally);
+        assert_eq!(
+            reference.map(|value| value.observed_response_id_match),
+            Ok(Some(true))
+        );
+        assert!(!format!("{analysis:?}").contains(response_id));
+    }
+
+    #[test]
+    fn absent_lookup_keeps_local_match_unknown() {
+        let analysis = derive_visibility_without_lookup(VisibilityObservation {
+            previous_response_id: Some("response-unobserved"),
+            ..VisibilityObservation::default()
+        });
+
+        assert_eq!(
+            analysis
+                .facts
+                .provider_state_reference
+                .map(|reference| reference.observed_response_id_match),
+            Some(None)
+        );
+        assert!(!analysis.facts.reference_resolved_locally);
+    }
+
+    #[test]
+    fn fact_counters_saturate_instead_of_wrapping() {
+        let mut facts = ContextVisibilityFacts {
+            provider_state_reference_count: u32::MAX,
+            item_reference_count: u32::MAX,
+            prompt_reference_count: u32::MAX,
+            conversation_reference_count: u32::MAX,
+            external_file_reference_count: u32::MAX,
+            external_image_reference_count: u32::MAX,
+            opaque_item_count: u32::MAX,
+            ..ContextVisibilityFacts::default()
+        };
+
+        facts.add_provider_state_reference();
+        facts.add_item_reference();
+        facts.add_prompt_reference();
+        facts.add_conversation_reference();
+        facts.add_external_file_reference();
+        facts.add_external_image_reference();
+        facts.add_opaque_item();
+
+        assert_eq!(facts.provider_state_reference_count, u32::MAX);
+        assert_eq!(facts.item_reference_count, u32::MAX);
+        assert_eq!(facts.prompt_reference_count, u32::MAX);
+        assert_eq!(facts.conversation_reference_count, u32::MAX);
+        assert_eq!(facts.external_file_reference_count, u32::MAX);
+        assert_eq!(facts.external_image_reference_count, u32::MAX);
+        assert_eq!(facts.opaque_item_count, u32::MAX);
+    }
+}

@@ -197,18 +197,19 @@ fn assert_spans_are_exact(
                 generous_limits().map_err(|error| TestCaseError::fail(error.to_string()))?;
             prop_assert!(decode_json_string(request, span, limits).is_err());
         }
-        if decodes_within_bound && node.kind() == JsonValueKind::String {
-            if let Ok(expected) = serde_json::from_slice::<String>(slice) {
-                let limits =
-                    generous_limits().map_err(|error| TestCaseError::fail(error.to_string()))?;
-                let decoded = decode_json_string(request, span, limits)
-                    .map_err(|error| TestCaseError::fail(error.to_string()))?;
-                prop_assert_eq!(
-                    decoded,
-                    expected,
-                    "a decoded string disagrees with serde_json"
-                );
-            }
+        if decodes_within_bound
+            && node.kind() == JsonValueKind::String
+            && let Ok(expected) = serde_json::from_slice::<String>(slice)
+        {
+            let limits =
+                generous_limits().map_err(|error| TestCaseError::fail(error.to_string()))?;
+            let decoded = decode_json_string(request, span, limits)
+                .map_err(|error| TestCaseError::fail(error.to_string()))?;
+            prop_assert_eq!(
+                decoded,
+                expected,
+                "a decoded string disagrees with serde_json"
+            );
         }
     }
     Ok(())

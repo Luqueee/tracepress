@@ -10,7 +10,7 @@ Build the frontend once, then start the API and static asset server:
 cd crates/tracepress-dashboard
 dx build --platform web --release
 cd ../..
-cargo run -p tracepress-cli -- ui
+cargo run -p tracepress-cli --bin tracepress -- ui
 ```
 
 Open `http://127.0.0.1:4319`. The command binds loopback only. Phase 4.0 rejects non-loopback binds rather than exposing an unauthenticated local database browser.
@@ -18,13 +18,13 @@ Open `http://127.0.0.1:4319`. The command binds loopback only. Phase 4.0 rejects
 For UI work without Codex or user data:
 
 ```bash
-cargo run -p tracepress-cli -- ui --fixture
+cargo run -p tracepress-cli --bin tracepress -- ui --fixture
 ```
 
 The large-data smoke fixture is also synthetic:
 
 ```bash
-cargo run -p tracepress-cli -- ui --fixture --large-fixture
+cargo run -p tracepress-cli --bin tracepress -- ui --fixture --large-fixture
 ```
 
 It contains 1,000 sessions, 10,000 requests, and 100,000 metadata-only context blocks. Temporary fixture databases are created outside the repository and deleted when the server exits.
@@ -37,7 +37,7 @@ Use two terminals for fast frontend iteration:
 
 ```bash
 # terminal 1, repository root
-cargo run -p tracepress-cli -- ui --fixture
+cargo run -p tracepress-cli --bin tracepress -- ui --fixture
 
 # terminal 2
 cd crates/tracepress-dashboard

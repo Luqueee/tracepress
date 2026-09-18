@@ -5,6 +5,7 @@ Phase 6.1 closes as a valid negative Shadow result with no provider or tool muta
 | Closure item | Result |
 |---|---|
 | Public pinned workload | BurntSushi/ripgrep at `3fce3b5bb0236da2df6d99672afb8a719642eca7` |
+| Codex runtime | `codex-cli 0.155.0` |
 | Sessions complete and successful | 10/10 |
 | Provider requests analyzed | 20/20 complete |
 | Schema observation coverage | 100% |

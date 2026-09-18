@@ -1,4 +1,5 @@
 {
+  "codex_version": "codex-cli 0.155.0",
   "execution": {
     "sessions_completed": 10,
     "sessions_requested": 10,

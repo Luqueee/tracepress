@@ -147,8 +147,25 @@ def metric_value(summary: dict[str, Any], field: str) -> int | float | None:
     return value if isinstance(value, (int, float)) else None
 
 
+def codex_version() -> str:
+    result = subprocess.run(
+        ["codex", "--version"],
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    version = result.stdout.strip()
+    if not version or len(version) > 128 or "\n" in version:
+        raise ValueError("unexpected Codex version output")
+    return version
+
+
 def build_report(
-    public_execution: dict[str, Any], summary: dict[str, Any], sessions_requested: int
+    public_execution: dict[str, Any],
+    summary: dict[str, Any],
+    sessions_requested: int,
+    codex_version_value: str,
 ) -> dict[str, Any]:
     execution = public_execution.get("execution", {})
     completed = execution.get("sessions_completed") == sessions_requested
@@ -183,6 +200,7 @@ def build_report(
         "workspace_class": "public_controlled",
         "repository_pin": {"repository": RIPGREP_REPOSITORY, "commit_sha": RIPGREP_SHA},
         "model": MODEL,
+        "codex_version": codex_version_value,
         "execution": {
             "sessions_requested": sessions_requested,
             "sessions_completed": execution.get("sessions_completed", 0),
@@ -230,6 +248,8 @@ def markdown(report: dict[str, Any]) -> str:
         "# TRACEPRESS_TOOL_SURFACE_SHADOW_PILOT_014",
         "",
         "Phase 6.1 controlled public Tool Surface characterization. Shadow only; no tool or provider request was modified.",
+        "",
+        f"Runtime: **{report['codex_version']}**. Model: **{report['model']}**.",
         "",
         f"Sessions: **{report['execution']['sessions_completed']}/{report['execution']['sessions_requested']}**. Decision: **{gate['decision']}**.",
         "",
@@ -309,7 +329,7 @@ def main() -> int:
         )
         public_execution = json.loads(public_json.read_text(encoding="utf-8"))
         summary = fetch_tool_surface(cli, state_root, repo_root)
-        report = build_report(public_execution, summary, options.sessions)
+        report = build_report(public_execution, summary, options.sessions, codex_version())
     options.output_json.parent.mkdir(parents=True, exist_ok=True)
     options.output_json.write_text(
         json.dumps(report, indent=2, sort_keys=True) + "\n", encoding="utf-8"

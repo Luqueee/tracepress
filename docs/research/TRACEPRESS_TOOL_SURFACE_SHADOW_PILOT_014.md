@@ -9,6 +9,8 @@ observed provider requests and recorded 10 explicit tool-call blocks, but those 
 no explicit tool-definition blocks. The measured opportunity was therefore zero rather than
 unknown.
 
+Runtime: `codex-cli 0.155.0`, model `gpt-5.6-luna`.
+
 ## Evidence
 
 | Metric | Result |

@@ -68,6 +68,7 @@ class ToolSurfaceShadowContractTests(unittest.TestCase):
             report["shadow_gate"]["decision"],
             "reject_active_tool_selection_no_observed_schema_surface",
         )
+        self.assertEqual(report["codex_version"], "codex-cli 0.155.0")
         keys = object_keys(report)
         for forbidden in (
             "tool_name",
@@ -89,7 +90,9 @@ class ToolSurfaceShadowContractTests(unittest.TestCase):
                 "sessions_timed_out": 0,
             }
         }
-        value = MODULE.build_report(public, MODULE.validate_summary(summary()), 10)
+        value = MODULE.build_report(
+            public, MODULE.validate_summary(summary()), 10, "codex-cli test"
+        )
         self.assertEqual(
             value["shadow_gate"]["decision"], "shadow_evidence_ready_for_policy_design"
         )
@@ -115,7 +118,9 @@ class ToolSurfaceShadowContractTests(unittest.TestCase):
             }
         }
 
-        value = MODULE.build_report(public, MODULE.validate_summary(surface), 10)
+        value = MODULE.build_report(
+            public, MODULE.validate_summary(surface), 10, "codex-cli test"
+        )
 
         self.assertTrue(value["shadow_gate"]["schema_coverage_complete"])
         self.assertFalse(value["shadow_gate"]["material_schema_exposure_observed"])
@@ -137,7 +142,9 @@ class ToolSurfaceShadowContractTests(unittest.TestCase):
                 "sessions_timed_out": 0,
             }
         }
-        value = MODULE.build_report(public, MODULE.validate_summary(surface), 10)
+        value = MODULE.build_report(
+            public, MODULE.validate_summary(surface), 10, "codex-cli test"
+        )
         self.assertFalse(value["shadow_gate"]["identity_evidence_available"])
         encoded = json.dumps(value, sort_keys=True)
         keys = object_keys(value)

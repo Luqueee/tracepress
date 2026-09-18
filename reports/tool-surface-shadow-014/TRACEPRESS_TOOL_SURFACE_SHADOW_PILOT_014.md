@@ -2,6 +2,8 @@
 
 Phase 6.1 controlled public Tool Surface characterization. Shadow only; no tool or provider request was modified.
 
+Runtime: **codex-cli 0.155.0**. Model: **gpt-5.6-luna**.
+
 Sessions: **10/10**. Decision: **reject_active_tool_selection_no_observed_schema_surface**.
 
 ## Source exposure

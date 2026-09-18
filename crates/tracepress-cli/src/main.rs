@@ -4515,8 +4515,12 @@ fn credential(config: &Config) -> Result<Credential, String> {
     if text.len() != 64 {
         return Err("credential must contain exactly 32 bytes".to_owned());
     }
+    let (pairs, remainder) = text.as_bytes().as_chunks::<2>();
+    if !remainder.is_empty() {
+        return Err("credential must contain exactly 32 bytes".to_owned());
+    }
     let mut bytes = [0_u8; 32];
-    for (index, pair) in text.as_bytes().chunks_exact(2).enumerate() {
+    for (index, pair) in pairs.iter().enumerate() {
         bytes[index] = u8::from_str_radix(
             std::str::from_utf8(pair).map_err(|_| "credential is not UTF-8")?,
             16,

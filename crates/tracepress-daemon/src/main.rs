@@ -36,8 +36,12 @@ fn read_hex(
     if text.len() != expected * 2 {
         return Err(format!("{} must contain {expected} bytes as hex", path.display()).into());
     }
+    let (pairs, remainder) = text.as_bytes().as_chunks::<2>();
+    if !remainder.is_empty() {
+        return Err(format!("{} must contain {expected} bytes as hex", path.display()).into());
+    }
     let mut bytes = Vec::with_capacity(expected);
-    for pair in text.as_bytes().chunks_exact(2) {
+    for pair in pairs {
         bytes.push(u8::from_str_radix(std::str::from_utf8(pair)?, 16)?);
     }
     Ok(bytes)

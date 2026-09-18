@@ -206,7 +206,7 @@ pub(crate) const fn zstd_window_log_max() -> u32 {
 
 #[cfg(test)]
 mod tests {
-    use std::io::{Cursor, Error, ErrorKind, Read, Write as _};
+    use std::io::{Cursor, Error, ErrorKind, Read};
 
     use super::*;
 

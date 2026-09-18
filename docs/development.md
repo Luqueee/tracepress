@@ -42,8 +42,12 @@ cargo llvm-cov report --workspace --html
 ```
 
 CI publishes the text summary and LCOV data as a build artifact. The current whole-workspace baseline
-is 81.91% line coverage, so CI enforces a conservative 80% floor. Raise the threshold as coverage
+is 81.82% line coverage, so CI enforces a conservative 80% floor. Raise the threshold as coverage
 improves; do not lower it to merge untested behavior.
+
+Coverage instrumentation does not run the four wall-clock-sensitive tests isolated by nextest.
+Those remain required correctness/performance gates in CI, while LLVM instrumentation measures the
+deterministic remainder of the workspace without changing deadline outcomes.
 
 ## Dependency policy
 

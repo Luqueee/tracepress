@@ -1,0 +1,86 @@
+{
+  "cache_key_equality": {
+    "arm_provider_usage": {
+      "hooks_explicit_disabled": {
+        "cached_input_tokens": 135168,
+        "input_tokens": 159125,
+        "output_tokens": 2188,
+        "reasoning_tokens": 1214,
+        "uncached_input_tokens": 23957
+      },
+      "hooks_explicit_enabled": {
+        "cached_input_tokens": 144384,
+        "input_tokens": 158971,
+        "output_tokens": 2343,
+        "reasoning_tokens": 1449,
+        "uncached_input_tokens": 14587
+      },
+      "hooks_implicit_enabled": {
+        "cached_input_tokens": 119808,
+        "input_tokens": 159373,
+        "output_tokens": 2539,
+        "reasoning_tokens": 1632,
+        "uncached_input_tokens": 39565
+      }
+    },
+    "cache_key_status_counts": {
+      "present": 36
+    },
+    "classification": "session_scoped_cache_key_classes",
+    "execution_contract_complete": true,
+    "matched_round_cross_arm_equalities": {
+      "hooks_explicit_enabled__hooks_explicit_disabled": 0,
+      "hooks_implicit_enabled__hooks_explicit_disabled": 0,
+      "hooks_implicit_enabled__hooks_explicit_enabled": 0
+    },
+    "provider_requests_observed": 36,
+    "raw_key_values_persisted": false,
+    "record_contract_complete": true,
+    "requests_observed": 36,
+    "requests_per_run_distribution": {
+      "2": 18
+    },
+    "reusable_key_hashes_persisted": false,
+    "runs_observed": 18,
+    "unique_equality_classes": 18,
+    "within_run_class_stable": true
+  },
+  "codex_version": "codex-cli 0.155.1",
+  "experiment_id": "cache-key-equality-020",
+  "gate": {
+    "cache_key_values_observed_transiently": true,
+    "cache_key_values_persisted": false,
+    "decision": "session_scoped_cache_key_classes",
+    "evidence_complete": true,
+    "instruction_policy_active": false,
+    "provider_effect_active": false,
+    "reusable_key_hashes_persisted": false,
+    "task_quality_evaluated": false
+  },
+  "limitations": [
+    "Equality classes are ordinal labels scoped to one process and have no value outside it.",
+    "Cache-key equality does not prove the provider's routing or cache lookup algorithm.",
+    "The public Search workload and one Codex version do not generalize to arbitrary tasks.",
+    "No ordinary Tracepress instruction or provider request was modified."
+  ],
+  "mode": "shadow",
+  "model": "gpt-5.6-luna",
+  "phase": "6.7",
+  "privacy": {
+    "authentication_material_copied": false,
+    "cache_key_values_persisted": false,
+    "commands_persisted": false,
+    "fingerprints_in_report": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false,
+    "report_contract": "aggregate_equality_allowlist_only",
+    "responses_persisted": false,
+    "reusable_key_hashes_persisted": false
+  },
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "status": "completed",
+  "workspace_class": "public_controlled"
+}

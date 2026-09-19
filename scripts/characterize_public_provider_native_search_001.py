@@ -105,6 +105,13 @@ def parse_args() -> argparse.Namespace:
         help="disable one allowlisted Codex feature for a controlled attribution arm",
     )
     parser.add_argument(
+        "--enable-codex-feature",
+        action="append",
+        choices=CONTROLLED_FEATURE_ABLATIONS,
+        default=[],
+        help="enable one allowlisted Codex feature for a controlled attribution arm",
+    )
+    parser.add_argument(
         "--search-pattern-start",
         type=int,
         choices=range(len(SEARCH_PATTERNS)),
@@ -275,12 +282,17 @@ def codex_exec_command(
     *,
     ignore_user_config: bool,
     controlled_developer_instructions: bool = False,
+    enabled_features: tuple[str, ...] = (),
     disabled_features: tuple[str, ...] = (),
     ephemeral: bool = False,
 ) -> list[str]:
-    unknown_features = set(disabled_features) - set(CONTROLLED_FEATURE_ABLATIONS)
+    unknown_features = (set(enabled_features) | set(disabled_features)) - set(
+        CONTROLLED_FEATURE_ABLATIONS
+    )
     if unknown_features:
         raise ValueError("unsupported controlled Codex feature ablation")
+    if set(enabled_features) & set(disabled_features):
+        raise ValueError("a controlled Codex feature cannot be enabled and disabled together")
     command = [str(cli), "run", "codex", "--", "-a", "never", "exec"]
     if ignore_user_config:
         command.append("--ignore-user-config")
@@ -294,6 +306,8 @@ def codex_exec_command(
         )
     for feature in disabled_features:
         command.extend(["--disable", feature])
+    for feature in enabled_features:
+        command.extend(["--enable", feature])
     if ephemeral:
         command.append("--ephemeral")
     command.extend(
@@ -412,6 +426,7 @@ def main() -> int:
                         controlled_developer_instructions=(
                             options.controlled_developer_instructions_v1
                         ),
+                        enabled_features=tuple(options.enable_codex_feature),
                         disabled_features=tuple(options.disable_codex_feature),
                         ephemeral=options.codex_ephemeral,
                     ),
@@ -473,6 +488,7 @@ def main() -> int:
                 else "none"
             ),
             "codex_disabled_features": sorted(set(options.disable_codex_feature)),
+            "codex_enabled_features": sorted(set(options.enable_codex_feature)),
             "codex_ephemeral": options.codex_ephemeral,
             "codex_sandbox_profile": "read_only",
             "codex_approval_policy": "never",

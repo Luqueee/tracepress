@@ -1,0 +1,379 @@
+{
+  "attribution": {
+    "arms": {
+      "hooks_explicit_disabled": {
+        "complete_observations": 12,
+        "developer_estimated_tokens_total": {
+          "source": "locally_estimated",
+          "value": 80778
+        },
+        "developer_text_blocks": 54,
+        "measurement_complete": true,
+        "provider_usage": {
+          "cache_ratio": {
+            "source": "provider_reported",
+            "value": 0.8218115344316383
+          },
+          "cached_input_tokens": {
+            "source": "provider_reported",
+            "value": 110592
+          },
+          "input_tokens": {
+            "source": "provider_reported",
+            "value": 134571
+          },
+          "output_tokens": {
+            "source": "provider_reported",
+            "value": 2300
+          },
+          "reasoning_tokens": {
+            "source": "provider_reported",
+            "value": 1396
+          },
+          "uncached_input_tokens": {
+            "source": "provider_reported",
+            "value": 23979
+          }
+        },
+        "requests_observed": 12,
+        "runs_observed": 6,
+        "stable_block_classes": 4,
+        "stable_tokens_per_request": 6578,
+        "stable_weight_consistent": true
+      },
+      "hooks_explicit_enabled": {
+        "complete_observations": 12,
+        "developer_estimated_tokens_total": {
+          "source": "locally_estimated",
+          "value": 80778
+        },
+        "developer_text_blocks": 54,
+        "measurement_complete": true,
+        "provider_usage": {
+          "cache_ratio": {
+            "source": "provider_reported",
+            "value": 0.8412638497235606
+          },
+          "cached_input_tokens": {
+            "source": "provider_reported",
+            "value": 113664
+          },
+          "input_tokens": {
+            "source": "provider_reported",
+            "value": 135111
+          },
+          "output_tokens": {
+            "source": "provider_reported",
+            "value": 2668
+          },
+          "reasoning_tokens": {
+            "source": "provider_reported",
+            "value": 1738
+          },
+          "uncached_input_tokens": {
+            "source": "provider_reported",
+            "value": 21447
+          }
+        },
+        "requests_observed": 12,
+        "runs_observed": 6,
+        "stable_block_classes": 4,
+        "stable_tokens_per_request": 6578,
+        "stable_weight_consistent": true
+      },
+      "hooks_implicit_enabled": {
+        "complete_observations": 12,
+        "developer_estimated_tokens_total": {
+          "source": "locally_estimated",
+          "value": 80778
+        },
+        "developer_text_blocks": 54,
+        "measurement_complete": true,
+        "provider_usage": {
+          "cache_ratio": {
+            "source": "provider_reported",
+            "value": 0.6684073107049608
+          },
+          "cached_input_tokens": {
+            "source": "provider_reported",
+            "value": 90368
+          },
+          "input_tokens": {
+            "source": "provider_reported",
+            "value": 135199
+          },
+          "output_tokens": {
+            "source": "provider_reported",
+            "value": 2931
+          },
+          "reasoning_tokens": {
+            "source": "provider_reported",
+            "value": 1958
+          },
+          "uncached_input_tokens": {
+            "source": "provider_reported",
+            "value": 44831
+          }
+        },
+        "requests_observed": 12,
+        "runs_observed": 6,
+        "stable_block_classes": 4,
+        "stable_tokens_per_request": 6578,
+        "stable_weight_consistent": true
+      }
+    },
+    "cache_attribution": {
+      "classification": "blocked_by_observable_prefix_difference",
+      "disabled_separated": false,
+      "enabled_pair_equivalent": false,
+      "equivalence_threshold": 0.1,
+      "explicit_enabled_vs_disabled_uncached_delta": 0.11147800818914279,
+      "implicit_enabled_vs_disabled_uncached_delta": 0.6060746984449935,
+      "implicit_vs_explicit_enabled_uncached_delta": 0.7056338453182052,
+      "separation_threshold": 0.2
+    },
+    "initial_request_summary": {
+      "hooks_explicit_disabled": {
+        "block_counts": [
+          12,
+          12,
+          12,
+          12,
+          12,
+          12
+        ],
+        "estimated_tokens": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "request_bytes": [
+          53840,
+          53841,
+          53841,
+          53836,
+          53833,
+          53837
+        ]
+      },
+      "hooks_explicit_enabled": {
+        "block_counts": [
+          12,
+          12,
+          12,
+          12,
+          12,
+          12
+        ],
+        "estimated_tokens": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "request_bytes": [
+          53992,
+          53841,
+          53991,
+          53837,
+          53836,
+          53837
+        ]
+      },
+      "hooks_implicit_enabled": {
+        "block_counts": [
+          12,
+          12,
+          12,
+          12,
+          12,
+          12
+        ],
+        "estimated_tokens": [
+          null,
+          null,
+          null,
+          null,
+          null,
+          null
+        ],
+        "request_bytes": [
+          53840,
+          53841,
+          53841,
+          53837,
+          53837,
+          53837
+        ]
+      }
+    },
+    "integrity": {
+      "all_measurements_complete": true,
+      "developer_stable_maps_match": true,
+      "initial_block_manifests_match": false,
+      "initial_request_metadata_match": false,
+      "observable_prefix_equivalent": false
+    },
+    "mode": "shadow",
+    "observable_prefix_differences": {
+      "block_field_mismatch_cells": {
+        "estimated_tokens": 2,
+        "exact_fingerprint": 38,
+        "raw_bytes": 9
+      },
+      "divergent_block_classes": [
+        {
+          "kind": "unknown",
+          "mismatched_fields": [
+            "exact_fingerprint"
+          ],
+          "ordinal": 0,
+          "origin": "unknown",
+          "role": "developer",
+          "rounds_divergent": 6,
+          "semantic_path": "/input/0"
+        },
+        {
+          "kind": "message",
+          "mismatched_fields": [
+            "exact_fingerprint"
+          ],
+          "ordinal": 1,
+          "origin": "human_authored",
+          "role": "developer",
+          "rounds_divergent": 6,
+          "semantic_path": "/input/1"
+        },
+        {
+          "kind": "message",
+          "mismatched_fields": [
+            "exact_fingerprint",
+            "raw_bytes"
+          ],
+          "ordinal": 3,
+          "origin": "human_authored",
+          "role": "developer",
+          "rounds_divergent": 6,
+          "semantic_path": "/input/2"
+        },
+        {
+          "kind": "message",
+          "mismatched_fields": [
+            "exact_fingerprint",
+            "raw_bytes"
+          ],
+          "ordinal": 7,
+          "origin": "human_authored",
+          "role": "user",
+          "rounds_divergent": 6,
+          "semantic_path": "/input/3"
+        },
+        {
+          "kind": "text",
+          "mismatched_fields": [
+            "estimated_tokens",
+            "exact_fingerprint",
+            "raw_bytes"
+          ],
+          "ordinal": 8,
+          "origin": "human_authored",
+          "role": "user",
+          "rounds_divergent": 2,
+          "semantic_path": "/input/3/content/0/text"
+        },
+        {
+          "kind": "text",
+          "mismatched_fields": [
+            "exact_fingerprint"
+          ],
+          "ordinal": 9,
+          "origin": "human_authored",
+          "role": "user",
+          "rounds_divergent": 6,
+          "semantic_path": "/input/3/content/1/text"
+        },
+        {
+          "kind": "message",
+          "mismatched_fields": [
+            "exact_fingerprint",
+            "raw_bytes"
+          ],
+          "ordinal": 10,
+          "origin": "human_authored",
+          "role": "user",
+          "rounds_divergent": 6,
+          "semantic_path": "/input/4"
+        }
+      ],
+      "request_metadata_mismatch_rounds": {
+        "request_bytes": 4
+      }
+    },
+    "provider_effect_active": false,
+    "schedule": {
+      "design": "three_arm_williams_two_cycle_v1",
+      "positions_per_arm": 2,
+      "rounds": 6,
+      "task_blocks": 2
+    }
+  },
+  "codex_version": "codex-cli 0.155.1",
+  "execution": {
+    "hooks_explicit_disabled": {
+      "configuration_and_schedule_contract_valid": true,
+      "runs_completed": 6,
+      "runs_requested": 6
+    },
+    "hooks_explicit_enabled": {
+      "configuration_and_schedule_contract_valid": true,
+      "runs_completed": 6,
+      "runs_requested": 6
+    },
+    "hooks_implicit_enabled": {
+      "configuration_and_schedule_contract_valid": true,
+      "runs_completed": 6,
+      "runs_requested": 6
+    }
+  },
+  "experiment_id": "cache-key-attribution-019",
+  "gate": {
+    "cache_key_value_observed": false,
+    "decision": "blocked_by_observable_prefix_difference",
+    "evidence_complete": true,
+    "instruction_policy_active": false,
+    "observable_prefix_equivalent": false,
+    "provider_effect_active": false,
+    "task_quality_evaluated": false
+  },
+  "limitations": [
+    "Association with hooks state does not prove the provider cache-key construction.",
+    "Only the first request's complete observable prefix is compared exactly.",
+    "Provider-managed cache behavior can vary independently of visible request structure.",
+    "No ordinary Tracepress instruction or provider request was modified."
+  ],
+  "mode": "shadow",
+  "model": "gpt-5.6-luna",
+  "phase": "6.6",
+  "privacy": {
+    "authentication_material_copied": false,
+    "cache_key_values_observed": false,
+    "commands_persisted": false,
+    "configuration_contents_in_report": false,
+    "fingerprints_in_report": false,
+    "paths_persisted": false,
+    "raw_content_persisted": false,
+    "report_contract": "aggregate_allowlist_only",
+    "responses_persisted": false
+  },
+  "repository_pin": {
+    "commit_sha": "3fce3b5bb0236da2df6d99672afb8a719642eca7",
+    "repository": "BurntSushi/ripgrep"
+  },
+  "status": "completed",
+  "workspace_class": "public_controlled"
+}

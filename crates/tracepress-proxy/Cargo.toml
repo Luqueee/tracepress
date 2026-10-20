@@ -12,7 +12,7 @@ futures-util = { version = "0.3", default-features = false, features = ["std"] }
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "stream"] }
 thiserror = "2"
 tokio = { version = "1", features = ["rt", "sync"] }
-sha2 = "0.10"
+sha2 = "0.11"
 tracepress-core = { path = "../tracepress-core" }
 tracepress-provider = { path = "../tracepress-provider" }
 tracepress-context = { path = "../tracepress-context" }
